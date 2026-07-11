@@ -7,6 +7,10 @@
     <!-- Required for Firebase Auth / Google Sign-In (future) -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.CAMERA" />
+    <!-- Android 18+: explicit read/write URI permissions for camera and gallery -->
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
+    
     <application
         android:label="Photo Vault"
         android:name="${applicationName}"
@@ -44,6 +48,17 @@
                 <data android:mimeType="image/*"/>
             </intent-filter>
         </activity>
+        
+        <!-- File provider used by image_picker for camera/gallery capture URIs. -->
+        <provider
+            android:name="io.flutter.plugins.imagepicker.ImagePickerFileProvider"
+            android:authorities="${applicationId}.flutter.image_provider"
+            android:exported="false">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/flutter_image_picker_file_paths" />
+        </provider>
+        
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data

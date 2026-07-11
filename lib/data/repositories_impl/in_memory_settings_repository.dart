@@ -5,6 +5,8 @@ class InMemorySettingsRepository implements SettingsRepository {
   UserMode? _selectedMode;
   bool _biometricUnlockEnabled = false;
   bool _photoSyncEnabled = false;
+  bool _externalStorageMirrorEnabled = false;
+  bool _driveEncryptedBackupEnabled = false;
 
   @override
   Future<UserMode?> getUserMode() async => _selectedMode;
@@ -28,5 +30,23 @@ class InMemorySettingsRepository implements SettingsRepository {
   @override
   Future<void> setPhotoSyncEnabled(bool enabled) async {
     _photoSyncEnabled = enabled;
+  }
+
+  @override
+  Future<bool> isExternalStorageMirrorEnabled() async =>
+      _externalStorageMirrorEnabled;
+
+  @override
+  Future<void> setExternalStorageMirrorEnabled(bool enabled) async {
+    _externalStorageMirrorEnabled = enabled;
+  }
+
+  @override
+  Future<bool> isDriveEncryptedBackupEnabled() async =>
+      _driveEncryptedBackupEnabled;
+
+  @override
+  Future<void> setDriveEncryptedBackupEnabled(bool enabled) async {
+    _driveEncryptedBackupEnabled = enabled;
   }
 }

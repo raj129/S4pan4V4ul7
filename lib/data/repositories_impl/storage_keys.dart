@@ -8,4 +8,8 @@ class StorageKeys {
   static const String autoLockOnBackground = 'settings.auto_lock_on_background';
   static const String photoSyncEnabled = 'settings.photo_sync_enabled';
   static const String vmkBackupEnabled = 'settings.vmk_backup_enabled';
+  static const String externalStorageMirrorEnabled =
+      'settings.external_storage_mirror_enabled';
+  static const String driveEncryptedBackupEnabled =
+      'settings.drive_encrypted_backup_enabled';
 }

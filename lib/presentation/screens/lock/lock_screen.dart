@@ -105,22 +105,36 @@ class _LockScreenState extends State<LockScreen> {
     if (_isTemporarilyLocked) return;
     if (!widget.biometricEnabled || _promptedBiometric || _unlocking) return;
     _promptedBiometric = true;
+    
     final availability = await widget.biometricService.checkAvailability();
     if (!mounted || availability != BiometricAvailability.available) return;
+    
     setState(() {
       _unlocking = true;
       _error = null;
     });
-    final ok = await widget.biometricService.authenticate(
-      reason: 'Unlock your encrypted photo vault',
-    );
-    if (!mounted) return;
-    if (ok) {
-      _failedAttempts = 0;
-      _lockedUntil = null;
-      widget.onUnlocked();
-      return;
+    
+    try {
+      final ok = await widget.biometricService.authenticate(
+        reason: 'Unlock your encrypted photo vault',
+      );
+      
+      if (!mounted) return;
+      
+      if (ok) {
+        _failedAttempts = 0;
+        _lockedUntil = null;
+        widget.onUnlocked();
+        return;
+      }
+    } catch (e) {
+      // Handle PlatformException or any other error (FragmentActivity not ready, user cancel, etc.)
+      debugPrint('Biometric unlock error: $e');
+      if (!mounted) return;
+      // Silently fail and let user enter PIN instead
     }
+    
+    if (!mounted) return;
     setState(() {
       _unlocking = false;
       _error = 'Biometric unlock canceled. Enter your app PIN.';

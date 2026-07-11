@@ -51,6 +51,8 @@ class ImportManager extends ChangeNotifier {
   static const _uuid = Uuid();
   final List<XFile> _pendingShareFiles = [];
   final Map<String, Uint8List> _thumbnailMemoryCache = {};
+  bool _useExternalStorageMirror = false;
+  bool _driveEncryptedBackupEnabled = false;
   ImportJobProgress _progress = const ImportJobProgress(
     jobId: '',
     total: 0,
@@ -59,6 +61,14 @@ class ImportManager extends ChangeNotifier {
   );
 
   ImportJobProgress get progress => _progress;
+
+  void configureStorage({
+    required bool useExternalStorageMirror,
+    required bool driveEncryptedBackupEnabled,
+  }) {
+    _useExternalStorageMirror = useExternalStorageMirror;
+    _driveEncryptedBackupEnabled = driveEncryptedBackupEnabled;
+  }
 
   List<XFile> takePendingShareFiles() {
     final copy = List<XFile>.from(_pendingShareFiles);
@@ -195,6 +205,19 @@ class ImportManager extends ChangeNotifier {
               isTrashed: false,
             ),
           );
+          await _upsertExternalManifest(
+            id: id,
+            originalFilename: name,
+            photoPath: photoPath,
+            thumbPath: thumbPath,
+            checksum: checksum,
+            wrappedDekJson: _wrappedDekToJson(wrappedDek),
+            photoNonce: base64Encode(encryptedPhoto.nonce),
+            thumbNonce: base64Encode(encryptedThumb.nonce),
+            encryptionVersion: _cryptoService.encryptionVersion,
+            fileSize: fileSize,
+            mimeType: _mimeFromFileName(name),
+          );
         } finally {
           try {
             dek.fillRange(0, dek.length, 0);
@@ -232,13 +255,36 @@ class ImportManager extends ChangeNotifier {
     }
   }
 
+  /// Removes DB records that point to missing encrypted files.
+  Future<int> reconcileVaultFiles() async {
+    var page = 0;
+    var removed = 0;
+    while (true) {
+      final rows = await _photoRepository.listGalleryPage(
+        page: page,
+        pageSize: 500,
+      );
+      if (rows.isEmpty) break;
+      for (final photo in rows) {
+        final hasPhoto = await File(photo.encryptedFilePath).exists();
+        final hasThumb = await File(photo.thumbnailPath).exists();
+        if (!hasPhoto || !hasThumb) {
+          await _photoRepository.permanentlyDelete(photo.id);
+          removed += 1;
+        }
+      }
+      page += 1;
+    }
+    return removed;
+  }
+
   Future<String> _writePayloadFile({
     required String id,
     required String kind,
     required EncryptedPayload payload,
   }) async {
-    final baseDir = await getApplicationSupportDirectory();
-    final vaultDir = Directory(p.join(baseDir.path, 'vault', 'objects'));
+    final vaultRoot = await _resolveVaultRoot();
+    final vaultDir = Directory(p.join(vaultRoot.path, 'objects'));
     if (!await vaultDir.exists()) {
       await vaultDir.create(recursive: true);
     }
@@ -246,6 +292,96 @@ class ImportManager extends ChangeNotifier {
     final file = File(filePath);
     await file.writeAsString(jsonEncode(_payloadToJson(payload)), flush: true);
     return filePath;
+  }
+
+  Future<Directory> _resolveVaultRoot() async {
+    if (!_useExternalStorageMirror || !Platform.isAndroid) {
+      final baseDir = await getApplicationSupportDirectory();
+      return Directory(p.join(baseDir.path, 'vault'));
+    }
+    final external = await getExternalStorageDirectory();
+    if (external == null) {
+      final baseDir = await getApplicationSupportDirectory();
+      return Directory(p.join(baseDir.path, 'vault'));
+    }
+
+    final marker =
+        '${Platform.pathSeparator}Android${Platform.pathSeparator}data${Platform.pathSeparator}';
+    final extPath = external.path;
+    if (extPath.contains(marker)) {
+      final split = extPath.split(marker);
+      final packageAndRest = split[1];
+      final packageName = packageAndRest.split(Platform.pathSeparator).first;
+      final mediaRoot = Directory(
+        p.join(
+          split[0],
+          'Android',
+          'media',
+          packageName,
+          'vault',
+        ),
+      );
+      if (!await mediaRoot.exists()) {
+        await mediaRoot.create(recursive: true);
+      }
+      return mediaRoot;
+    }
+
+    final fallback = Directory(p.join(external.path, 'vault'));
+    if (!await fallback.exists()) {
+      await fallback.create(recursive: true);
+    }
+    return fallback;
+  }
+
+  Future<void> _upsertExternalManifest({
+    required String id,
+    required String originalFilename,
+    required String photoPath,
+    required String thumbPath,
+    required String checksum,
+    required String wrappedDekJson,
+    required String photoNonce,
+    required String thumbNonce,
+    required int encryptionVersion,
+    required int fileSize,
+    required String mimeType,
+  }) async {
+    if (!_useExternalStorageMirror) return;
+    final root = await _resolveVaultRoot();
+    final manifestDir = Directory(p.join(root.path, 'manifest'));
+    if (!await manifestDir.exists()) {
+      await manifestDir.create(recursive: true);
+    }
+    final manifestFile = File(p.join(manifestDir.path, 'manifest.json'));
+    Map<String, dynamic> doc = <String, dynamic>{'version': 1, 'photos': {}};
+    if (await manifestFile.exists()) {
+      try {
+        final parsed = jsonDecode(await manifestFile.readAsString());
+        if (parsed is Map<String, dynamic>) {
+          doc = parsed;
+        }
+      } catch (_) {}
+    }
+    final photosMap = (doc['photos'] as Map?)?.cast<String, dynamic>() ??
+        <String, dynamic>{};
+    photosMap[id] = <String, dynamic>{
+      'id': id,
+      'originalFilename': originalFilename,
+      'encryptedFilePath': photoPath,
+      'thumbnailPath': thumbPath,
+      'checksumSha256': checksum,
+      'wrappedDek': wrappedDekJson,
+      'photoNonce': photoNonce,
+      'thumbnailNonce': thumbNonce,
+      'encryptionVersion': encryptionVersion,
+      'fileSize': fileSize,
+      'mimeType': mimeType,
+      'driveUploadRequested': _driveEncryptedBackupEnabled,
+      'updatedAtMs': DateTime.now().millisecondsSinceEpoch,
+    };
+    doc['photos'] = photosMap;
+    await manifestFile.writeAsString(jsonEncode(doc), flush: true);
   }
 
   Future<EncryptedPayload> _readPayloadFile(String filePath) async {

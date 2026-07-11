@@ -5,6 +5,7 @@ import '../../../application/services/import_manager.dart';
 import '../../../domain/entities/vault_photo.dart';
 import '../../../domain/entities/user_mode.dart';
 import '../../../domain/repositories/photo_repository.dart';
+import 'gallery_photo_viewer_screen.dart';
 
 /// Screen 8: Gallery home — empty state.
 ///
@@ -179,55 +180,63 @@ class _GalleryBodyState extends State<_GalleryBody> {
               itemCount: _photos.length,
               itemBuilder: (context, index) {
                 final photo = _photos[index];
-                return Stack(
-                  fit: StackFit.expand,
-                  children: [
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(8),
-                      child: FutureBuilder(
-                        future: widget.importManager.loadThumbnailBytes(photo),
-                        builder: (context, snapshot) {
-                          final bytes = snapshot.data;
-                          if (snapshot.connectionState != ConnectionState.done ||
-                              bytes == null) {
-                            return Container(
-                              color: Theme.of(
-                                context,
-                              ).colorScheme.surfaceContainerHighest,
-                              child: const Icon(Icons.image_outlined),
+                return GestureDetector(
+                  onTap: () {
+                    context.push(
+                      '/gallery/photo',
+                      extra: photo,
+                    );
+                  },
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(8),
+                        child: FutureBuilder(
+                          future: widget.importManager.loadThumbnailBytes(photo),
+                          builder: (context, snapshot) {
+                            final bytes = snapshot.data;
+                            if (snapshot.connectionState != ConnectionState.done ||
+                                bytes == null) {
+                              return Container(
+                                color: Theme.of(
+                                  context,
+                                ).colorScheme.surfaceContainerHighest,
+                                child: const Icon(Icons.image_outlined),
+                              );
+                            }
+                            return Image.memory(
+                              bytes,
+                              fit: BoxFit.cover,
+                              errorBuilder: (_, _, _) => Container(
+                                color: Theme.of(
+                                  context,
+                                ).colorScheme.surfaceContainerHighest,
+                                child: const Icon(Icons.image_outlined),
+                              ),
                             );
-                          }
-                          return Image.memory(
-                            bytes,
-                            fit: BoxFit.cover,
-                            errorBuilder: (_, _, _) => Container(
-                              color: Theme.of(
-                                context,
-                              ).colorScheme.surfaceContainerHighest,
-                              child: const Icon(Icons.image_outlined),
-                            ),
-                          );
-                        },
-                      ),
-                    ),
-                    Positioned(
-                      top: 4,
-                      right: 4,
-                      child: Material(
-                        color: Colors.black54,
-                        borderRadius: BorderRadius.circular(999),
-                        child: IconButton(
-                          visualDensity: VisualDensity.compact,
-                          icon: const Icon(
-                            Icons.delete_outline,
-                            color: Colors.white,
-                            size: 18,
-                          ),
-                          onPressed: () => _delete(photo),
+                          },
                         ),
                       ),
-                    ),
-                  ],
+                      Positioned(
+                        top: 4,
+                        right: 4,
+                        child: Material(
+                          color: Colors.black54,
+                          borderRadius: BorderRadius.circular(999),
+                          child: IconButton(
+                            visualDensity: VisualDensity.compact,
+                            icon: const Icon(
+                              Icons.delete_outline,
+                              color: Colors.white,
+                              size: 18,
+                            ),
+                            onPressed: () => _delete(photo),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
                 );
               },
             ),

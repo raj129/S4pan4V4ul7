@@ -20,6 +20,7 @@ import '../../data/repositories_impl/in_memory_photo_repository.dart';
 import '../../data/repositories_impl/in_memory_secure_storage_repository.dart';
 import '../../data/repositories_impl/in_memory_settings_repository.dart';
 import '../../data/repositories_impl/in_memory_vault_repository.dart';
+import '../../data/repositories_impl/persistent_photo_repository.dart';
 import '../../data/repositories_impl/persistent_settings_repository.dart';
 import '../../data/repositories_impl/persistent_vault_repository.dart';
 import '../../data/repositories_impl/secure_storage_flutter_repository.dart';
@@ -27,8 +28,10 @@ import '../../data/services/pbkdf2_kdf_service.dart';
 import '../../data/services/local_auth_biometric_service.dart';
 import '../../data/services/stub_restore_flow_service.dart';
 import '../../domain/entities/user_mode.dart';
+import '../../domain/entities/vault_photo.dart';
 import '../../domain/entities/vault_status.dart';
 import '../screens/gallery/gallery_home_screen.dart';
+import '../screens/gallery/gallery_photo_viewer_screen.dart';
 import '../screens/import/import_screen.dart';
 import '../screens/import/import_review_screen.dart';
 import '../screens/lock/lock_screen.dart';
@@ -71,7 +74,9 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
           FlutterSecureStringKv(_defaultSecureStorage),
         )
       : InMemorySettingsRepository();
-  final _photoRepository = InMemoryPhotoRepository();
+  late final _photoRepository = widget.persistentState
+      ? PersistentPhotoRepositoryImpl()
+      : InMemoryPhotoRepository();
   final _authRepository = InMemoryAuthRepository();
   final _cryptoService = AesGcmCryptoService();
   final _kdfService = Pbkdf2KdfService();
@@ -123,7 +128,19 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
     );
     _router = _buildRouter();
     _initShareIntentHandling();
+    _initializePhotoRepository();
     _hydrateSessionSettings();
+  }
+
+  /// Initialize persistent photo repository if using persistent state.
+  Future<void> _initializePhotoRepository() async {
+    if (_photoRepository is PersistentPhotoRepositoryImpl) {
+      try {
+        await (_photoRepository as PersistentPhotoRepositoryImpl).initialize();
+      } catch (e) {
+        debugPrint('❌ Failed to initialize photo repository: $e');
+      }
+    }
   }
 
   Future<void> _hydrateSessionSettings() async {
@@ -131,6 +148,10 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
     final biometricEnabled =
         await _settingsRepository.isBiometricUnlockEnabled();
     final photoSyncEnabled = await _settingsRepository.isPhotoSyncEnabled();
+    final externalMirrorEnabled =
+        await _settingsRepository.isExternalStorageMirrorEnabled();
+    final driveEncryptedBackupEnabled =
+        await _settingsRepository.isDriveEncryptedBackupEnabled();
     if (!mounted) return;
     setState(() {
       if (mode != null) {
@@ -139,6 +160,10 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
       _biometricUnlockEnabled = biometricEnabled;
       _photoSyncEnabled = photoSyncEnabled;
     });
+    _importManager.configureStorage(
+      useExternalStorageMirror: externalMirrorEnabled,
+      driveEncryptedBackupEnabled: driveEncryptedBackupEnabled,
+    );
   }
 
   void _initShareIntentHandling() {
@@ -220,6 +245,26 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
               photoSyncEnabled: _photoSyncEnabled,
             );
           },
+          routes: [
+            GoRoute(
+              path: 'photo',
+              builder: (context, state) {
+                final photo = state.extra as VaultPhoto?;
+                if (photo == null) {
+                  return Scaffold(
+                    appBar: AppBar(title: const Text('Error')),
+                    body: const Center(
+                      child: Text('No photo provided'),
+                    ),
+                  );
+                }
+                return GalleryPhotoViewerScreen(
+                  photo: photo,
+                  importManager: _importManager,
+                );
+              },
+            ),
+          ],
         ),
         GoRoute(
           path: '/settings',
@@ -242,6 +287,7 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
               biometricEnabled: _biometricUnlockEnabled,
               onUnlocked: () {
                 _sessionUnlocked.value = true;
+                unawaited(_importManager.reconcileVaultFiles());
                 context.go(decodedReturnTo);
               },
             );
@@ -373,9 +419,17 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
     _shareStreamSub?.cancel();
     _backgroundLockTimer?.cancel();
     _vaultSession.lock();
+    _closePhotoRepository();
     WidgetsBinding.instance.removeObserver(this);
     _sessionUnlocked.dispose();
     super.dispose();
+  }
+
+  /// Close persistent photo repository if using persistent state.
+  void _closePhotoRepository() {
+    if (_photoRepository is PersistentPhotoRepositoryImpl) {
+      (_photoRepository as PersistentPhotoRepositoryImpl).close().ignore();
+    }
   }
 
   @override

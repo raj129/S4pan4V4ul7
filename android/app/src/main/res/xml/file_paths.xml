@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Cache directory for temporary files (e.g., exports, shares) -->
+    <cache-path name="cache" path="." />
+    
+    <!-- App-specific files directory for encrypted vault objects -->
+    <files-path name="files" path="." />
+    
+    <!-- External app-specific files (if needed for future compatibility) -->
+    <external-files-path name="external_files" path="." />
+</paths>

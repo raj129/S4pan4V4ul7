@@ -41,4 +41,29 @@ class PersistentSettingsRepository implements SettingsRepository {
   Future<void> setPhotoSyncEnabled(bool enabled) {
     return _kv.write(StorageKeys.photoSyncEnabled, enabled.toString());
   }
+
+  @override
+  Future<bool> isExternalStorageMirrorEnabled() async {
+    final raw = await _kv.read(StorageKeys.externalStorageMirrorEnabled);
+    return raw == 'true';
+  }
+
+  @override
+  Future<void> setExternalStorageMirrorEnabled(bool enabled) {
+    return _kv.write(
+      StorageKeys.externalStorageMirrorEnabled,
+      enabled.toString(),
+    );
+  }
+
+  @override
+  Future<bool> isDriveEncryptedBackupEnabled() async {
+    final raw = await _kv.read(StorageKeys.driveEncryptedBackupEnabled);
+    return raw == 'true';
+  }
+
+  @override
+  Future<void> setDriveEncryptedBackupEnabled(bool enabled) {
+    return _kv.write(StorageKeys.driveEncryptedBackupEnabled, enabled.toString());
+  }
 }

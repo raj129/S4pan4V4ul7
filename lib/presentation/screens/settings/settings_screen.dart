@@ -25,6 +25,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _vmkBackupEnabled = false;
   bool _wifiOnlyBackup = true;
   bool _chargingOnlySync = false;
+  bool _externalStorageMirrorEnabled = false;
+  bool _driveEncryptedBackupEnabled = false;
   bool _preserveExif = false;
   bool _stripMetadataOnShare = true;
   bool _allowCameraImport = true;
@@ -40,10 +42,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _loadSettings() async {
     final biometric = await widget.settingsRepository.isBiometricUnlockEnabled();
     final photoSync = await widget.settingsRepository.isPhotoSyncEnabled();
+    final externalMirror =
+        await widget.settingsRepository.isExternalStorageMirrorEnabled();
+    final driveBackup =
+        await widget.settingsRepository.isDriveEncryptedBackupEnabled();
     if (!mounted) return;
     setState(() {
       _biometricUnlock = biometric;
       _photoSyncEnabled = photoSync;
+      _externalStorageMirrorEnabled = externalMirror;
+      _driveEncryptedBackupEnabled = driveBackup;
     });
   }
 
@@ -97,6 +105,31 @@ class _SettingsScreenState extends State<SettingsScreen> {
               setState(() => _photoSyncEnabled = v);
               await widget.settingsRepository.setPhotoSyncEnabled(v);
             },
+          ),
+          SwitchListTile(
+            title: const Text('Keep encrypted copy in external storage'),
+            subtitle: const Text(
+              'Stores encrypted files + manifest under Android/media for recovery after reinstall.',
+            ),
+            value: _externalStorageMirrorEnabled,
+            onChanged: (v) async {
+              setState(() => _externalStorageMirrorEnabled = v);
+              await widget.settingsRepository.setExternalStorageMirrorEnabled(v);
+            },
+          ),
+          SwitchListTile(
+            title: const Text('Upload encrypted package to Google Drive'),
+            subtitle: const Text(
+              'Uploads encrypted objects + manifest + wrapped VMK envelope.',
+            ),
+            value: _driveEncryptedBackupEnabled,
+            onChanged: widget.mode == UserMode.googleEnabled
+                ? (v) async {
+                    setState(() => _driveEncryptedBackupEnabled = v);
+                    await widget.settingsRepository
+                        .setDriveEncryptedBackupEnabled(v);
+                  }
+                : null,
           ),
           SwitchListTile(
             title: const Text('Backup on Wi-Fi only'),
