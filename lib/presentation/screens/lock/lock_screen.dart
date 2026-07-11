@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../../application/services/biometric_service.dart';
 import '../../../application/services/pin_validator.dart';
 import '../../../application/usecases/unlock_vault_usecase.dart';
 
@@ -8,12 +9,16 @@ class LockScreen extends StatefulWidget {
   const LockScreen({
     required this.unlockVaultUseCase,
     required this.pinValidator,
+    required this.biometricService,
+    required this.biometricEnabled,
     required this.onUnlocked,
     super.key,
   });
 
   final UnlockVaultUseCase unlockVaultUseCase;
   final PinValidator pinValidator;
+  final BiometricService biometricService;
+  final bool biometricEnabled;
   final VoidCallback onUnlocked;
   @override
   State<LockScreen> createState() => _LockScreenState();
@@ -24,6 +29,15 @@ class _LockScreenState extends State<LockScreen> {
   final _digits = <int>[];
   bool _unlocking = false;
   String? _error;
+  bool _promptedBiometric = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _tryBiometricUnlock();
+    });
+  }
 
   void _onDigitTap(int digit) {
     if (_unlocking || _digits.length >= _pinLength) return;
@@ -67,6 +81,29 @@ class _LockScreenState extends State<LockScreen> {
     });
   }
 
+  Future<void> _tryBiometricUnlock() async {
+    if (!widget.biometricEnabled || _promptedBiometric || _unlocking) return;
+    _promptedBiometric = true;
+    final availability = await widget.biometricService.checkAvailability();
+    if (!mounted || availability != BiometricAvailability.available) return;
+    setState(() {
+      _unlocking = true;
+      _error = null;
+    });
+    final ok = await widget.biometricService.authenticate(
+      reason: 'Unlock your encrypted photo vault',
+    );
+    if (!mounted) return;
+    if (ok) {
+      widget.onUnlocked();
+      return;
+    }
+    setState(() {
+      _unlocking = false;
+      _error = 'Biometric unlock canceled. Enter your app PIN.';
+    });
+  }
+
   @override
   void dispose() {
     _digits.clear();
@@ -83,7 +120,7 @@ class _LockScreenState extends State<LockScreen> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Text(
-              'Enter your app PIN',
+              widget.biometricEnabled ? 'Unlock with biometric or PIN' : 'Enter your app PIN',
               style: Theme.of(context).textTheme.titleLarge,
               textAlign: TextAlign.center,
             ),
@@ -106,6 +143,16 @@ class _LockScreenState extends State<LockScreen> {
             if (_unlocking) ...[
               const SizedBox(height: 12),
               const Center(child: CircularProgressIndicator()),
+            ],
+            if (widget.biometricEnabled && !_unlocking) ...[
+              const SizedBox(height: 12),
+              Center(
+                child: TextButton.icon(
+                  onPressed: _tryBiometricUnlock,
+                  icon: const Icon(Icons.fingerprint),
+                  label: const Text('Try biometric again'),
+                ),
+              ),
             ],
             const Spacer(),
             _PinPad(onDigit: _onDigitTap, onDelete: _onDelete),

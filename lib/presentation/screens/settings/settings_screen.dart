@@ -1,10 +1,17 @@
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../../domain/entities/user_mode.dart';
+import '../../../domain/repositories/settings_repository.dart';
 
 class SettingsScreen extends StatefulWidget {
-  const SettingsScreen({required this.mode, super.key});
+  const SettingsScreen({
+    required this.mode,
+    required this.settingsRepository,
+    super.key,
+  });
   final UserMode mode;
+  final SettingsRepository settingsRepository;
 
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
@@ -27,6 +34,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
   void initState() {
     super.initState();
     _vmkBackupEnabled = widget.mode == UserMode.googleEnabled;
+    _loadSettings();
+  }
+
+  Future<void> _loadSettings() async {
+    final biometric = await widget.settingsRepository.isBiometricUnlockEnabled();
+    final photoSync = await widget.settingsRepository.isPhotoSyncEnabled();
+    if (!mounted) return;
+    setState(() {
+      _biometricUnlock = biometric;
+      _photoSyncEnabled = photoSync;
+    });
   }
 
   @override
@@ -50,9 +68,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           SwitchListTile(
             title: const Text('Biometric unlock'),
-            subtitle: const Text('Convenience unlock (PIN remains required fallback)'),
+            subtitle: const Text('Use biometric on lock screen; PIN always available'),
             value: _biometricUnlock,
-            onChanged: (v) => setState(() => _biometricUnlock = v),
+            onChanged: (v) async {
+              setState(() => _biometricUnlock = v);
+              await widget.settingsRepository.setBiometricUnlockEnabled(v);
+            },
           ),
           const Divider(height: 1),
           const _SectionHeader('Backup & Sync'),
@@ -72,7 +93,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
             title: const Text('Photo sync'),
             subtitle: const Text('Disabled by default; enable explicitly'),
             value: _photoSyncEnabled,
-            onChanged: (v) => setState(() => _photoSyncEnabled = v),
+            onChanged: (v) async {
+              setState(() => _photoSyncEnabled = v);
+              await widget.settingsRepository.setPhotoSyncEnabled(v);
+            },
           ),
           SwitchListTile(
             title: const Text('Backup on Wi-Fi only'),
@@ -127,7 +151,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             leading: const Icon(Icons.cloud_outlined),
             title: const Text('Google mode & restore'),
             subtitle: Text(widget.mode.title),
-            onTap: () {},
+            onTap: () => context.push('/restore'),
           ),
           ListTile(
             leading: const Icon(Icons.delete_forever_outlined),

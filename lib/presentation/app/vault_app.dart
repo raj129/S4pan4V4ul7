@@ -2,21 +2,29 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:receive_sharing_intent/receive_sharing_intent.dart';
 
 import '../../application/services/import_manager.dart';
+import '../../application/services/restore_flow_service.dart';
 import '../../application/services/pin_validator.dart';
 import '../../application/usecases/create_vault_usecase.dart';
 import '../../application/usecases/unlock_vault_usecase.dart';
 import '../../crypto/services/aes_gcm_crypto_service.dart';
+import '../../data/repositories_impl/in_memory_auth_repository.dart';
+import '../../data/repositories_impl/flutter_secure_string_kv.dart';
 import '../../data/repositories_impl/in_memory_photo_repository.dart';
 import '../../data/repositories_impl/in_memory_secure_storage_repository.dart';
+import '../../data/repositories_impl/in_memory_settings_repository.dart';
 import '../../data/repositories_impl/in_memory_vault_repository.dart';
-import '../../data/repositories_impl/stub_auth_repository.dart';
+import '../../data/repositories_impl/persistent_settings_repository.dart';
+import '../../data/repositories_impl/persistent_vault_repository.dart';
+import '../../data/repositories_impl/secure_storage_flutter_repository.dart';
 import '../../data/services/pbkdf2_kdf_service.dart';
-import '../../data/services/stub_biometric_service.dart';
+import '../../data/services/local_auth_biometric_service.dart';
+import '../../data/services/stub_restore_flow_service.dart';
 import '../../domain/entities/user_mode.dart';
 import '../../domain/entities/vault_status.dart';
 import '../screens/gallery/gallery_home_screen.dart';
@@ -28,6 +36,7 @@ import '../screens/onboarding/google_signin_screen.dart';
 import '../screens/onboarding/pin_screens.dart';
 import '../screens/onboarding/vault_creation_screen.dart';
 import '../screens/onboarding/welcome_screen.dart';
+import '../screens/restore/restore_flow_screen.dart';
 import '../screens/settings/settings_screen.dart';
 import '../state/onboarding/onboarding_cubit.dart';
 import '../state/onboarding/onboarding_state.dart';
@@ -38,20 +47,35 @@ import '../state/onboarding/onboarding_state.dart';
 /// Drift DB, FlutterSecureStorage, FirebaseAuthRepository, and
 /// LocalAuthBiometricService once available.
 class VaultApp extends StatefulWidget {
-  const VaultApp({super.key});
+  const VaultApp({super.key, this.persistentState = true});
+
+  final bool persistentState;
 
   @override
   State<VaultApp> createState() => _VaultAppState();
 }
 
 class _VaultAppState extends State<VaultApp> {
-  final _vaultRepository = InMemoryVaultRepository();
-  final _secureStorageRepository = InMemorySecureStorageRepository();
+  static const _defaultSecureStorage = FlutterSecureStorage(
+    aOptions: AndroidOptions(encryptedSharedPreferences: true),
+  );
+  late final _vaultRepository = widget.persistentState
+      ? PersistentVaultRepository(FlutterSecureStringKv(_defaultSecureStorage))
+      : InMemoryVaultRepository();
+  late final _secureStorageRepository = widget.persistentState
+      ? SecureStorageFlutterRepository(_defaultSecureStorage)
+      : InMemorySecureStorageRepository();
+  late final _settingsRepository = widget.persistentState
+      ? PersistentSettingsRepository(
+          FlutterSecureStringKv(_defaultSecureStorage),
+        )
+      : InMemorySettingsRepository();
   final _photoRepository = InMemoryPhotoRepository();
-  final _authRepository = const StubAuthRepository();
+  final _authRepository = InMemoryAuthRepository();
   final _cryptoService = AesGcmCryptoService();
   final _kdfService = Pbkdf2KdfService();
-  final _biometricService = const StubBiometricService();
+  final _biometricService = LocalAuthBiometricService();
+  final RestoreFlowService _restoreFlowService = const StubRestoreFlowService();
   final _pinValidator = PinValidator();
   late final ImportManager _importManager;
 
@@ -61,6 +85,8 @@ class _VaultAppState extends State<VaultApp> {
   late final GoRouter _router;
   StreamSubscription<List<SharedMediaFile>>? _shareStreamSub;
   UserMode _lastKnownMode = UserMode.localOnly;
+  bool _biometricUnlockEnabled = false;
+  bool _photoSyncEnabled = false;
   final ValueNotifier<bool> _sessionUnlocked = ValueNotifier<bool>(false);
 
   @override
@@ -87,6 +113,22 @@ class _VaultAppState extends State<VaultApp> {
     );
     _router = _buildRouter();
     _initShareIntentHandling();
+    _hydrateSessionSettings();
+  }
+
+  Future<void> _hydrateSessionSettings() async {
+    final mode = await _settingsRepository.getUserMode();
+    final biometricEnabled =
+        await _settingsRepository.isBiometricUnlockEnabled();
+    final photoSyncEnabled = await _settingsRepository.isPhotoSyncEnabled();
+    if (!mounted) return;
+    setState(() {
+      if (mode != null) {
+        _lastKnownMode = mode;
+      }
+      _biometricUnlockEnabled = biometricEnabled;
+      _photoSyncEnabled = photoSyncEnabled;
+    });
   }
 
   void _initShareIntentHandling() {
@@ -122,9 +164,11 @@ class _VaultAppState extends State<VaultApp> {
         final isUnlocked = _sessionUnlocked.value;
         final isLockRoute = loc == '/lock';
         final isOnboarding = loc.startsWith('/onboarding');
+        final isRestoreRoute = loc.startsWith('/restore');
 
         if (!isReady) {
-          if (isOnboarding || loc == '/') return '/onboarding';
+          if (isRestoreRoute || isOnboarding) return null;
+          if (loc == '/') return '/onboarding';
           return '/onboarding';
         }
 
@@ -163,12 +207,16 @@ class _VaultAppState extends State<VaultApp> {
               mode: mode,
               photoRepository: _photoRepository,
               importManager: _importManager,
+              photoSyncEnabled: _photoSyncEnabled,
             );
           },
         ),
         GoRoute(
           path: '/settings',
-          builder: (context, state) => SettingsScreen(mode: _lastKnownMode),
+          builder: (context, state) => SettingsScreen(
+            mode: _lastKnownMode,
+            settingsRepository: _settingsRepository,
+          ),
         ),
         GoRoute(
           path: '/lock',
@@ -180,12 +228,35 @@ class _VaultAppState extends State<VaultApp> {
             return LockScreen(
               unlockVaultUseCase: _unlockVaultUseCase,
               pinValidator: _pinValidator,
+              biometricService: _biometricService,
+              biometricEnabled: _biometricUnlockEnabled,
               onUnlocked: () {
                 _sessionUnlocked.value = true;
                 context.go(decodedReturnTo);
               },
             );
           },
+        ),
+        GoRoute(
+          path: '/restore',
+          builder: (context, state) => RestoreFlowScreen(
+            authRepository: _authRepository,
+            restoreFlowService: _restoreFlowService,
+            onRestoreCompleted: (pin, includePhotos) async {
+              await _createVaultUseCase.execute(
+                pin: pin,
+                mode: UserMode.googleEnabled,
+                biometricEnabled: false,
+              );
+              _lastKnownMode = UserMode.googleEnabled;
+              await _settingsRepository.saveUserMode(UserMode.googleEnabled);
+              await _settingsRepository.setPhotoSyncEnabled(includePhotos);
+              _photoSyncEnabled = includePhotos;
+              _sessionUnlocked.value = true;
+              if (!context.mounted) return;
+              context.go('/gallery', extra: UserMode.googleEnabled);
+            },
+          ),
         ),
         GoRoute(
           path: '/import',
@@ -235,6 +306,8 @@ class _VaultAppState extends State<VaultApp> {
   void _listener(BuildContext context, OnboardingState state) {
     if (state is OnboardingVaultCreated) {
       _lastKnownMode = state.mode;
+      unawaited(_settingsRepository.saveUserMode(state.mode));
+      unawaited(_hydrateSessionSettings());
       _sessionUnlocked.value = true;
       context.go('/gallery', extra: state.mode);
     }

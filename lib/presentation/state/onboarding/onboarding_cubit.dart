@@ -52,7 +52,6 @@ class OnboardingCubit extends Cubit<OnboardingState> {
     try {
       final result = await _authRepository.signInWithGoogle();
       emit(OnboardingGoogleSignInSuccess(email: result.email));
-      _advanceToPinEntry(UserMode.googleEnabled);
     } on AuthException catch (e) {
       emit(OnboardingGoogleSignInFailed(message: e.message));
     } catch (_) {
@@ -62,6 +61,11 @@ class OnboardingCubit extends Cubit<OnboardingState> {
         ),
       );
     }
+  }
+
+  /// Continue Google-enabled setup as a new vault (no restore).
+  void continueGoogleAsNewVault() {
+    _advanceToPinEntry(UserMode.googleEnabled);
   }
 
   /// User cancelled Google sign-in and wants to continue locally.

@@ -18,11 +18,13 @@ class GalleryHomeScreen extends StatelessWidget {
     required this.mode,
     required this.photoRepository,
     required this.importManager,
+    required this.photoSyncEnabled,
     super.key,
   });
   final UserMode mode;
   final PhotoRepository photoRepository;
   final ImportManager importManager;
+  final bool photoSyncEnabled;
 
   @override
   Widget build(BuildContext context) {
@@ -44,6 +46,7 @@ class GalleryHomeScreen extends StatelessWidget {
       body: _GalleryBody(
         photoRepository: photoRepository,
         importManager: importManager,
+        photoSyncEnabled: photoSyncEnabled,
       ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () {
@@ -60,9 +63,11 @@ class _GalleryBody extends StatefulWidget {
   const _GalleryBody({
     required this.photoRepository,
     required this.importManager,
+    required this.photoSyncEnabled,
   });
   final PhotoRepository photoRepository;
   final ImportManager importManager;
+  final bool photoSyncEnabled;
 
   @override
   State<_GalleryBody> createState() => _GalleryBodyState();
@@ -153,10 +158,17 @@ class _GalleryBodyState extends State<_GalleryBody> {
         children: [
           if (progress.status == ImportJobStatus.running)
             LinearProgressIndicator(value: progress.ratio),
+          if (widget.photoSyncEnabled)
+            const LinearProgressIndicator(minHeight: 2),
           if (progress.status == ImportJobStatus.running)
             Padding(
               padding: const EdgeInsets.all(8),
               child: Text('Importing ${progress.completed}/${progress.total}...'),
+            ),
+          if (widget.photoSyncEnabled)
+            const Padding(
+              padding: EdgeInsets.only(bottom: 4),
+              child: Text('Sync is running in background'),
             ),
           Expanded(
             child: GridView.builder(

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../../presentation/state/onboarding/onboarding_cubit.dart';
 import '../../../presentation/state/onboarding/onboarding_state.dart';
@@ -65,6 +66,13 @@ class WelcomeScreen extends StatelessWidget {
                   child: TextButton(
                     onPressed: () => _showModeInfo(context),
                     child: const Text('What\'s the difference?'),
+                  ),
+                ),
+                Center(
+                  child: TextButton.icon(
+                    onPressed: () => context.push('/restore'),
+                    icon: const Icon(Icons.restore_rounded, size: 18),
+                    label: const Text('Restore from Google backup'),
                   ),
                 ),
                 const Spacer(flex: 1),

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../../presentation/state/onboarding/onboarding_cubit.dart';
 import '../../../presentation/state/onboarding/onboarding_state.dart';
@@ -50,7 +51,23 @@ class GoogleSignInScreen extends StatelessWidget {
                   if (state is OnboardingGoogleSignInFailed)
                     _ErrorBanner(message: state.message),
                   const SizedBox(height: 12),
-                  if (state is OnboardingGoogleSignInInProgress)
+                  if (state is OnboardingGoogleSignInSuccess) ...[
+                    _SuccessBanner(email: state.email),
+                    const SizedBox(height: 12),
+                    FilledButton.icon(
+                      onPressed: () => context.push('/restore'),
+                      icon: const Icon(Icons.restore_rounded),
+                      label: const Text('Restore from Google backup'),
+                    ),
+                    const SizedBox(height: 8),
+                    OutlinedButton.icon(
+                      onPressed: () => context
+                          .read<OnboardingCubit>()
+                          .continueGoogleAsNewVault(),
+                      icon: const Icon(Icons.vpn_key_outlined),
+                      label: const Text('Create new vault instead'),
+                    ),
+                  ] else if (state is OnboardingGoogleSignInInProgress)
                     const Center(child: CircularProgressIndicator())
                   else
                     FilledButton.icon(
@@ -71,6 +88,29 @@ class GoogleSignInScreen extends StatelessWidget {
             ),
           );
         },
+      ),
+    );
+  }
+
+}
+
+class _SuccessBanner extends StatelessWidget {
+  const _SuccessBanner({required this.email});
+  final String email;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.secondaryContainer,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Text(
+        'Signed in as $email',
+        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+          color: Theme.of(context).colorScheme.onSecondaryContainer,
+        ),
       ),
     );
   }

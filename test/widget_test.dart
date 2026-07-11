@@ -6,7 +6,7 @@ void main() {
   testWidgets('Welcome screen renders correct CTAs', (
     WidgetTester tester,
   ) async {
-    await tester.pumpWidget(const VaultApp());
+    await tester.pumpWidget(const VaultApp(persistentState: false));
     // Allow the router redirect to settle.
     await tester.pumpAndSettle();
 
