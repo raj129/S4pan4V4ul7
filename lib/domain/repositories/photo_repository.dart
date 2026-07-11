@@ -1,0 +1,15 @@
+import '../entities/vault_photo.dart';
+
+abstract class PhotoRepository {
+  Future<void> upsertPhoto(VaultPhoto photo);
+  Future<VaultPhoto?> getPhotoById(String photoId);
+  Future<List<VaultPhoto>> listGalleryPage({
+    required int page,
+    required int pageSize,
+    String? albumId,
+    bool favoritesOnly = false,
+  });
+  Future<void> movePhotoToTrash(String photoId, {required int expiresAtMs});
+  Future<void> restoreFromTrash(String photoId);
+  Future<void> permanentlyDelete(String photoId);
+}
