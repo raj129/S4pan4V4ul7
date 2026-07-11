@@ -1,6 +1,12 @@
-import 'package:flutter/material.dart';
+import 'dart:io';
 
+import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
+
+import '../../../application/services/import_manager.dart';
+import '../../../domain/entities/vault_photo.dart';
 import '../../../domain/entities/user_mode.dart';
+import '../../../domain/repositories/photo_repository.dart';
 
 /// Screen 8: Gallery home — empty state.
 ///
@@ -8,8 +14,15 @@ import '../../../domain/entities/user_mode.dart';
 /// Import and settings are the primary actions. Backup badge is only shown
 /// in Google-enabled mode.
 class GalleryHomeScreen extends StatelessWidget {
-  const GalleryHomeScreen({required this.mode, super.key});
+  const GalleryHomeScreen({
+    required this.mode,
+    required this.photoRepository,
+    required this.importManager,
+    super.key,
+  });
   final UserMode mode;
+  final PhotoRepository photoRepository;
+  final ImportManager importManager;
 
   @override
   Widget build(BuildContext context) {
@@ -23,15 +36,18 @@ class GalleryHomeScreen extends StatelessWidget {
             icon: const Icon(Icons.settings_outlined),
             tooltip: 'Settings',
             onPressed: () {
-              // TODO: navigate to settings screen
+              context.push('/settings');
             },
           ),
         ],
       ),
-      body: const _EmptyGalleryBody(),
+      body: _GalleryBody(
+        photoRepository: photoRepository,
+        importManager: importManager,
+      ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () {
-          // TODO: navigate to import screen
+          context.push('/import');
         },
         icon: const Icon(Icons.add_photo_alternate_outlined),
         label: const Text('Import photos'),
@@ -40,30 +56,155 @@ class GalleryHomeScreen extends StatelessWidget {
   }
 }
 
-class _EmptyGalleryBody extends StatelessWidget {
-  const _EmptyGalleryBody();
+class _GalleryBody extends StatefulWidget {
+  const _GalleryBody({
+    required this.photoRepository,
+    required this.importManager,
+  });
+  final PhotoRepository photoRepository;
+  final ImportManager importManager;
+
+  @override
+  State<_GalleryBody> createState() => _GalleryBodyState();
+}
+
+class _GalleryBodyState extends State<_GalleryBody> {
+  List<VaultPhoto> _photos = const [];
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.importManager.addListener(_onImportChanged);
+    _load();
+  }
+
+  @override
+  void dispose() {
+    widget.importManager.removeListener(_onImportChanged);
+    super.dispose();
+  }
+
+  void _onImportChanged() {
+    final status = widget.importManager.progress.status;
+    if (status == ImportJobStatus.running || status == ImportJobStatus.completed) {
+      _load();
+    }
+  }
+
+  Future<void> _load() async {
+    final page = await widget.photoRepository.listGalleryPage(page: 0, pageSize: 1000);
+    if (!mounted) return;
+    setState(() {
+      _photos = page;
+      _loading = false;
+    });
+  }
+
+  Future<void> _delete(VaultPhoto photo) async {
+    final expiry = DateTime.now()
+        .add(const Duration(days: 30))
+        .millisecondsSinceEpoch;
+    await widget.photoRepository.movePhotoToTrash(
+      photo.id,
+      expiresAtMs: expiry,
+    );
+    await _load();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Moved to Secure Trash')),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
+    final progress = widget.importManager.progress;
+    if (_loading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (_photos.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              Icons.photo_library_outlined,
+              size: 96,
+              color: Theme.of(context).colorScheme.outlineVariant,
+            ),
+            const SizedBox(height: 24),
+            Text(
+              'Your vault is empty',
+              style: Theme.of(context).textTheme.titleLarge,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Tap Import to add encrypted photos.',
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
     return Center(
       child: Column(
-        mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(
-            Icons.photo_library_outlined,
-            size: 96,
-            color: Theme.of(context).colorScheme.outlineVariant,
-          ),
-          const SizedBox(height: 24),
-          Text(
-            'Your vault is empty',
-            style: Theme.of(context).textTheme.titleLarge,
-          ),
-          const SizedBox(height: 8),
-          Text(
-            'Tap Import to add encrypted photos.',
-            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-              color: Theme.of(context).colorScheme.onSurfaceVariant,
+          if (progress.status == ImportJobStatus.running)
+            LinearProgressIndicator(value: progress.ratio),
+          if (progress.status == ImportJobStatus.running)
+            Padding(
+              padding: const EdgeInsets.all(8),
+              child: Text('Importing ${progress.completed}/${progress.total}...'),
+            ),
+          Expanded(
+            child: GridView.builder(
+              padding: const EdgeInsets.all(8),
+              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: 3,
+                crossAxisSpacing: 8,
+                mainAxisSpacing: 8,
+              ),
+              itemCount: _photos.length,
+              itemBuilder: (context, index) {
+                final photo = _photos[index];
+                return Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(8),
+                      child: Image.file(
+                        File(photo.thumbnailPath),
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, _, _) => Container(
+                          color: Theme.of(
+                            context,
+                          ).colorScheme.surfaceContainerHighest,
+                          child: const Icon(Icons.image_outlined),
+                        ),
+                      ),
+                    ),
+                    Positioned(
+                      top: 4,
+                      right: 4,
+                      child: Material(
+                        color: Colors.black54,
+                        borderRadius: BorderRadius.circular(999),
+                        child: IconButton(
+                          visualDensity: VisualDensity.compact,
+                          icon: const Icon(
+                            Icons.delete_outline,
+                            color: Colors.white,
+                            size: 18,
+                          ),
+                          onPressed: () => _delete(photo),
+                        ),
+                      ),
+                    ),
+                  ],
+                );
+              },
             ),
           ),
         ],

@@ -9,6 +9,9 @@ abstract class VaultRepository {
   /// Returns the current vault status.
   Future<VaultStatus> getStatus();
 
+  /// Returns the active vault ID, or null if no vault exists yet.
+  Future<String?> getActiveVaultId();
+
   /// Persists vault settings after successful vault creation.
   Future<void> initializeVault({
     required String vaultId,

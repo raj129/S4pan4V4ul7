@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 
 import '../../../application/usecases/select_mode_usecase.dart';
 import '../../../domain/entities/user_mode.dart';
-import '../lock/lock_screen.dart';
 
 class ModeSelectionScreen extends StatefulWidget {
   const ModeSelectionScreen({required this.selectModeUseCase, super.key});
@@ -31,9 +30,9 @@ class _ModeSelectionScreenState extends State<ModeSelectionScreen> {
       _isSaving = false;
     });
 
-    Navigator.of(
-      context,
-    ).push(MaterialPageRoute<void>(builder: (_) => LockScreen(mode: mode)));
+    if (mounted) {
+      Navigator.of(context).maybePop();
+    }
   }
 
   @override

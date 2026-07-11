@@ -8,9 +8,13 @@ import '../../domain/repositories/vault_repository.dart';
 class InMemoryVaultRepository implements VaultRepository {
   VaultStatus _status = VaultStatus.notCreated;
   String? _creatingId;
+  String? _activeVaultId;
 
   @override
   Future<VaultStatus> getStatus() async => _status;
+
+  @override
+  Future<String?> getActiveVaultId() async => _activeVaultId;
 
   @override
   Future<void> markCreating({required String vaultId}) async {
@@ -24,6 +28,7 @@ class InMemoryVaultRepository implements VaultRepository {
     required VaultSettings settings,
   }) async {
     _creatingId = null;
+    _activeVaultId = vaultId;
     _status = VaultStatus.ready;
   }
 
