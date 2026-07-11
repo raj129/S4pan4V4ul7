@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import '../../domain/entities/vault_photo.dart';
 import '../../domain/repositories/photo_repository.dart';
 
@@ -6,6 +8,11 @@ class InMemoryPhotoRepository implements PhotoRepository {
 
   @override
   Future<VaultPhoto?> getPhotoById(String photoId) async => _photos[photoId];
+
+  @override
+  Future<bool> existsChecksum(String checksumSha256) async {
+    return _photos.values.any((photo) => photo.checksumSha256 == checksumSha256);
+  }
 
   @override
   Future<List<VaultPhoto>> listGalleryPage({
@@ -55,7 +62,10 @@ class InMemoryPhotoRepository implements PhotoRepository {
 
   @override
   Future<void> permanentlyDelete(String photoId) async {
-    _photos.remove(photoId);
+    final photo = _photos.remove(photoId);
+    if (photo == null) return;
+    await _deleteIfExists(photo.encryptedFilePath);
+    await _deleteIfExists(photo.thumbnailPath);
   }
 
   @override
@@ -87,5 +97,12 @@ class InMemoryPhotoRepository implements PhotoRepository {
   @override
   Future<void> upsertPhoto(VaultPhoto photo) async {
     _photos[photo.id] = photo;
+  }
+
+  Future<void> _deleteIfExists(String path) async {
+    final file = File(path);
+    if (await file.exists()) {
+      await file.delete();
+    }
   }
 }

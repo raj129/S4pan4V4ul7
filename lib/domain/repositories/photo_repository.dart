@@ -3,6 +3,7 @@ import '../entities/vault_photo.dart';
 abstract class PhotoRepository {
   Future<void> upsertPhoto(VaultPhoto photo);
   Future<VaultPhoto?> getPhotoById(String photoId);
+  Future<bool> existsChecksum(String checksumSha256);
   Future<List<VaultPhoto>> listGalleryPage({
     required int page,
     required int pageSize,

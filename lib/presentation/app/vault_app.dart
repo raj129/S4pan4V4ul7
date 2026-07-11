@@ -10,6 +10,7 @@ import 'package:receive_sharing_intent/receive_sharing_intent.dart';
 import '../../application/services/import_manager.dart';
 import '../../application/services/restore_flow_service.dart';
 import '../../application/services/pin_validator.dart';
+import '../../application/services/vault_session.dart';
 import '../../application/usecases/create_vault_usecase.dart';
 import '../../application/usecases/unlock_vault_usecase.dart';
 import '../../crypto/services/aes_gcm_crypto_service.dart';
@@ -55,7 +56,7 @@ class VaultApp extends StatefulWidget {
   State<VaultApp> createState() => _VaultAppState();
 }
 
-class _VaultAppState extends State<VaultApp> {
+class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
   static const _defaultSecureStorage = FlutterSecureStorage(
     aOptions: AndroidOptions(encryptedSharedPreferences: true),
   );
@@ -74,6 +75,7 @@ class _VaultAppState extends State<VaultApp> {
   final _authRepository = InMemoryAuthRepository();
   final _cryptoService = AesGcmCryptoService();
   final _kdfService = Pbkdf2KdfService();
+  final _vaultSession = VaultSession();
   final _biometricService = LocalAuthBiometricService();
   final RestoreFlowService _restoreFlowService = const StubRestoreFlowService();
   final _pinValidator = PinValidator();
@@ -88,23 +90,31 @@ class _VaultAppState extends State<VaultApp> {
   bool _biometricUnlockEnabled = false;
   bool _photoSyncEnabled = false;
   final ValueNotifier<bool> _sessionUnlocked = ValueNotifier<bool>(false);
+  Timer? _backgroundLockTimer;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _createVaultUseCase = CreateVaultUseCase(
       cryptoService: _cryptoService,
       kdfService: _kdfService,
       vaultRepository: _vaultRepository,
       secureStorageRepository: _secureStorageRepository,
+      vaultSession: _vaultSession,
     );
     _unlockVaultUseCase = UnlockVaultUseCase(
       vaultRepository: _vaultRepository,
       secureStorageRepository: _secureStorageRepository,
       kdfService: _kdfService,
       cryptoService: _cryptoService,
+      vaultSession: _vaultSession,
     );
-    _importManager = ImportManager(photoRepository: _photoRepository);
+    _importManager = ImportManager(
+      photoRepository: _photoRepository,
+      cryptoService: _cryptoService,
+      vaultSession: _vaultSession,
+    );
     _onboardingCubit = OnboardingCubit(
       authRepository: _authRepository,
       biometricService: _biometricService,
@@ -335,9 +345,35 @@ class _VaultAppState extends State<VaultApp> {
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (!_sessionUnlocked.value) return;
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden ||
+        state == AppLifecycleState.inactive) {
+      _backgroundLockTimer?.cancel();
+      _backgroundLockTimer = Timer(const Duration(seconds: 20), _lockSession);
+      return;
+    }
+    if (state == AppLifecycleState.resumed) {
+      _backgroundLockTimer?.cancel();
+    }
+  }
+
+  void _lockSession() {
+    _vaultSession.lock();
+    _sessionUnlocked.value = false;
+    final location = _router.routerDelegate.currentConfiguration.uri.toString();
+    final encoded = Uri.encodeComponent(location.isEmpty ? '/gallery' : location);
+    _router.go('/lock?returnTo=$encoded');
+  }
+
+  @override
   void dispose() {
     _onboardingCubit.close();
     _shareStreamSub?.cancel();
+    _backgroundLockTimer?.cancel();
+    _vaultSession.lock();
+    WidgetsBinding.instance.removeObserver(this);
     _sessionUnlocked.dispose();
     super.dispose();
   }

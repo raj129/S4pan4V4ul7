@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:photo_vault/application/usecases/create_vault_usecase.dart';
+import 'package:photo_vault/application/services/vault_session.dart';
 import 'package:photo_vault/crypto/services/aes_gcm_crypto_service.dart';
 import 'package:photo_vault/data/repositories_impl/in_memory_secure_storage_repository.dart';
 import 'package:photo_vault/data/repositories_impl/in_memory_vault_repository.dart';
@@ -22,6 +23,7 @@ void main() {
         kdfService: Pbkdf2KdfService(iterations: 1000), // fast for tests
         vaultRepository: vaultRepo,
         secureStorageRepository: secureRepo,
+        vaultSession: VaultSession(),
       );
     });
 
@@ -55,6 +57,7 @@ void main() {
         kdfService: _AlwaysFailKdfService(),
         vaultRepository: vaultRepo,
         secureStorageRepository: secureRepo,
+        vaultSession: VaultSession(),
       );
 
       await expectLater(
@@ -77,6 +80,7 @@ void main() {
           kdfService: _AlwaysFailKdfService(),
           vaultRepository: vaultRepo,
           secureStorageRepository: secureRepo,
+          vaultSession: VaultSession(),
         );
 
         try {

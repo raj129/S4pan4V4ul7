@@ -6,6 +6,7 @@ import '../../domain/entities/vault_settings.dart';
 import '../../domain/repositories/secure_storage_repository.dart';
 import '../../domain/repositories/vault_repository.dart';
 import '../services/kdf_service.dart';
+import '../services/vault_session.dart';
 import 'package:uuid/uuid.dart';
 
 /// Failure thrown when vault creation fails (partial state cleaned up).
@@ -40,15 +41,18 @@ class CreateVaultUseCase {
     required KdfService kdfService,
     required VaultRepository vaultRepository,
     required SecureStorageRepository secureStorageRepository,
+    required VaultSession vaultSession,
   }) : _cryptoService = cryptoService,
        _kdfService = kdfService,
        _vaultRepository = vaultRepository,
-       _secureStorageRepository = secureStorageRepository;
+       _secureStorageRepository = secureStorageRepository,
+       _vaultSession = vaultSession;
 
   final CryptoService _cryptoService;
   final KdfService _kdfService;
   final VaultRepository _vaultRepository;
   final SecureStorageRepository _secureStorageRepository;
+  final VaultSession _vaultSession;
 
   static const _uuid = Uuid();
 
@@ -99,6 +103,7 @@ class CreateVaultUseCase {
         vaultId: vaultId,
         settings: settings,
       );
+      _vaultSession.unlock(vaultId: vaultId, vmkBytes: vmkBytes);
 
       return vaultId;
     } catch (e) {

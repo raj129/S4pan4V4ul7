@@ -1,5 +1,3 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
@@ -186,15 +184,30 @@ class _GalleryBodyState extends State<_GalleryBody> {
                   children: [
                     ClipRRect(
                       borderRadius: BorderRadius.circular(8),
-                      child: Image.file(
-                        File(photo.thumbnailPath),
-                        fit: BoxFit.cover,
-                        errorBuilder: (_, _, _) => Container(
-                          color: Theme.of(
-                            context,
-                          ).colorScheme.surfaceContainerHighest,
-                          child: const Icon(Icons.image_outlined),
-                        ),
+                      child: FutureBuilder(
+                        future: widget.importManager.loadThumbnailBytes(photo),
+                        builder: (context, snapshot) {
+                          final bytes = snapshot.data;
+                          if (snapshot.connectionState != ConnectionState.done ||
+                              bytes == null) {
+                            return Container(
+                              color: Theme.of(
+                                context,
+                              ).colorScheme.surfaceContainerHighest,
+                              child: const Icon(Icons.image_outlined),
+                            );
+                          }
+                          return Image.memory(
+                            bytes,
+                            fit: BoxFit.cover,
+                            errorBuilder: (_, _, _) => Container(
+                              color: Theme.of(
+                                context,
+                              ).colorScheme.surfaceContainerHighest,
+                              child: const Icon(Icons.image_outlined),
+                            ),
+                          );
+                        },
                       ),
                     ),
                     Positioned(

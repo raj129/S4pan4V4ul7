@@ -2,6 +2,7 @@ import 'package:bloc_test/bloc_test.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:photo_vault/application/services/pin_validator.dart';
+import 'package:photo_vault/application/services/vault_session.dart';
 import 'package:photo_vault/application/usecases/create_vault_usecase.dart';
 import 'package:photo_vault/crypto/services/aes_gcm_crypto_service.dart';
 import 'package:photo_vault/data/repositories_impl/in_memory_secure_storage_repository.dart';
@@ -24,6 +25,7 @@ OnboardingCubit _makeCubit() {
       kdfService: Pbkdf2KdfService(iterations: 1000),
       vaultRepository: vaultRepo,
       secureStorageRepository: secureRepo,
+      vaultSession: VaultSession(),
     ),
     pinValidator: PinValidator(),
   );

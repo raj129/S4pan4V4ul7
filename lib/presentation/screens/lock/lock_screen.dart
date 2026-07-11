@@ -26,10 +26,13 @@ class LockScreen extends StatefulWidget {
 
 class _LockScreenState extends State<LockScreen> {
   static const int _pinLength = 6;
+  static const List<int> _lockoutScheduleSeconds = <int>[0, 0, 0, 10, 30, 60];
   final _digits = <int>[];
   bool _unlocking = false;
   String? _error;
   bool _promptedBiometric = false;
+  int _failedAttempts = 0;
+  DateTime? _lockedUntil;
 
   @override
   void initState() {
@@ -40,6 +43,7 @@ class _LockScreenState extends State<LockScreen> {
   }
 
   void _onDigitTap(int digit) {
+    if (_isTemporarilyLocked) return;
     if (_unlocking || _digits.length >= _pinLength) return;
     setState(() => _digits.add(digit));
     if (_digits.length == _pinLength) {
@@ -53,6 +57,12 @@ class _LockScreenState extends State<LockScreen> {
   }
 
   Future<void> _submit() async {
+    if (_isTemporarilyLocked) {
+      setState(() {
+        _error = _lockoutMessage;
+      });
+      return;
+    }
     final pin = _digits.join();
     setState(() {
       _unlocking = true;
@@ -72,16 +82,27 @@ class _LockScreenState extends State<LockScreen> {
     final ok = await widget.unlockVaultUseCase.execute(pin);
     if (!mounted) return;
     if (ok) {
+      _failedAttempts = 0;
+      _lockedUntil = null;
       widget.onUnlocked();
       return;
     }
+    _failedAttempts += 1;
+    final lockSeconds = _lockoutScheduleSeconds[_failedAttempts.clamp(
+      0,
+      _lockoutScheduleSeconds.length - 1,
+    )];
+    if (lockSeconds > 0) {
+      _lockedUntil = DateTime.now().add(Duration(seconds: lockSeconds));
+    }
     setState(() {
       _unlocking = false;
-      _error = 'Incorrect PIN. Try again.';
+      _error = _isTemporarilyLocked ? _lockoutMessage : 'Incorrect PIN. Try again.';
     });
   }
 
   Future<void> _tryBiometricUnlock() async {
+    if (_isTemporarilyLocked) return;
     if (!widget.biometricEnabled || _promptedBiometric || _unlocking) return;
     _promptedBiometric = true;
     final availability = await widget.biometricService.checkAvailability();
@@ -95,6 +116,8 @@ class _LockScreenState extends State<LockScreen> {
     );
     if (!mounted) return;
     if (ok) {
+      _failedAttempts = 0;
+      _lockedUntil = null;
       widget.onUnlocked();
       return;
     }
@@ -102,6 +125,20 @@ class _LockScreenState extends State<LockScreen> {
       _unlocking = false;
       _error = 'Biometric unlock canceled. Enter your app PIN.';
     });
+  }
+
+  bool get _isTemporarilyLocked {
+    final until = _lockedUntil;
+    return until != null && DateTime.now().isBefore(until);
+  }
+
+  String get _lockoutMessage {
+    final until = _lockedUntil;
+    if (until == null) {
+      return 'Too many failed attempts. Try again later.';
+    }
+    final seconds = until.difference(DateTime.now()).inSeconds;
+    return 'Too many failed attempts. Try again in ${seconds > 0 ? seconds : 1}s.';
   }
 
   @override
@@ -138,6 +175,14 @@ class _LockScreenState extends State<LockScreen> {
                 _error!,
                 textAlign: TextAlign.center,
                 style: TextStyle(color: Theme.of(context).colorScheme.error),
+              ),
+            ],
+            if (_isTemporarilyLocked) ...[
+              const SizedBox(height: 8),
+              Text(
+                _lockoutMessage,
+                textAlign: TextAlign.center,
+                style: Theme.of(context).textTheme.bodySmall,
               ),
             ],
             if (_unlocking) ...[

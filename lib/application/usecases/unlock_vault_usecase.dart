@@ -5,6 +5,7 @@ import '../../crypto/models/wrapped_key.dart';
 import '../../crypto/services/crypto_service.dart';
 import '../../domain/repositories/secure_storage_repository.dart';
 import '../../domain/repositories/vault_repository.dart';
+import '../services/vault_session.dart';
 
 /// Verifies app PIN by attempting to unwrap the stored VMK envelope.
 ///
@@ -16,15 +17,18 @@ class UnlockVaultUseCase {
     required SecureStorageRepository secureStorageRepository,
     required KdfService kdfService,
     required CryptoService cryptoService,
+    required VaultSession vaultSession,
   }) : _vaultRepository = vaultRepository,
        _secureStorageRepository = secureStorageRepository,
        _kdfService = kdfService,
-       _cryptoService = cryptoService;
+       _cryptoService = cryptoService,
+       _vaultSession = vaultSession;
 
   final VaultRepository _vaultRepository;
   final SecureStorageRepository _secureStorageRepository;
   final KdfService _kdfService;
   final CryptoService _cryptoService;
+  final VaultSession _vaultSession;
 
   Future<bool> execute(String pin) async {
     List<int>? derivedKey;
@@ -62,7 +66,9 @@ class UnlockVaultUseCase {
 
       final aad = utf8.encode('$vaultId:vmk:v1');
       vmk = await _cryptoService.unwrapKey(wrapped, derivedKey, aad: aad);
-      return vmk.isNotEmpty;
+      if (vmk.isEmpty) return false;
+      _vaultSession.unlock(vaultId: vaultId, vmkBytes: vmk);
+      return true;
     } catch (_) {
       return false;
     } finally {

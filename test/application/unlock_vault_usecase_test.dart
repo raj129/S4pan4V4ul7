@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:photo_vault/application/services/vault_session.dart';
 import 'package:photo_vault/application/usecases/create_vault_usecase.dart';
 import 'package:photo_vault/application/usecases/unlock_vault_usecase.dart';
 import 'package:photo_vault/crypto/services/aes_gcm_crypto_service.dart';
@@ -17,6 +18,7 @@ void main() {
     late UnlockVaultUseCase unlockUseCase;
 
     setUp(() {
+      final vaultSession = VaultSession();
       vaultRepo = InMemoryVaultRepository();
       secureRepo = InMemorySecureStorageRepository();
       kdfService = Pbkdf2KdfService(iterations: 1000);
@@ -26,12 +28,14 @@ void main() {
         kdfService: kdfService,
         vaultRepository: vaultRepo,
         secureStorageRepository: secureRepo,
+        vaultSession: vaultSession,
       );
       unlockUseCase = UnlockVaultUseCase(
         vaultRepository: vaultRepo,
         secureStorageRepository: secureRepo,
         kdfService: kdfService,
         cryptoService: cryptoService,
+        vaultSession: vaultSession,
       );
     });
 
