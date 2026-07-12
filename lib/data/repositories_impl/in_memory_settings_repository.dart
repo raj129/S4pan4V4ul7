@@ -5,7 +5,7 @@ class InMemorySettingsRepository implements SettingsRepository {
   UserMode? _selectedMode;
   bool _biometricUnlockEnabled = false;
   bool _photoSyncEnabled = false;
-  bool _externalStorageMirrorEnabled = false;
+  bool _externalStorageMirrorEnabled = true;
   bool _driveEncryptedBackupEnabled = false;
 
   @override

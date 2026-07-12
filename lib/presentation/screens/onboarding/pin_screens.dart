@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
+import '../../../application/services/pin_validator.dart';
 import '../../../domain/entities/user_mode.dart';
 import '../../../presentation/state/onboarding/onboarding_cubit.dart';
 import '../../../presentation/state/onboarding/onboarding_state.dart';
@@ -9,7 +10,7 @@ import 'pin_dot_row.dart';
 
 /// Screen 4: Create PIN screen.
 ///
-/// 6-digit app PIN entry. Shows dot indicators only — digits are never
+/// 4-digit app PIN entry. Shows dot indicators only — digits are never
 /// displayed as text. PIN value is sent to the cubit and immediately
 /// discarded from widget state.
 class CreatePinScreen extends StatefulWidget {
@@ -21,7 +22,7 @@ class CreatePinScreen extends StatefulWidget {
 }
 
 class _CreatePinScreenState extends State<CreatePinScreen> {
-  static const int _pinLength = 6;
+  static const int _pinLength = PinValidator.requiredLength;
   final _digits = <int>[];
 
   void _onDigitTap(int digit) {
@@ -129,7 +130,7 @@ class ConfirmPinScreen extends StatefulWidget {
 }
 
 class _ConfirmPinScreenState extends State<ConfirmPinScreen> {
-  static const int _pinLength = 6;
+  static const int _pinLength = PinValidator.requiredLength;
   final _digits = <int>[];
 
   void _onDigitTap(int digit) {
@@ -191,7 +192,7 @@ class _ConfirmPinScreenState extends State<ConfirmPinScreen> {
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  'Enter the same 6-digit PIN again.',
+                  'Enter the same 4-digit PIN again.',
                   textAlign: TextAlign.center,
                   style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                     color: Theme.of(context).colorScheme.onSurfaceVariant,

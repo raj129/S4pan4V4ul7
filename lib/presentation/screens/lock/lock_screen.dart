@@ -25,7 +25,7 @@ class LockScreen extends StatefulWidget {
 }
 
 class _LockScreenState extends State<LockScreen> {
-  static const int _pinLength = 6;
+  static const int _pinLength = PinValidator.requiredLength;
   static const List<int> _lockoutScheduleSeconds = <int>[0, 0, 0, 10, 30, 60];
   final _digits = <int>[];
   bool _unlocking = false;

@@ -51,7 +51,7 @@ class ImportManager extends ChangeNotifier {
   static const _uuid = Uuid();
   final List<XFile> _pendingShareFiles = [];
   final Map<String, Uint8List> _thumbnailMemoryCache = {};
-  bool _useExternalStorageMirror = false;
+  bool _useExternalStorageMirror = true;
   bool _driveEncryptedBackupEnabled = false;
   ImportJobProgress _progress = const ImportJobProgress(
     jobId: '',
@@ -117,6 +117,29 @@ class ImportManager extends ChangeNotifier {
     }
   }
 
+  Future<Uint8List?> loadPhotoBytes(VaultPhoto photo) async {
+    final vmk = _vaultSession.requireVmk();
+    final wrappedDek = _parseWrappedDek(photo.wrappedDek);
+    final dek = await _cryptoService.unwrapKey(
+      wrappedDek,
+      vmk,
+      aad: utf8.encode('${photo.id}:dek:v${photo.encryptionVersion}'),
+    );
+    try {
+      final payload = await _readPayloadFile(photo.encryptedFilePath);
+      final plain = await _cryptoService.decrypt(
+        payload,
+        dek,
+        aad: utf8.encode('${photo.id}:photo:v${photo.encryptionVersion}'),
+      );
+      return Uint8List.fromList(plain);
+    } finally {
+      try {
+        dek.fillRange(0, dek.length, 0);
+      } catch (_) {}
+    }
+  }
+
   Future<void> enqueueImport({
     required List<XFile> files,
     required String source,
@@ -135,6 +158,7 @@ class ImportManager extends ChangeNotifier {
       var completed = 0;
       final vmk = _vaultSession.requireVmk();
       for (final file in files) {
+        await Future<void>.delayed(Duration.zero);
         final now = DateTime.now().millisecondsSinceEpoch;
         final name = p.basename(file.path.isEmpty ? 'imported.jpg' : file.path);
         final fileSize = await file.length();

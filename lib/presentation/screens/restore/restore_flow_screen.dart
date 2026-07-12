@@ -106,8 +106,8 @@ class _RestoreFlowScreenState extends State<RestoreFlowScreen> {
   }
 
   Future<void> _completeRestore() async {
-    if (_pin.length != 6 || _pin != _confirmPin) {
-      setState(() => _error = 'Enter matching 6-digit PIN values.');
+    if (_pin.length != 4 || _pin != _confirmPin) {
+      setState(() => _error = 'Enter matching 4-digit PIN values.');
       return;
     }
     setState(() {
@@ -173,7 +173,7 @@ class _RestoreFlowScreenState extends State<RestoreFlowScreen> {
           TextField(
             enabled: _vmkRestored && !_submitting,
             keyboardType: TextInputType.number,
-            maxLength: 6,
+            maxLength: 4,
             obscureText: true,
             decoration: const InputDecoration(
               labelText: 'New app PIN',
@@ -184,7 +184,7 @@ class _RestoreFlowScreenState extends State<RestoreFlowScreen> {
           TextField(
             enabled: _vmkRestored && !_submitting,
             keyboardType: TextInputType.number,
-            maxLength: 6,
+            maxLength: 4,
             obscureText: true,
             decoration: const InputDecoration(
               labelText: 'Confirm PIN',

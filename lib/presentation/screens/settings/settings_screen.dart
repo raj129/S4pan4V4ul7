@@ -8,10 +8,12 @@ class SettingsScreen extends StatefulWidget {
   const SettingsScreen({
     required this.mode,
     required this.settingsRepository,
+    required this.onSettingsChanged,
     super.key,
   });
   final UserMode mode;
   final SettingsRepository settingsRepository;
+  final Future<void> Function() onSettingsChanged;
 
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
@@ -25,7 +27,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _vmkBackupEnabled = false;
   bool _wifiOnlyBackup = true;
   bool _chargingOnlySync = false;
-  bool _externalStorageMirrorEnabled = false;
+  bool _externalStorageMirrorEnabled = true;
   bool _driveEncryptedBackupEnabled = false;
   bool _preserveExif = false;
   bool _stripMetadataOnShare = true;
@@ -81,6 +83,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             onChanged: (v) async {
               setState(() => _biometricUnlock = v);
               await widget.settingsRepository.setBiometricUnlockEnabled(v);
+              await widget.onSettingsChanged();
             },
           ),
           const Divider(height: 1),
@@ -104,6 +107,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             onChanged: (v) async {
               setState(() => _photoSyncEnabled = v);
               await widget.settingsRepository.setPhotoSyncEnabled(v);
+              await widget.onSettingsChanged();
             },
           ),
           SwitchListTile(
@@ -115,6 +119,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             onChanged: (v) async {
               setState(() => _externalStorageMirrorEnabled = v);
               await widget.settingsRepository.setExternalStorageMirrorEnabled(v);
+              await widget.onSettingsChanged();
             },
           ),
           SwitchListTile(
@@ -128,6 +133,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     setState(() => _driveEncryptedBackupEnabled = v);
                     await widget.settingsRepository
                         .setDriveEncryptedBackupEnabled(v);
+                    await widget.onSettingsChanged();
                   }
                 : null,
           ),

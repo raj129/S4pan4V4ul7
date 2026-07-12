@@ -2,26 +2,26 @@
 ///
 /// Security rule: never log the PIN value passed to these methods.
 class PinValidator {
-  static const int requiredLength = 6;
+  static const int requiredLength = 4;
 
   // PINs rejected for being trivially guessable.
   static const Set<String> _weakPins = {
-    '000000',
-    '111111',
-    '222222',
-    '333333',
-    '444444',
-    '555555',
-    '666666',
-    '777777',
-    '888888',
-    '999999',
-    '123456',
-    '654321',
-    '012345',
-    '543210',
-    '111222',
-    '112233',
+    '0000',
+    '1111',
+    '2222',
+    '3333',
+    '4444',
+    '5555',
+    '6666',
+    '7777',
+    '8888',
+    '9999',
+    '1234',
+    '4321',
+    '0123',
+    '3210',
+    '1122',
+    '1212',
   };
 
   /// Returns null when the PIN is acceptable, or an error message otherwise.

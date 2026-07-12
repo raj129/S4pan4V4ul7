@@ -261,6 +261,7 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
                 return GalleryPhotoViewerScreen(
                   photo: photo,
                   importManager: _importManager,
+                  photoRepository: _photoRepository,
                 );
               },
             ),
@@ -271,6 +272,7 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
           builder: (context, state) => SettingsScreen(
             mode: _lastKnownMode,
             settingsRepository: _settingsRepository,
+            onSettingsChanged: _hydrateSessionSettings,
           ),
         ),
         GoRoute(
@@ -397,7 +399,7 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
         state == AppLifecycleState.hidden ||
         state == AppLifecycleState.inactive) {
       _backgroundLockTimer?.cancel();
-      _backgroundLockTimer = Timer(const Duration(seconds: 20), _lockSession);
+      _backgroundLockTimer = Timer(const Duration(seconds: 10), _lockSession);
       return;
     }
     if (state == AppLifecycleState.resumed) {

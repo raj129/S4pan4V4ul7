@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../../application/services/import_manager.dart';
 import '../../../domain/entities/vault_photo.dart';
+import '../../../domain/repositories/photo_repository.dart';
 
 /// Full-screen photo viewer with zoom/pan capability.
 ///
@@ -14,11 +15,13 @@ class GalleryPhotoViewerScreen extends StatefulWidget {
   const GalleryPhotoViewerScreen({
     required this.photo,
     required this.importManager,
+    required this.photoRepository,
     super.key,
   });
 
   final VaultPhoto photo;
   final ImportManager importManager;
+  final PhotoRepository photoRepository;
 
   @override
   State<GalleryPhotoViewerScreen> createState() =>
@@ -46,7 +49,7 @@ class _GalleryPhotoViewerScreenState extends State<GalleryPhotoViewerScreen> {
 
   Future<void> _loadPhoto() async {
     try {
-      final bytes = await widget.importManager.loadThumbnailBytes(
+      final bytes = await widget.importManager.loadPhotoBytes(
         widget.photo,
       );
       if (!mounted) return;
@@ -70,13 +73,10 @@ class _GalleryPhotoViewerScreenState extends State<GalleryPhotoViewerScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      extendBodyBehindAppBar: true,
-      appBar: AppBar(
-        backgroundColor: Colors.black87,
-        foregroundColor: Colors.white,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
-          onPressed: () => context.pop(),
+    appBar: AppBar(
+      leading: IconButton(
+        icon: const Icon(Icons.arrow_back),
+        onPressed: () => context.pop(),
         ),
         actions: [
           IconButton(
@@ -88,6 +88,11 @@ class _GalleryPhotoViewerScreenState extends State<GalleryPhotoViewerScreen> {
             icon: const Icon(Icons.info_outlined),
             onPressed: () => _showPhotoInfo(context),
             tooltip: 'Photo info',
+          ),
+          IconButton(
+            icon: const Icon(Icons.delete_outline),
+            onPressed: () => _confirmDelete(context),
+            tooltip: 'Delete',
           ),
         ],
       ),
@@ -129,7 +134,8 @@ class _GalleryPhotoViewerScreenState extends State<GalleryPhotoViewerScreen> {
       );
     }
 
-    return GestureDetector(
+    return Center(
+      child: GestureDetector(
       onDoubleTap: () {
         if (_transformationController.value != Matrix4.identity()) {
           _resetZoom();
@@ -168,7 +174,7 @@ class _GalleryPhotoViewerScreenState extends State<GalleryPhotoViewerScreen> {
           ),
         ),
       ),
-    );
+    ));
   }
 
   void _showPhotoInfo(BuildContext context) {
@@ -176,6 +182,36 @@ class _GalleryPhotoViewerScreenState extends State<GalleryPhotoViewerScreen> {
       context: context,
       builder: (context) => _PhotoInfoBottomSheet(photo: widget.photo),
     );
+  }
+
+  Future<void> _confirmDelete(BuildContext context) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete photo?'),
+        content: const Text('This photo will be moved to Secure Trash.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !context.mounted) return;
+    final expiry = DateTime.now()
+        .add(const Duration(days: 30))
+        .millisecondsSinceEpoch;
+    await widget.photoRepository.movePhotoToTrash(
+      widget.photo.id,
+      expiresAtMs: expiry,
+    );
+    if (!context.mounted) return;
+    context.pop();
   }
 }
 

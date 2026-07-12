@@ -45,7 +45,7 @@ class PersistentSettingsRepository implements SettingsRepository {
   @override
   Future<bool> isExternalStorageMirrorEnabled() async {
     final raw = await _kv.read(StorageKeys.externalStorageMirrorEnabled);
-    return raw == 'true';
+    return raw == null ? true : raw == 'true';
   }
 
   @override

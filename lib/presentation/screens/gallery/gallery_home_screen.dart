@@ -5,7 +5,6 @@ import '../../../application/services/import_manager.dart';
 import '../../../domain/entities/vault_photo.dart';
 import '../../../domain/entities/user_mode.dart';
 import '../../../domain/repositories/photo_repository.dart';
-import 'gallery_photo_viewer_screen.dart';
 
 /// Screen 8: Gallery home — empty state.
 ///
@@ -106,6 +105,24 @@ class _GalleryBodyState extends State<_GalleryBody> {
   }
 
   Future<void> _delete(VaultPhoto photo) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete photo?'),
+        content: const Text('This photo will be moved to Secure Trash.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
     final expiry = DateTime.now()
         .add(const Duration(days: 30))
         .millisecondsSinceEpoch;
@@ -202,7 +219,13 @@ class _GalleryBodyState extends State<_GalleryBody> {
                                 color: Theme.of(
                                   context,
                                 ).colorScheme.surfaceContainerHighest,
-                                child: const Icon(Icons.image_outlined),
+                                child: const Center(
+                                  child: SizedBox(
+                                    width: 20,
+                                    height: 20,
+                                    child: CircularProgressIndicator(strokeWidth: 2),
+                                  ),
+                                ),
                               );
                             }
                             return Image.memory(
