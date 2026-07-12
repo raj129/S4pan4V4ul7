@@ -5,6 +5,7 @@ import '../../../application/services/import_manager.dart';
 import '../../../domain/entities/vault_photo.dart';
 import '../../../domain/entities/user_mode.dart';
 import '../../../domain/repositories/photo_repository.dart';
+import '../import/import_screen.dart';
 
 /// Screen 8: Gallery home — empty state.
 ///
@@ -48,7 +49,7 @@ class GalleryHomeScreen extends StatelessWidget {
       ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () {
-          context.push('/import');
+          showImportBottomSheet(context, importManager: importManager);
         },
         icon: const Icon(Icons.add_photo_alternate_outlined),
         label: const Text('Import photos'),
@@ -74,6 +75,7 @@ class _GalleryBody extends StatefulWidget {
 class _GalleryBodyState extends State<_GalleryBody> {
   List<VaultPhoto> _photos = const [];
   bool _loading = true;
+  int _lastSeenGalleryRevision = 0;
 
   @override
   void initState() {
@@ -89,17 +91,41 @@ class _GalleryBodyState extends State<_GalleryBody> {
   }
 
   void _onImportChanged() {
-    final status = widget.importManager.progress.status;
-    if (status == ImportJobStatus.running || status == ImportJobStatus.completed) {
-      _load();
+    final revision = widget.importManager.galleryEventRevision;
+    if (revision == _lastSeenGalleryRevision) {
+      if (mounted) {
+        setState(() {});
+      }
+      return;
     }
+    _lastSeenGalleryRevision = revision;
+    final importedPhotoId = widget.importManager.lastImportedPhotoId;
+    if (importedPhotoId == null) {
+      _load();
+      return;
+    }
+    _insertOrRefreshPhoto(importedPhotoId);
   }
 
   Future<void> _load() async {
-    final page = await widget.photoRepository.listGalleryPage(page: 0, pageSize: 1000);
+    final page = await widget.photoRepository.listGalleryPage(
+      page: 0,
+      pageSize: 1000,
+    );
     if (!mounted) return;
     setState(() {
       _photos = page;
+      _loading = false;
+    });
+  }
+
+  Future<void> _insertOrRefreshPhoto(String photoId) async {
+    final photo = await widget.photoRepository.getPhotoById(photoId);
+    if (!mounted || photo == null || photo.isTrashed) return;
+    setState(() {
+      final updated = _photos.where((item) => item.id != photo.id).toList();
+      updated.insert(0, photo);
+      _photos = updated;
       _loading = false;
     });
   }
@@ -130,11 +156,14 @@ class _GalleryBodyState extends State<_GalleryBody> {
       photo.id,
       expiresAtMs: expiry,
     );
-    await _load();
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Moved to Secure Trash')),
-    );
+    setState(() {
+      _photos = _photos.where((item) => item.id != photo.id).toList();
+    });
+    if (!mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('Moved to Secure Trash')));
   }
 
   @override
@@ -179,7 +208,9 @@ class _GalleryBodyState extends State<_GalleryBody> {
           if (progress.status == ImportJobStatus.running)
             Padding(
               padding: const EdgeInsets.all(8),
-              child: Text('Importing ${progress.completed}/${progress.total}...'),
+              child: Text(
+                'Importing ${progress.completed}/${progress.total}...',
+              ),
             ),
           if (widget.photoSyncEnabled)
             const Padding(
@@ -199,10 +230,7 @@ class _GalleryBodyState extends State<_GalleryBody> {
                 final photo = _photos[index];
                 return GestureDetector(
                   onTap: () {
-                    context.push(
-                      '/gallery/photo',
-                      extra: photo,
-                    );
+                    context.push('/gallery/photo', extra: photo);
                   },
                   child: Stack(
                     fit: StackFit.expand,
@@ -210,10 +238,13 @@ class _GalleryBodyState extends State<_GalleryBody> {
                       ClipRRect(
                         borderRadius: BorderRadius.circular(8),
                         child: FutureBuilder(
-                          future: widget.importManager.loadThumbnailBytes(photo),
+                          future: widget.importManager.loadThumbnailBytes(
+                            photo,
+                          ),
                           builder: (context, snapshot) {
                             final bytes = snapshot.data;
-                            if (snapshot.connectionState != ConnectionState.done ||
+                            if (snapshot.connectionState !=
+                                    ConnectionState.done ||
                                 bytes == null) {
                               return Container(
                                 color: Theme.of(
@@ -223,7 +254,9 @@ class _GalleryBodyState extends State<_GalleryBody> {
                                   child: SizedBox(
                                     width: 20,
                                     height: 20,
-                                    child: CircularProgressIndicator(strokeWidth: 2),
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
                                   ),
                                 ),
                               );

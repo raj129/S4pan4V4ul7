@@ -11,7 +11,9 @@ class InMemoryPhotoRepository implements PhotoRepository {
 
   @override
   Future<bool> existsChecksum(String checksumSha256) async {
-    return _photos.values.any((photo) => photo.checksumSha256 == checksumSha256);
+    return _photos.values.any(
+      (photo) => photo.checksumSha256 == checksumSha256,
+    );
   }
 
   @override
@@ -27,15 +29,17 @@ class InMemoryPhotoRepository implements PhotoRepository {
       if (albumId != null && p.albumId != albumId) return false;
       if (favoritesOnly && !p.favorite) return false;
       return true;
-    }).toList()
-      ..sort((a, b) => b.importedTimeMs.compareTo(a.importedTimeMs));
+    }).toList()..sort((a, b) => b.importedTimeMs.compareTo(a.importedTimeMs));
     if (start >= filtered.length) return const [];
     final end = (start + pageSize).clamp(0, filtered.length);
     return filtered.sublist(start, end);
   }
 
   @override
-  Future<void> movePhotoToTrash(String photoId, {required int expiresAtMs}) async {
+  Future<void> movePhotoToTrash(
+    String photoId, {
+    required int expiresAtMs,
+  }) async {
     final photo = _photos[photoId];
     if (photo == null) return;
     _photos[photoId] = VaultPhoto(
@@ -58,6 +62,11 @@ class InMemoryPhotoRepository implements PhotoRepository {
       albumId: photo.albumId,
       trashExpiresAtMs: expiresAtMs,
     );
+  }
+
+  @override
+  Future<void> deleteMetadataOnly(String photoId) async {
+    _photos.remove(photoId);
   }
 
   @override

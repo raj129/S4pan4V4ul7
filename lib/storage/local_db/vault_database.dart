@@ -1,4 +1,3 @@
-import 'dart:io';
 import 'package:drift/drift.dart';
 import 'package:drift_flutter/drift_flutter.dart';
 
@@ -20,23 +19,37 @@ class Photos extends Table {
   IntColumn get createdTimeMs => integer()();
   IntColumn get importedTimeMs => integer()();
   IntColumn get modifiedTimeMs => integer()();
-  TextColumn get source => text()(); // 'camera', 'gallery', 'file_picker', 'share_intent', etc.
+  TextColumn get source =>
+      text()(); // 'camera', 'gallery', 'file_picker', 'share_intent', etc.
   TextColumn get albumId => text().nullable()();
-  IntColumn get favorite => integer().withDefault(const Constant(0))(); // 0 or 1
-  TextColumn get encryptedFilePath => text()(); // /data/data/.../files/vault/objects/{id}.photo.enc
-  TextColumn get thumbnailPath => text()(); // /data/data/.../files/vault/objects/{id}.thumb.enc
-  TextColumn get thumbnailNonce => text()(); // base64-encoded nonce for thumbnail decryption
-  TextColumn get photoNonce => text()(); // base64-encoded nonce for photo decryption
-  TextColumn get wrappedDek => text()(); // JSON-encoded WrappedKey { nonce, ciphertext, mac }
-  IntColumn get encryptionVersion => integer()(); // for future key rotation/migration
-  TextColumn get syncStatus => text()(); // 'local', 'pending', 'synced', 'error'
-  TextColumn get backupStatus => text()(); // 'not_backed_up', 'pending', 'backed_up', 'error'
-  TextColumn get checksumSha256 => text()(); // SHA256 hash of original file (for duplicate detection)
+  IntColumn get favorite =>
+      integer().withDefault(const Constant(0))(); // 0 or 1
+  TextColumn get encryptedFilePath =>
+      text()(); // /data/data/.../files/vault/objects/{id}.photo.enc
+  TextColumn get thumbnailPath =>
+      text()(); // /data/data/.../files/vault/objects/{id}.thumb.enc
+  TextColumn get thumbnailNonce =>
+      text()(); // base64-encoded nonce for thumbnail decryption
+  TextColumn get photoNonce =>
+      text()(); // base64-encoded nonce for photo decryption
+  TextColumn get wrappedDek =>
+      text()(); // JSON-encoded WrappedKey { nonce, ciphertext, mac }
+  IntColumn get encryptionVersion =>
+      integer()(); // for future key rotation/migration
+  TextColumn get syncStatus =>
+      text()(); // 'local', 'pending', 'synced', 'error'
+  TextColumn get backupStatus =>
+      text()(); // 'not_backed_up', 'pending', 'backed_up', 'error'
+  TextColumn get checksumSha256 =>
+      text()(); // SHA256 hash of original file (for duplicate detection)
   IntColumn get fileSize => integer()(); // in bytes
   TextColumn get mimeType => text()(); // 'image/jpeg', 'image/png', etc.
-  IntColumn get isTrashed => integer().withDefault(const Constant(0))(); // 0 or 1
-  IntColumn get trashExpiresAtMs => integer().nullable()(); // Unix timestamp when trash item auto-deletes
-  IntColumn get deletedTombstoneAtMs => integer().nullable()(); // For cloud sync tombstone cleanup
+  IntColumn get isTrashed =>
+      integer().withDefault(const Constant(0))(); // 0 or 1
+  IntColumn get trashExpiresAtMs =>
+      integer().nullable()(); // Unix timestamp when trash item auto-deletes
+  IntColumn get deletedTombstoneAtMs =>
+      integer().nullable()(); // For cloud sync tombstone cleanup
 
   @override
   Set<Column> get primaryKey => {id};
@@ -111,7 +124,8 @@ class SyncState extends Table {
   TextColumn get objectType => text()(); // 'photo', 'album', 'tag'
   IntColumn get localVersion => integer()(); // for conflict detection
   IntColumn get remoteVersion => integer().nullable()();
-  TextColumn get state => text()(); // 'local_new', 'pending', 'synced', 'conflict', 'error'
+  TextColumn get state =>
+      text()(); // 'local_new', 'pending', 'synced', 'conflict', 'error'
   IntColumn get retryCount => integer().withDefault(const Constant(0))();
   IntColumn get updatedAtMs => integer()();
 
@@ -122,7 +136,8 @@ class SyncState extends Table {
 /// Backup state: tracks incremental backup progress.
 @DataClassName('BackupStateEntry')
 class BackupState extends Table {
-  TextColumn get key => text()(); // e.g., 'last_vmk_backup_ms', 'last_photo_sync_ms'
+  TextColumn get key =>
+      text()(); // e.g., 'last_vmk_backup_ms', 'last_photo_sync_ms'
   TextColumn get value => text()();
   IntColumn get updatedAtMs => integer()();
 
@@ -136,7 +151,8 @@ class EncryptionVersions extends Table {
   IntColumn get version => integer()();
   TextColumn get cipher => text()(); // 'AES-256-GCM'
   TextColumn get kdf => text()(); // 'PBKDF2'
-  TextColumn get paramsJson => text()(); // JSON params: iterations, salt length, etc.
+  TextColumn get paramsJson =>
+      text()(); // JSON params: iterations, salt length, etc.
   IntColumn get active => integer().withDefault(const Constant(0))(); // 0 or 1
 
   @override
@@ -179,7 +195,8 @@ class TrashItems extends Table {
   TextColumn get photoId => text()();
   IntColumn get movedAtMs => integer()();
   IntColumn get expiresAtMs => integer()(); // Unix timestamp for auto-delete
-  IntColumn get syncDeletePending => integer().withDefault(const Constant(0))(); // 0 or 1
+  IntColumn get syncDeletePending =>
+      integer().withDefault(const Constant(0))(); // 0 or 1
 
   @override
   Set<Column> get primaryKey => {photoId};
@@ -200,10 +217,12 @@ class AppSettings extends Table {
 @DataClassName('SecurityEvent')
 class SecurityEvents extends Table {
   TextColumn get id => text()();
-  TextColumn get eventType => text()(); // 'unlock', 'lock', 'export', 'restore', etc.
+  TextColumn get eventType =>
+      text()(); // 'unlock', 'lock', 'export', 'restore', etc.
   TextColumn get severity => text()(); // 'info', 'warning', 'critical'
   IntColumn get occurredAtMs => integer()();
-  TextColumn get detailsJson => text().nullable()(); // JSON object with event-specific details
+  TextColumn get detailsJson =>
+      text().nullable()(); // JSON object with event-specific details
 
   @override
   Set<Column> get primaryKey => {id};
@@ -244,25 +263,37 @@ class VaultDatabase extends _$VaultDatabase {
   /// Get all non-trashed photos, ordered by most recent imported first.
   Future<List<VaultPhoto>> getGalleryPhotos() async {
     return (select(photos)
-            ..where((p) => p.isTrashed.equals(0))
-            ..orderBy([(p) => OrderingTerm(expression: p.importedTimeMs, mode: OrderingMode.desc)]))
+          ..where((p) => p.isTrashed.equals(0))
+          ..orderBy([
+            (p) => OrderingTerm(
+              expression: p.importedTimeMs,
+              mode: OrderingMode.desc,
+            ),
+          ]))
         .get();
   }
 
   /// Get all photos (including trashed) by album.
   Future<List<VaultPhoto>> getPhotosByAlbum(String albumId) async {
     return (select(photos)
-            ..where((p) => p.albumId.equals(albumId) & p.isTrashed.equals(0))
-            ..orderBy([(p) => OrderingTerm(expression: p.importedTimeMs, mode: OrderingMode.desc)]))
+          ..where((p) => p.albumId.equals(albumId) & p.isTrashed.equals(0))
+          ..orderBy([
+            (p) => OrderingTerm(
+              expression: p.importedTimeMs,
+              mode: OrderingMode.desc,
+            ),
+          ]))
         .get();
   }
 
   /// Check if checksum already exists (duplicate detection).
   Future<bool> photoWithChecksumExists(String checksum) async {
-    final count = await (select(photos)
-            ..where((p) => p.checksumSha256.equals(checksum) & p.isTrashed.equals(0)))
-        .get()
-        .then((rows) => rows.length);
+    final count =
+        await (select(photos)..where(
+              (p) => p.checksumSha256.equals(checksum) & p.isTrashed.equals(0),
+            ))
+            .get()
+            .then((rows) => rows.length);
     return count > 0;
   }
 
@@ -286,10 +317,7 @@ class VaultDatabase extends _$VaultDatabase {
     final photo = await getPhotoById(photoId);
     if (photo != null) {
       await update(photos).replace(
-        photo.copyWith(
-          isTrashed: 1,
-          trashExpiresAtMs: Value(expiresAtMs),
-        ),
+        photo.copyWith(isTrashed: 1, trashExpiresAtMs: Value(expiresAtMs)),
       );
     }
   }
@@ -299,10 +327,7 @@ class VaultDatabase extends _$VaultDatabase {
     final photo = await getPhotoById(photoId);
     if (photo != null) {
       await update(photos).replace(
-        photo.copyWith(
-          isTrashed: 0,
-          trashExpiresAtMs: const Value(null),
-        ),
+        photo.copyWith(isTrashed: 0, trashExpiresAtMs: const Value(null)),
       );
     }
   }
@@ -315,10 +340,12 @@ class VaultDatabase extends _$VaultDatabase {
 
   /// Get all trashed photos with expiry < now (for cleanup job).
   Future<List<VaultPhoto>> getExpiredTrashPhotos(int nowMs) async {
-    return (select(photos)
-            ..where((p) =>
-                p.isTrashed.equals(1) &
-                (p.trashExpiresAtMs.isSmallerThanValue(nowMs) | p.trashExpiresAtMs.isNull())))
+    return (select(photos)..where(
+          (p) =>
+              p.isTrashed.equals(1) &
+              (p.trashExpiresAtMs.isSmallerThanValue(nowMs) |
+                  p.trashExpiresAtMs.isNull()),
+        ))
         .get();
   }
 
@@ -326,7 +353,7 @@ class VaultDatabase extends _$VaultDatabase {
   Future<int> countPhotos({bool includeTrashed = false}) async {
     final query = select(photos);
     if (!includeTrashed) {
-      query..where((p) => p.isTrashed.equals(0));
+      query.where((p) => p.isTrashed.equals(0));
     }
     return query.get().then((rows) => rows.length);
   }
@@ -342,23 +369,25 @@ class VaultDatabase extends _$VaultDatabase {
 
   /// Get tags for a specific photo.
   Future<List<VaultTag>> getTagsForPhoto(String photoId) async {
-    final query = select(tags).join([
-      innerJoin(photoTags, photoTags.tagId.equalsExp(tags.id)),
-    ]);
-    query..where(photoTags.photoId.equals(photoId));
+    final query = select(
+      tags,
+    ).join([innerJoin(photoTags, photoTags.tagId.equalsExp(tags.id))]);
+    query.where(photoTags.photoId.equals(photoId));
     return query.map((row) => row.readTable(tags)).get();
   }
 
   /// Add tag to photo (many-to-many).
   Future<void> addTagToPhoto(String photoId, String tagId) async {
-    await into(photoTags).insertOnConflictUpdate(PhotoTagLink(photoId: photoId, tagId: tagId));
+    await into(
+      photoTags,
+    ).insertOnConflictUpdate(PhotoTagLink(photoId: photoId, tagId: tagId));
   }
 
   /// Remove tag from photo.
   Future<void> removeTagFromPhoto(String photoId, String tagId) async {
-    await (delete(photoTags)
-            ..where((pt) => pt.photoId.equals(photoId) & pt.tagId.equals(tagId)))
-        .go();
+    await (delete(
+      photoTags,
+    )..where((pt) => pt.photoId.equals(photoId) & pt.tagId.equals(tagId))).go();
   }
 
   // =========================================================================
@@ -386,7 +415,9 @@ class VaultDatabase extends _$VaultDatabase {
 
   /// Get trash items.
   Future<List<TrashItem>> getTrashItems() async {
-    return (select(trashItems)..orderBy([(t) => OrderingTerm(expression: t.movedAtMs, mode: OrderingMode.desc)]))
+    return (select(trashItems)..orderBy([
+          (t) => OrderingTerm(expression: t.movedAtMs, mode: OrderingMode.desc),
+        ]))
         .get();
   }
 
@@ -413,7 +444,9 @@ class VaultDatabase extends _$VaultDatabase {
 
   /// Get all objects pending sync.
   Future<List<SyncStateEntry>> getPendingSyncItems() async {
-    return (select(syncState)..where((s) => s.state.isIn(['local_new', 'pending', 'error']))).get();
+    return (select(
+      syncState,
+    )..where((s) => s.state.isIn(['local_new', 'pending', 'error']))).get();
   }
 
   /// Update sync state.
@@ -427,14 +460,20 @@ class VaultDatabase extends _$VaultDatabase {
 
   /// Get backup state value.
   Future<String?> getBackupStateValue(String key) async {
-    final entry = await (select(backupState)..where((bs) => bs.key.equals(key))).getSingleOrNull();
+    final entry = await (select(
+      backupState,
+    )..where((bs) => bs.key.equals(key))).getSingleOrNull();
     return entry?.value;
   }
 
   /// Set backup state value.
   Future<void> setBackupStateValue(String key, String value) async {
     await into(backupState).insertOnConflictUpdate(
-      BackupStateEntry(key: key, value: value, updatedAtMs: DateTime.now().millisecondsSinceEpoch),
+      BackupStateEntry(
+        key: key,
+        value: value,
+        updatedAtMs: DateTime.now().millisecondsSinceEpoch,
+      ),
     );
   }
 
@@ -444,7 +483,9 @@ class VaultDatabase extends _$VaultDatabase {
 
   /// Get vault metadata.
   Future<VaultMetadata?> getVaultMetadata(String vaultId) async {
-    return (select(vault)..where((v) => v.id.equals(vaultId))).getSingleOrNull();
+    return (select(
+      vault,
+    )..where((v) => v.id.equals(vaultId))).getSingleOrNull();
   }
 
   /// Insert vault metadata.
@@ -511,7 +552,7 @@ class VaultDatabase extends _$VaultDatabase {
 
 LazyDatabase _openConnection() {
   return LazyDatabase(() async {
-    // Using driftDatabase helper from drift_flutter  
+    // Using driftDatabase helper from drift_flutter
     // It automatically handles SQLite setup for Flutter
     return driftDatabase(name: 'vault');
   });

@@ -59,6 +59,8 @@ dependencies:
   # App storage paths (app-private data directory)
   path_provider: ^2.1.5
   path: ^1.9.1
+  crypto: ^3.0.6
+  image: ^4.5.4
   image_picker: ^1.1.2
   receive_sharing_intent: ^1.8.1
   firebase_core: ^4.11.0

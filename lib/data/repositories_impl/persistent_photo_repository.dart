@@ -157,7 +157,7 @@ class PersistentPhotoRepositoryImpl implements PersistentPhotoRepository {
       // For now, fetch all gallery photos and paginate in memory
       // TODO: Optimize with OFFSET/LIMIT in SQL query
       final allPhotos = await _db.getGalleryPhotos();
-      
+
       var filtered = allPhotos.map(_todomainPhoto).toList();
       if (albumId != null) {
         filtered = filtered.where((p) => p.albumId == albumId).toList();
@@ -168,7 +168,7 @@ class PersistentPhotoRepositoryImpl implements PersistentPhotoRepository {
 
       final start = page * pageSize;
       if (start >= filtered.length) return const [];
-      
+
       final end = (start + pageSize).clamp(0, filtered.length);
       return filtered.sublist(start, end);
     } catch (e) {
@@ -178,7 +178,10 @@ class PersistentPhotoRepositoryImpl implements PersistentPhotoRepository {
   }
 
   @override
-  Future<void> movePhotoToTrash(String photoId, {required int expiresAtMs}) async {
+  Future<void> movePhotoToTrash(
+    String photoId, {
+    required int expiresAtMs,
+  }) async {
     _requireInitialized();
     try {
       await _db.movePhotoToTrash(photoId, expiresAtMs);
@@ -197,6 +200,18 @@ class PersistentPhotoRepositoryImpl implements PersistentPhotoRepository {
       debugPrint('♻️  Photo restored: $photoId');
     } catch (e) {
       debugPrint('❌ Failed to restore: $e');
+      rethrow;
+    }
+  }
+
+  @override
+  Future<void> deleteMetadataOnly(String photoId) async {
+    _requireInitialized();
+    try {
+      await _db.permanentlyDeletePhoto(photoId);
+      debugPrint('🧹 Photo metadata removed: $photoId');
+    } catch (e) {
+      debugPrint('❌ Failed to remove photo metadata: $e');
       rethrow;
     }
   }

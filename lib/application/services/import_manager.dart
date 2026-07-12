@@ -1,8 +1,11 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:isolate';
 
-import 'package:cryptography/cryptography.dart';
+import 'package:crypto/crypto.dart' as crypto;
 import 'package:flutter/foundation.dart';
+import 'package:image/image.dart' as img;
 import 'package:image_picker/image_picker.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
@@ -47,12 +50,15 @@ class ImportManager extends ChangeNotifier {
   final PhotoRepository _photoRepository;
   final CryptoService _cryptoService;
   final VaultSession _vaultSession;
-  final _sha256 = Sha256();
   static const _uuid = Uuid();
+
   final List<XFile> _pendingShareFiles = [];
   final Map<String, Uint8List> _thumbnailMemoryCache = {};
+  Future<void> _jobQueue = Future<void>.value();
   bool _useExternalStorageMirror = true;
   bool _driveEncryptedBackupEnabled = false;
+  String? _lastImportedPhotoId;
+  int _galleryEventRevision = 0;
   ImportJobProgress _progress = const ImportJobProgress(
     jobId: '',
     total: 0,
@@ -61,6 +67,8 @@ class ImportManager extends ChangeNotifier {
   );
 
   ImportJobProgress get progress => _progress;
+  String? get lastImportedPhotoId => _lastImportedPhotoId;
+  int get galleryEventRevision => _galleryEventRevision;
 
   void configureStorage({
     required bool useExternalStorageMirror,
@@ -88,6 +96,30 @@ class ImportManager extends ChangeNotifier {
     notifyListeners();
   }
 
+  void startBackgroundImport({
+    required List<XFile> files,
+    required String source,
+  }) {
+    if (files.isEmpty) return;
+    _jobQueue = _jobQueue.then(
+      (_) => _runImportJob(files: files, source: source),
+    );
+    unawaited(_jobQueue);
+  }
+
+  Future<void> enqueueImport({
+    required List<XFile> files,
+    required String source,
+  }) {
+    if (files.isEmpty) {
+      return Future<void>.value();
+    }
+    _jobQueue = _jobQueue.then(
+      (_) => _runImportJob(files: files, source: source),
+    );
+    return _jobQueue;
+  }
+
   Future<Uint8List?> loadThumbnailBytes(VaultPhoto photo) async {
     final cached = _thumbnailMemoryCache[photo.id];
     if (cached != null) {
@@ -101,6 +133,12 @@ class ImportManager extends ChangeNotifier {
       aad: utf8.encode('${photo.id}:dek:v${photo.encryptionVersion}'),
     );
     try {
+      final thumbFile = File(photo.thumbnailPath);
+      if (!await thumbFile.exists()) {
+        final regenerated = await _regenerateThumbnail(photo: photo, dek: dek);
+        _thumbnailMemoryCache[photo.id] = regenerated;
+        return regenerated;
+      }
       final payload = await _readPayloadFile(photo.thumbnailPath);
       final plain = await _cryptoService.decrypt(
         payload,
@@ -140,146 +178,6 @@ class ImportManager extends ChangeNotifier {
     }
   }
 
-  Future<void> enqueueImport({
-    required List<XFile> files,
-    required String source,
-  }) async {
-    if (files.isEmpty) return;
-    final jobId = _uuid.v4();
-    _progress = ImportJobProgress(
-      jobId: jobId,
-      total: files.length,
-      completed: 0,
-      status: ImportJobStatus.running,
-    );
-    notifyListeners();
-
-    try {
-      var completed = 0;
-      final vmk = _vaultSession.requireVmk();
-      for (final file in files) {
-        await Future<void>.delayed(Duration.zero);
-        final now = DateTime.now().millisecondsSinceEpoch;
-        final name = p.basename(file.path.isEmpty ? 'imported.jpg' : file.path);
-        final fileSize = await file.length();
-        final id = _uuid.v4();
-        final plainBytes = await file.readAsBytes();
-        final hashBytes = await _sha256.hash(plainBytes);
-        final checksum = _toHex(hashBytes.bytes);
-        final duplicate = await _photoRepository.existsChecksum(checksum);
-        if (duplicate) {
-          completed += 1;
-          _progress = ImportJobProgress(
-            jobId: jobId,
-            total: files.length,
-            completed: completed,
-            status: ImportJobStatus.running,
-          );
-          notifyListeners();
-          continue;
-        }
-
-        final dek = await _cryptoService.generateSymmetricKey();
-        try {
-          final encryptedPhoto = await _cryptoService.encrypt(
-            plainBytes,
-            dek,
-            aad: utf8.encode('$id:photo:v${_cryptoService.encryptionVersion}'),
-          );
-          final encryptedThumb = await _cryptoService.encrypt(
-            plainBytes,
-            dek,
-            aad: utf8.encode('$id:thumb:v${_cryptoService.encryptionVersion}'),
-          );
-          final wrappedDek = await _cryptoService.wrapKey(
-            dek,
-            vmk,
-            keyId: id,
-            aad: utf8.encode('$id:dek:v${_cryptoService.encryptionVersion}'),
-          );
-
-          final photoPath = await _writePayloadFile(
-            id: id,
-            kind: 'photo',
-            payload: encryptedPhoto,
-          );
-          final thumbPath = await _writePayloadFile(
-            id: id,
-            kind: 'thumb',
-            payload: encryptedThumb,
-          );
-
-          await _photoRepository.upsertPhoto(
-            VaultPhoto(
-              id: id,
-              originalFilename: name,
-              encryptedFilePath: photoPath,
-              thumbnailPath: thumbPath,
-              wrappedDek: _wrappedDekToJson(wrappedDek),
-              photoNonce: base64Encode(encryptedPhoto.nonce),
-              thumbnailNonce: base64Encode(encryptedThumb.nonce),
-              encryptionVersion: _cryptoService.encryptionVersion,
-              checksumSha256: checksum,
-              fileSize: fileSize,
-              mimeType: _mimeFromFileName(name),
-              createdTimeMs: now,
-              importedTimeMs: now,
-              modifiedTimeMs: now,
-              favorite: false,
-              isTrashed: false,
-            ),
-          );
-          await _upsertExternalManifest(
-            id: id,
-            originalFilename: name,
-            photoPath: photoPath,
-            thumbPath: thumbPath,
-            checksum: checksum,
-            wrappedDekJson: _wrappedDekToJson(wrappedDek),
-            photoNonce: base64Encode(encryptedPhoto.nonce),
-            thumbNonce: base64Encode(encryptedThumb.nonce),
-            encryptionVersion: _cryptoService.encryptionVersion,
-            fileSize: fileSize,
-            mimeType: _mimeFromFileName(name),
-          );
-        } finally {
-          try {
-            dek.fillRange(0, dek.length, 0);
-          } catch (_) {}
-        }
-
-        completed += 1;
-        _progress = ImportJobProgress(
-          jobId: jobId,
-          total: files.length,
-          completed: completed,
-          status: ImportJobStatus.running,
-        );
-        notifyListeners();
-      }
-      _thumbnailMemoryCache.clear();
-
-      _progress = ImportJobProgress(
-        jobId: jobId,
-        total: files.length,
-        completed: files.length,
-        status: ImportJobStatus.completed,
-      );
-      notifyListeners();
-    } catch (e) {
-      _progress = ImportJobProgress(
-        jobId: jobId,
-        total: files.length,
-        completed: _progress.completed,
-        status: ImportJobStatus.failed,
-        errorMessage: 'Import failed.',
-      );
-      notifyListeners();
-      rethrow;
-    }
-  }
-
-  /// Removes DB records that point to missing encrypted files.
   Future<int> reconcileVaultFiles() async {
     var page = 0;
     var removed = 0;
@@ -292,14 +190,209 @@ class ImportManager extends ChangeNotifier {
       for (final photo in rows) {
         final hasPhoto = await File(photo.encryptedFilePath).exists();
         final hasThumb = await File(photo.thumbnailPath).exists();
-        if (!hasPhoto || !hasThumb) {
-          await _photoRepository.permanentlyDelete(photo.id);
+        if (!hasPhoto) {
+          await _photoRepository.deleteMetadataOnly(photo.id);
+          await _removeManifestEntry(photo.id);
+          _thumbnailMemoryCache.remove(photo.id);
+          _lastImportedPhotoId = null;
           removed += 1;
+          _galleryEventRevision += 1;
+          notifyListeners();
+          continue;
+        }
+        if (!hasThumb) {
+          final vmk = _vaultSession.requireVmk();
+          final wrappedDek = _parseWrappedDek(photo.wrappedDek);
+          final dek = await _cryptoService.unwrapKey(
+            wrappedDek,
+            vmk,
+            aad: utf8.encode('${photo.id}:dek:v${photo.encryptionVersion}'),
+          );
+          try {
+            await _regenerateThumbnail(photo: photo, dek: dek);
+          } finally {
+            try {
+              dek.fillRange(0, dek.length, 0);
+            } catch (_) {}
+          }
         }
       }
       page += 1;
     }
     return removed;
+  }
+
+  Future<void> _runImportJob({
+    required List<XFile> files,
+    required String source,
+  }) async {
+    final jobId = _uuid.v4();
+    _progress = ImportJobProgress(
+      jobId: jobId,
+      total: files.length,
+      completed: 0,
+      status: ImportJobStatus.running,
+    );
+    notifyListeners();
+
+    var completed = 0;
+    final vmk = _vaultSession.requireVmk();
+    try {
+      for (final file in files) {
+        try {
+          final prepared = await Isolate.run(
+            () => _prepareImportFile(file.path),
+          );
+          final checksum = prepared['checksumSha256'] as String;
+          final duplicate = await _photoRepository.existsChecksum(checksum);
+          if (!duplicate) {
+            final now = DateTime.now().millisecondsSinceEpoch;
+            final id = _uuid.v4();
+            final plainBytes = prepared['photoBytes'] as Uint8List;
+            final thumbnailBytes = prepared['thumbnailBytes'] as Uint8List;
+            final fileSize = prepared['fileSize'] as int;
+            final mimeType = prepared['mimeType'] as String;
+            final originalFilename = prepared['originalFilename'] as String;
+
+            final dek = await _cryptoService.generateSymmetricKey();
+            try {
+              final encryptedPhoto = await _cryptoService.encrypt(
+                plainBytes,
+                dek,
+                aad: utf8.encode(
+                  '$id:photo:v${_cryptoService.encryptionVersion}',
+                ),
+              );
+              final encryptedThumb = await _cryptoService.encrypt(
+                thumbnailBytes,
+                dek,
+                aad: utf8.encode(
+                  '$id:thumb:v${_cryptoService.encryptionVersion}',
+                ),
+              );
+              final wrappedDek = await _cryptoService.wrapKey(
+                dek,
+                vmk,
+                keyId: id,
+                aad: utf8.encode(
+                  '$id:dek:v${_cryptoService.encryptionVersion}',
+                ),
+              );
+
+              final photoPath = await _writePayloadFile(
+                id: id,
+                kind: 'photo',
+                payload: encryptedPhoto,
+              );
+              final thumbPath = await _writePayloadFile(
+                id: id,
+                kind: 'thumb',
+                payload: encryptedThumb,
+              );
+
+              await _photoRepository.upsertPhoto(
+                VaultPhoto(
+                  id: id,
+                  originalFilename: originalFilename,
+                  encryptedFilePath: photoPath,
+                  thumbnailPath: thumbPath,
+                  wrappedDek: _wrappedDekToJson(wrappedDek),
+                  photoNonce: base64Encode(encryptedPhoto.nonce),
+                  thumbnailNonce: base64Encode(encryptedThumb.nonce),
+                  encryptionVersion: _cryptoService.encryptionVersion,
+                  checksumSha256: checksum,
+                  fileSize: fileSize,
+                  mimeType: mimeType,
+                  createdTimeMs: now,
+                  importedTimeMs: now,
+                  modifiedTimeMs: now,
+                  favorite: false,
+                  isTrashed: false,
+                ),
+              );
+              await _upsertExternalManifest(
+                id: id,
+                originalFilename: originalFilename,
+                photoPath: photoPath,
+                thumbPath: thumbPath,
+                checksum: checksum,
+                wrappedDekJson: _wrappedDekToJson(wrappedDek),
+                photoNonce: base64Encode(encryptedPhoto.nonce),
+                thumbNonce: base64Encode(encryptedThumb.nonce),
+                encryptionVersion: _cryptoService.encryptionVersion,
+                fileSize: fileSize,
+                mimeType: mimeType,
+                source: source,
+              );
+              _thumbnailMemoryCache[id] = thumbnailBytes;
+              _lastImportedPhotoId = id;
+              _galleryEventRevision += 1;
+              notifyListeners();
+            } finally {
+              try {
+                dek.fillRange(0, dek.length, 0);
+              } catch (_) {}
+            }
+          }
+        } catch (_) {
+          // Keep the rest of the batch running; the job banner will still finish.
+        }
+
+        completed += 1;
+        _progress = ImportJobProgress(
+          jobId: jobId,
+          total: files.length,
+          completed: completed,
+          status: ImportJobStatus.running,
+        );
+        notifyListeners();
+        await Future<void>.delayed(Duration.zero);
+      }
+
+      _progress = ImportJobProgress(
+        jobId: jobId,
+        total: files.length,
+        completed: files.length,
+        status: ImportJobStatus.completed,
+      );
+      notifyListeners();
+    } catch (_) {
+      _progress = ImportJobProgress(
+        jobId: jobId,
+        total: files.length,
+        completed: completed,
+        status: ImportJobStatus.failed,
+        errorMessage: 'Import failed.',
+      );
+      notifyListeners();
+      rethrow;
+    }
+  }
+
+  Future<Uint8List> _regenerateThumbnail({
+    required VaultPhoto photo,
+    required List<int> dek,
+  }) async {
+    final photoPayload = await _readPayloadFile(photo.encryptedFilePath);
+    final plainPhoto = await _cryptoService.decrypt(
+      photoPayload,
+      dek,
+      aad: utf8.encode('${photo.id}:photo:v${photo.encryptionVersion}'),
+    );
+    final thumbBytes = await Isolate.run(
+      () => _generateThumbnailBytes(Uint8List.fromList(plainPhoto)),
+    );
+    final encryptedThumb = await _cryptoService.encrypt(
+      thumbBytes,
+      dek,
+      aad: utf8.encode('${photo.id}:thumb:v${photo.encryptionVersion}'),
+    );
+    await _writePayloadFile(
+      id: photo.id,
+      kind: 'thumb',
+      payload: encryptedThumb,
+    );
+    return thumbBytes;
   }
 
   Future<String> _writePayloadFile({
@@ -308,7 +401,8 @@ class ImportManager extends ChangeNotifier {
     required EncryptedPayload payload,
   }) async {
     final vaultRoot = await _resolveVaultRoot();
-    final vaultDir = Directory(p.join(vaultRoot.path, 'objects'));
+    final folderName = kind == 'thumb' ? 'thumbs' : 'objects';
+    final vaultDir = Directory(p.join(vaultRoot.path, folderName));
     if (!await vaultDir.exists()) {
       await vaultDir.create(recursive: true);
     }
@@ -337,13 +431,7 @@ class ImportManager extends ChangeNotifier {
       final packageAndRest = split[1];
       final packageName = packageAndRest.split(Platform.pathSeparator).first;
       final mediaRoot = Directory(
-        p.join(
-          split[0],
-          'Android',
-          'media',
-          packageName,
-          'vault',
-        ),
+        p.join(split[0], 'Android', 'media', packageName, 'vault'),
       );
       if (!await mediaRoot.exists()) {
         await mediaRoot.create(recursive: true);
@@ -370,6 +458,7 @@ class ImportManager extends ChangeNotifier {
     required int encryptionVersion,
     required int fileSize,
     required String mimeType,
+    required String source,
   }) async {
     if (!_useExternalStorageMirror) return;
     final root = await _resolveVaultRoot();
@@ -387,8 +476,8 @@ class ImportManager extends ChangeNotifier {
         }
       } catch (_) {}
     }
-    final photosMap = (doc['photos'] as Map?)?.cast<String, dynamic>() ??
-        <String, dynamic>{};
+    final photosMap =
+        (doc['photos'] as Map?)?.cast<String, dynamic>() ?? <String, dynamic>{};
     photosMap[id] = <String, dynamic>{
       'id': id,
       'originalFilename': originalFilename,
@@ -401,11 +490,29 @@ class ImportManager extends ChangeNotifier {
       'encryptionVersion': encryptionVersion,
       'fileSize': fileSize,
       'mimeType': mimeType,
+      'source': source,
       'driveUploadRequested': _driveEncryptedBackupEnabled,
       'updatedAtMs': DateTime.now().millisecondsSinceEpoch,
     };
     doc['photos'] = photosMap;
     await manifestFile.writeAsString(jsonEncode(doc), flush: true);
+  }
+
+  Future<void> _removeManifestEntry(String id) async {
+    if (!_useExternalStorageMirror) return;
+    final root = await _resolveVaultRoot();
+    final manifestFile = File(p.join(root.path, 'manifest', 'manifest.json'));
+    if (!await manifestFile.exists()) return;
+    try {
+      final parsed = jsonDecode(await manifestFile.readAsString());
+      if (parsed is! Map<String, dynamic>) return;
+      final photosMap =
+          (parsed['photos'] as Map?)?.cast<String, dynamic>() ??
+          <String, dynamic>{};
+      photosMap.remove(id);
+      parsed['photos'] = photosMap;
+      await manifestFile.writeAsString(jsonEncode(parsed), flush: true);
+    } catch (_) {}
   }
 
   Future<EncryptedPayload> _readPayloadFile(String filePath) async {
@@ -448,20 +555,63 @@ class ImportManager extends ChangeNotifier {
       encryptionVersion: decoded['encryptionVersion'] as int,
     );
   }
+}
 
-  String _toHex(List<int> bytes) {
-    final buffer = StringBuffer();
-    for (final byte in bytes) {
-      buffer.write(byte.toRadixString(16).padLeft(2, '0'));
-    }
-    return buffer.toString();
+Map<String, Object> _prepareImportFile(String filePath) {
+  final file = File(filePath);
+  final plainBytes = file.readAsBytesSync();
+  if (plainBytes.isEmpty) {
+    throw StateError('Selected file is empty.');
   }
+  final originalFilename = p.basename(
+    filePath.isEmpty ? 'imported.jpg' : filePath,
+  );
+  final mimeType = _mimeFromFileName(originalFilename);
+  if (!_isSupportedMimeType(mimeType)) {
+    throw UnsupportedError('Unsupported file type: $mimeType');
+  }
+  final thumbnailBytes = _generateThumbnailBytes(plainBytes);
+  return <String, Object>{
+    'originalFilename': originalFilename,
+    'mimeType': mimeType,
+    'fileSize': plainBytes.length,
+    'checksumSha256': crypto.sha256.convert(plainBytes).toString(),
+    'photoBytes': Uint8List.fromList(plainBytes),
+    'thumbnailBytes': thumbnailBytes,
+  };
+}
 
-  String _mimeFromFileName(String filename) {
-    final lower = filename.toLowerCase();
-    if (lower.endsWith('.png')) return 'image/png';
-    if (lower.endsWith('.webp')) return 'image/webp';
-    if (lower.endsWith('.heic') || lower.endsWith('.heif')) return 'image/heic';
-    return 'image/jpeg';
+Uint8List _generateThumbnailBytes(Uint8List plainBytes) {
+  final decoded = img.decodeImage(plainBytes);
+  if (decoded == null) {
+    throw UnsupportedError('Unable to decode image.');
   }
+  final normalized = img.bakeOrientation(decoded);
+  final maxDimension = normalized.width >= normalized.height
+      ? normalized.width
+      : normalized.height;
+  final resized = maxDimension <= 512
+      ? normalized
+      : img.copyResize(
+          normalized,
+          width: normalized.width >= normalized.height ? 512 : null,
+          height: normalized.height > normalized.width ? 512 : null,
+          interpolation: img.Interpolation.average,
+        );
+  return Uint8List.fromList(img.encodeJpg(resized, quality: 82));
+}
+
+String _mimeFromFileName(String filename) {
+  final lower = filename.toLowerCase();
+  if (lower.endsWith('.png')) return 'image/png';
+  if (lower.endsWith('.webp')) return 'image/webp';
+  if (lower.endsWith('.heic') || lower.endsWith('.heif')) return 'image/heic';
+  return 'image/jpeg';
+}
+
+bool _isSupportedMimeType(String mimeType) {
+  return mimeType == 'image/jpeg' ||
+      mimeType == 'image/png' ||
+      mimeType == 'image/webp' ||
+      mimeType == 'image/heic';
 }

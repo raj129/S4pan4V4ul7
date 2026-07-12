@@ -12,5 +12,6 @@ abstract class PhotoRepository {
   });
   Future<void> movePhotoToTrash(String photoId, {required int expiresAtMs});
   Future<void> restoreFromTrash(String photoId);
+  Future<void> deleteMetadataOnly(String photoId);
   Future<void> permanentlyDelete(String photoId);
 }

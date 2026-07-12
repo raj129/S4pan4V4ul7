@@ -33,7 +33,6 @@ import '../../domain/entities/vault_status.dart';
 import '../screens/gallery/gallery_home_screen.dart';
 import '../screens/gallery/gallery_photo_viewer_screen.dart';
 import '../screens/import/import_screen.dart';
-import '../screens/import/import_review_screen.dart';
 import '../screens/lock/lock_screen.dart';
 import '../screens/onboarding/biometric_setup_screen.dart';
 import '../screens/onboarding/google_signin_screen.dart';
@@ -134,9 +133,9 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
 
   /// Initialize persistent photo repository if using persistent state.
   Future<void> _initializePhotoRepository() async {
-    if (_photoRepository is PersistentPhotoRepositoryImpl) {
+    if (_photoRepository case final PersistentPhotoRepositoryImpl repository) {
       try {
-        await (_photoRepository as PersistentPhotoRepositoryImpl).initialize();
+        await repository.initialize();
       } catch (e) {
         debugPrint('❌ Failed to initialize photo repository: $e');
       }
@@ -145,13 +144,13 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
 
   Future<void> _hydrateSessionSettings() async {
     final mode = await _settingsRepository.getUserMode();
-    final biometricEnabled =
-        await _settingsRepository.isBiometricUnlockEnabled();
+    final biometricEnabled = await _settingsRepository
+        .isBiometricUnlockEnabled();
     final photoSyncEnabled = await _settingsRepository.isPhotoSyncEnabled();
-    final externalMirrorEnabled =
-        await _settingsRepository.isExternalStorageMirrorEnabled();
-    final driveEncryptedBackupEnabled =
-        await _settingsRepository.isDriveEncryptedBackupEnabled();
+    final externalMirrorEnabled = await _settingsRepository
+        .isExternalStorageMirrorEnabled();
+    final driveEncryptedBackupEnabled = await _settingsRepository
+        .isDriveEncryptedBackupEnabled();
     if (!mounted) return;
     setState(() {
       if (mode != null) {
@@ -253,9 +252,7 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
                 if (photo == null) {
                   return Scaffold(
                     appBar: AppBar(title: const Text('Error')),
-                    body: const Center(
-                      child: Text('No photo provided'),
-                    ),
+                    body: const Center(child: Text('No photo provided')),
                   );
                 }
                 return GalleryPhotoViewerScreen(
@@ -318,44 +315,18 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
         ),
         GoRoute(
           path: '/import',
-          builder: (context, state) => ImportScreen(
+          builder: (context, state) => ImportBottomSheetLauncherScreen(
             importManager: _importManager,
-            onOpenReview: (files, source) {
-              context.push('/import/review', extra: {
-                'files': files,
-                'source': source,
-              });
-            },
+            onClosed: () => context.go('/gallery', extra: _lastKnownMode),
           ),
         ),
         GoRoute(
           path: '/import/share-intent',
-          builder: (context, state) => ImportScreen(
+          builder: (context, state) => ImportBottomSheetLauncherScreen(
             importManager: _importManager,
             autoOpenShareReview: true,
-            onOpenReview: (files, source) {
-              context.push('/import/review', extra: {
-                'files': files,
-                'source': source,
-              });
-            },
+            onClosed: () => context.go('/gallery', extra: _lastKnownMode),
           ),
-        ),
-        GoRoute(
-          path: '/import/review',
-          builder: (context, state) {
-            final extra = state.extra as Map<String, dynamic>?;
-            final files = (extra?['files'] as List<XFile>?) ?? const <XFile>[];
-            final source = (extra?['source'] as String?) ?? 'unknown';
-            return ImportReviewScreen(
-              files: files,
-              source: source,
-              importManager: _importManager,
-              onImportQueued: () {
-                context.go('/gallery', extra: _lastKnownMode);
-              },
-            );
-          },
         ),
       ],
     );
@@ -411,7 +382,9 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
     _vaultSession.lock();
     _sessionUnlocked.value = false;
     final location = _router.routerDelegate.currentConfiguration.uri.toString();
-    final encoded = Uri.encodeComponent(location.isEmpty ? '/gallery' : location);
+    final encoded = Uri.encodeComponent(
+      location.isEmpty ? '/gallery' : location,
+    );
     _router.go('/lock?returnTo=$encoded');
   }
 
@@ -429,8 +402,8 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
 
   /// Close persistent photo repository if using persistent state.
   void _closePhotoRepository() {
-    if (_photoRepository is PersistentPhotoRepositoryImpl) {
-      (_photoRepository as PersistentPhotoRepositoryImpl).close().ignore();
+    if (_photoRepository case final PersistentPhotoRepositoryImpl repository) {
+      repository.close().ignore();
     }
   }
 

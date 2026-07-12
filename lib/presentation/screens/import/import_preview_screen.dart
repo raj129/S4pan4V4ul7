@@ -1,5 +1,3 @@
-import 'dart:convert';
-import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -37,10 +35,7 @@ class _ImportPreviewScreenState extends State<ImportPreviewScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Photo preview'),
-        centerTitle: true,
-      ),
+      appBar: AppBar(title: const Text('Photo preview'), centerTitle: true),
       body: FutureBuilder<Uint8List>(
         future: _previewFuture,
         builder: (context, snapshot) {
@@ -67,10 +62,7 @@ class _ImportPreviewScreenState extends State<ImportPreviewScreen> {
             children: [
               Expanded(
                 child: InteractiveViewer(
-                  child: Image.memory(
-                    bytes,
-                    fit: BoxFit.contain,
-                  ),
+                  child: Image.memory(bytes, fit: BoxFit.contain),
                 ),
               ),
               Padding(

@@ -49,9 +49,7 @@ class _GalleryPhotoViewerScreenState extends State<GalleryPhotoViewerScreen> {
 
   Future<void> _loadPhoto() async {
     try {
-      final bytes = await widget.importManager.loadPhotoBytes(
-        widget.photo,
-      );
+      final bytes = await widget.importManager.loadPhotoBytes(widget.photo);
       if (!mounted) return;
       setState(() {
         _photoBytes = bytes;
@@ -73,10 +71,10 @@ class _GalleryPhotoViewerScreenState extends State<GalleryPhotoViewerScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-    appBar: AppBar(
-      leading: IconButton(
-        icon: const Icon(Icons.arrow_back),
-        onPressed: () => context.pop(),
+      appBar: AppBar(
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: () => context.pop(),
         ),
         actions: [
           IconButton(
@@ -102,9 +100,7 @@ class _GalleryPhotoViewerScreenState extends State<GalleryPhotoViewerScreen> {
 
   Widget _buildBody() {
     if (_loading) {
-      return const Center(
-        child: CircularProgressIndicator(),
-      );
+      return const Center(child: CircularProgressIndicator());
     }
 
     if (_error != null) {
@@ -129,52 +125,55 @@ class _GalleryPhotoViewerScreenState extends State<GalleryPhotoViewerScreen> {
     }
 
     if (_photoBytes == null) {
-      return const Center(
-        child: Text('No photo data'),
-      );
+      return const Center(child: Text('No photo data'));
     }
 
     return Center(
       child: GestureDetector(
-      onDoubleTap: () {
-        if (_transformationController.value != Matrix4.identity()) {
-          _resetZoom();
-        } else {
-          _transformationController.value = Matrix4.identity()..scale(2.0);
-        }
-      },
-      child: InteractiveViewer(
-        transformationController: _transformationController,
-        minScale: 1,
-        maxScale: 4,
-        child: Container(
-          color: Colors.black,
-          child: Image.memory(
-            _photoBytes!,
-            fit: BoxFit.contain,
-            errorBuilder: (_, _, __) => Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Icon(
-                    Icons.image_not_supported_outlined,
-                    size: 64,
-                    color: Colors.grey,
-                  ),
-                  const SizedBox(height: 16),
-                  Text(
-                    'Cannot display photo',
-                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                          color: Colors.grey,
-                        ),
-                  ),
-                ],
+        onDoubleTap: () {
+          if (_transformationController.value != Matrix4.identity()) {
+            _resetZoom();
+          } else {
+            _transformationController.value = Matrix4.diagonal3Values(
+              2.0,
+              2.0,
+              1.0,
+            );
+          }
+        },
+        child: InteractiveViewer(
+          transformationController: _transformationController,
+          minScale: 1,
+          maxScale: 4,
+          child: Container(
+            color: Colors.black,
+            child: Image.memory(
+              _photoBytes!,
+              fit: BoxFit.contain,
+              errorBuilder: (context, error, stackTrace) => Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(
+                      Icons.image_not_supported_outlined,
+                      size: 64,
+                      color: Colors.grey,
+                    ),
+                    const SizedBox(height: 16),
+                    Text(
+                      'Cannot display photo',
+                      style: Theme.of(
+                        context,
+                      ).textTheme.bodyMedium?.copyWith(color: Colors.grey),
+                    ),
+                  ],
+                ),
               ),
             ),
           ),
         ),
       ),
-    ));
+    );
   }
 
   void _showPhotoInfo(BuildContext context) {
@@ -223,9 +222,12 @@ class _PhotoInfoBottomSheet extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final createdDate = DateTime.fromMillisecondsSinceEpoch(photo.createdTimeMs);
-    final importedDate =
-        DateTime.fromMillisecondsSinceEpoch(photo.importedTimeMs);
+    final createdDate = DateTime.fromMillisecondsSinceEpoch(
+      photo.createdTimeMs,
+    );
+    final importedDate = DateTime.fromMillisecondsSinceEpoch(
+      photo.importedTimeMs,
+    );
     final sizeStr = _formatBytes(photo.fileSize);
 
     return SingleChildScrollView(
@@ -254,14 +256,8 @@ class _PhotoInfoBottomSheet extends StatelessWidget {
             _InfoRow(label: 'Filename', value: photo.originalFilename),
             _InfoRow(label: 'Size', value: sizeStr),
             _InfoRow(label: 'Type', value: photo.mimeType),
-            _InfoRow(
-              label: 'Created',
-              value: _formatDateTime(createdDate),
-            ),
-            _InfoRow(
-              label: 'Imported',
-              value: _formatDateTime(importedDate),
-            ),
+            _InfoRow(label: 'Created', value: _formatDateTime(createdDate)),
+            _InfoRow(label: 'Imported', value: _formatDateTime(importedDate)),
             _InfoRow(label: 'ID', value: photo.id),
             const SizedBox(height: 16),
             Container(
@@ -308,10 +304,7 @@ class _PhotoInfoBottomSheet extends StatelessWidget {
 
 /// Single info row in the photo details sheet.
 class _InfoRow extends StatelessWidget {
-  const _InfoRow({
-    required this.label,
-    required this.value,
-  });
+  const _InfoRow({required this.label, required this.value});
 
   final String label;
   final String value;
@@ -326,8 +319,8 @@ class _InfoRow extends StatelessWidget {
           Text(
             label,
             style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                ),
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
           ),
           const SizedBox(height: 4),
           Text(
