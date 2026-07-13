@@ -182,7 +182,10 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
         .map((f) => XFile(f.path))
         .toList(growable: false);
     if (mapped.isEmpty) return;
-    _importManager.setPendingShareFiles(mapped);
+    _importManager.setPendingImportSelection(
+      files: mapped,
+      source: 'share-intent',
+    );
     _router.go('/import/share-intent');
     ReceiveSharingIntent.instance.reset();
   }
@@ -287,7 +290,10 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
               onUnlocked: () {
                 _sessionUnlocked.value = true;
                 unawaited(_importManager.reconcileVaultFiles());
-                context.go(decodedReturnTo);
+                final importTarget = _importManager.hasPendingShareFiles
+                    ? '/import/share-intent'
+                    : null;
+                context.go(importTarget ?? decodedReturnTo);
               },
             );
           },

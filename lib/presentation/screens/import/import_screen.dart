@@ -100,17 +100,16 @@ class _ImportScreenState extends State<ImportScreen> {
   @override
   void initState() {
     super.initState();
-    if (widget.autoOpenShareReview) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted) return;
-        final shared = widget.importManager.takePendingShareFiles();
-        if (shared.isEmpty) return;
-        setState(() {
-          _selectedFiles = shared;
-          _selectedSource = 'share-intent';
-        });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final pending = widget.importManager.pendingImportFiles;
+      if (pending.isEmpty) return;
+      setState(() {
+        _selectedFiles = pending;
+        _selectedSource =
+            widget.importManager.pendingImportSource ?? 'share-intent';
       });
-    }
+    });
   }
 
   Future<void> _pickFromGallery() async {
@@ -129,6 +128,10 @@ class _ImportScreenState extends State<ImportScreen> {
         _selectedFiles = files;
         _selectedSource = 'gallery';
       });
+      widget.importManager.setPendingImportSelection(
+        files: files,
+        source: 'gallery',
+      );
     } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -155,6 +158,10 @@ class _ImportScreenState extends State<ImportScreen> {
         _selectedFiles = [file];
         _selectedSource = 'camera';
       });
+      widget.importManager.setPendingImportSelection(
+        files: [file],
+        source: 'camera',
+      );
     } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(
@@ -169,8 +176,11 @@ class _ImportScreenState extends State<ImportScreen> {
     final source = _selectedSource;
     if (_selectedFiles.isEmpty || source == null || _isQueueing) return;
     setState(() => _isQueueing = true);
+    final queuedFiles = widget.importManager.hasPendingImportSelection
+        ? widget.importManager.takePendingImportSelection()
+        : List<XFile>.from(_selectedFiles);
     widget.importManager.startBackgroundImport(
-      files: List<XFile>.from(_selectedFiles),
+      files: queuedFiles,
       source: source,
     );
     widget.onImportQueued();
@@ -200,7 +210,10 @@ class _ImportScreenState extends State<ImportScreen> {
                     ),
                   ),
                   IconButton(
-                    onPressed: () => context.pop(),
+                    onPressed: () {
+                      widget.importManager.clearPendingImportSelection();
+                      context.pop();
+                    },
                     icon: const Icon(Icons.close),
                   ),
                 ],
@@ -239,6 +252,7 @@ class _ImportScreenState extends State<ImportScreen> {
                         _selectedSource = null;
                         _isQueueing = false;
                       });
+                      widget.importManager.clearPendingImportSelection();
                     },
                     child: const Text('Change'),
                   ),
@@ -295,7 +309,13 @@ class _ImportScreenState extends State<ImportScreen> {
                     children: [
                       Expanded(
                         child: OutlinedButton(
-                          onPressed: _isQueueing ? null : () => context.pop(),
+                          onPressed: _isQueueing
+                              ? null
+                              : () {
+                                  widget.importManager
+                                      .clearPendingImportSelection();
+                                  context.pop();
+                                },
                           child: const Text('Cancel'),
                         ),
                       ),

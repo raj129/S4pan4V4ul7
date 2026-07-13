@@ -53,6 +53,8 @@ class ImportManager extends ChangeNotifier {
   static const _uuid = Uuid();
 
   final List<XFile> _pendingShareFiles = [];
+  final List<XFile> _pendingImportFiles = [];
+  String? _pendingImportSource;
   final Map<String, Uint8List> _thumbnailMemoryCache = {};
   Future<void> _jobQueue = Future<void>.value();
   bool _useExternalStorageMirror = true;
@@ -69,6 +71,11 @@ class ImportManager extends ChangeNotifier {
   ImportJobProgress get progress => _progress;
   String? get lastImportedPhotoId => _lastImportedPhotoId;
   int get galleryEventRevision => _galleryEventRevision;
+  bool get hasPendingShareFiles => _pendingShareFiles.isNotEmpty;
+  bool get hasPendingImportSelection => _pendingImportFiles.isNotEmpty;
+  String? get pendingImportSource => _pendingImportSource;
+  List<XFile> get pendingImportFiles =>
+      List<XFile>.unmodifiable(_pendingImportFiles);
 
   void configureStorage({
     required bool useExternalStorageMirror,
@@ -88,11 +95,37 @@ class ImportManager extends ChangeNotifier {
     _pendingShareFiles
       ..clear()
       ..addAll(files);
+    setPendingImportSelection(files: files, source: 'share-intent');
     notifyListeners();
   }
 
   void clearPendingShareFiles() {
     _pendingShareFiles.clear();
+    clearPendingImportSelection();
+    notifyListeners();
+  }
+
+  void setPendingImportSelection({
+    required List<XFile> files,
+    required String source,
+  }) {
+    _pendingImportFiles
+      ..clear()
+      ..addAll(files);
+    _pendingImportSource = source;
+    notifyListeners();
+  }
+
+  List<XFile> takePendingImportSelection() {
+    final copy = List<XFile>.from(_pendingImportFiles);
+    _pendingImportFiles.clear();
+    _pendingImportSource = null;
+    return copy;
+  }
+
+  void clearPendingImportSelection() {
+    _pendingImportFiles.clear();
+    _pendingImportSource = null;
     notifyListeners();
   }
 
