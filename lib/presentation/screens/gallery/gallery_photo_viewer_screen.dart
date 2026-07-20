@@ -209,6 +209,7 @@ class _GalleryPhotoViewerScreenState extends State<GalleryPhotoViewerScreen> {
       widget.photo.id,
       expiresAtMs: expiry,
     );
+    widget.importManager.notifyGalleryChanged();
     if (!context.mounted) return;
     context.pop();
   }

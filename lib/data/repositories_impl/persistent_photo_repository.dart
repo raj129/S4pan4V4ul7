@@ -178,6 +178,18 @@ class PersistentPhotoRepositoryImpl implements PersistentPhotoRepository {
   }
 
   @override
+  Future<List<VaultPhoto>> listTrashPhotos() async {
+    _requireInitialized();
+    try {
+      final trashed = await _db.getTrashedPhotos();
+      return trashed.map(_todomainPhoto).toList();
+    } catch (e) {
+      debugPrint('❌ Failed to list trash photos: $e');
+      return [];
+    }
+  }
+
+  @override
   Future<void> movePhotoToTrash(
     String photoId, {
     required int expiresAtMs,

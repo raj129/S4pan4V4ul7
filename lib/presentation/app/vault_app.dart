@@ -32,6 +32,9 @@ import '../../domain/entities/vault_photo.dart';
 import '../../domain/entities/vault_status.dart';
 import '../screens/gallery/gallery_home_screen.dart';
 import '../screens/gallery/gallery_photo_viewer_screen.dart';
+import '../screens/chat/chat_screen.dart';
+import '../screens/trash/trash_screen.dart';
+import '../screens/files/files_screen.dart';
 import '../screens/import/import_screen.dart';
 import '../screens/lock/lock_screen.dart';
 import '../screens/onboarding/biometric_setup_screen.dart';
@@ -43,6 +46,7 @@ import '../screens/restore/restore_flow_screen.dart';
 import '../screens/settings/settings_screen.dart';
 import '../state/onboarding/onboarding_cubit.dart';
 import '../state/onboarding/onboarding_state.dart';
+import 'main_scaffold.dart';
 
 /// App root: wires all dependencies and configures go_router.
 ///
@@ -233,37 +237,81 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
             ),
           ),
         ),
-        GoRoute(
-          path: '/gallery',
-          builder: (context, state) {
-            final mode = state.extra is UserMode
-                ? state.extra as UserMode
-                : _lastKnownMode;
-            _lastKnownMode = mode;
-            return GalleryHomeScreen(
-              mode: mode,
-              photoRepository: _photoRepository,
+        StatefulShellRoute.indexedStack(
+          builder: (context, state, navigationShell) {
+            return MainScaffold(
+              navigationShell: navigationShell,
               importManager: _importManager,
-              photoSyncEnabled: _photoSyncEnabled,
             );
           },
-          routes: [
-            GoRoute(
-              path: 'photo',
-              builder: (context, state) {
-                final photo = state.extra as VaultPhoto?;
-                if (photo == null) {
-                  return Scaffold(
-                    appBar: AppBar(title: const Text('Error')),
-                    body: const Center(child: Text('No photo provided')),
-                  );
-                }
-                return GalleryPhotoViewerScreen(
-                  photo: photo,
-                  importManager: _importManager,
-                  photoRepository: _photoRepository,
-                );
-              },
+          branches: [
+            StatefulShellBranch(
+              routes: [
+                GoRoute(
+                  path: '/gallery',
+                  builder: (context, state) {
+                    final mode = state.extra is UserMode
+                        ? state.extra as UserMode
+                        : _lastKnownMode;
+                    _lastKnownMode = mode;
+                    return GalleryHomeScreen(
+                      mode: mode,
+                      photoRepository: _photoRepository,
+                      importManager: _importManager,
+                      photoSyncEnabled: _photoSyncEnabled,
+                      vaultSession: _vaultSession,
+                    );
+                  },
+                  routes: [
+                    GoRoute(
+                      path: 'photo',
+                      builder: (context, state) {
+                        final photo = state.extra as VaultPhoto?;
+                        if (photo == null) {
+                          return Scaffold(
+                            appBar: AppBar(title: const Text('Error')),
+                            body: const Center(
+                              child: Text('No photo provided'),
+                            ),
+                          );
+                        }
+                        return GalleryPhotoViewerScreen(
+                          photo: photo,
+                          importManager: _importManager,
+                          photoRepository: _photoRepository,
+                        );
+                      },
+                    ),
+                  ],
+                ),
+              ],
+            ),
+            StatefulShellBranch(
+              routes: [
+                GoRoute(
+                  path: '/chat',
+                  builder: (context, state) => const ChatScreen(),
+                ),
+              ],
+            ),
+            StatefulShellBranch(
+              routes: [
+                GoRoute(
+                  path: '/trash',
+                  builder: (context, state) => TrashScreen(
+                    photoRepository: _photoRepository,
+                    importManager: _importManager,
+                  ),
+                ),
+              ],
+            ),
+            StatefulShellBranch(
+              routes: [
+                GoRoute(
+                  path: '/files',
+                  builder: (context, state) => const FilesScreen(),
+                ),
+              ],
             ),
           ],
         ),

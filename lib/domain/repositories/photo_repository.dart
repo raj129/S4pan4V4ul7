@@ -10,6 +10,7 @@ abstract class PhotoRepository {
     String? albumId,
     bool favoritesOnly = false,
   });
+  Future<List<VaultPhoto>> listTrashPhotos();
   Future<void> movePhotoToTrash(String photoId, {required int expiresAtMs});
   Future<void> restoreFromTrash(String photoId);
   Future<void> deleteMetadataOnly(String photoId);

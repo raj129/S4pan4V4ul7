@@ -273,6 +273,19 @@ class VaultDatabase extends _$VaultDatabase {
         .get();
   }
 
+  /// Get all trashed photos.
+  Future<List<VaultPhoto>> getTrashedPhotos() async {
+    return (select(photos)
+          ..where((p) => p.isTrashed.equals(1))
+          ..orderBy([
+            (p) => OrderingTerm(
+              expression: p.trashExpiresAtMs,
+              mode: OrderingMode.desc,
+            ),
+          ]))
+        .get();
+  }
+
   /// Get all photos (including trashed) by album.
   Future<List<VaultPhoto>> getPhotosByAlbum(String albumId) async {
     return (select(photos)

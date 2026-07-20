@@ -1,4 +1,6 @@
-class VaultSession {
+import 'package:flutter/foundation.dart';
+
+class VaultSession extends ChangeNotifier {
   String? _vaultId;
   List<int>? _vmk;
 
@@ -17,6 +19,7 @@ class VaultSession {
     lock();
     _vaultId = vaultId;
     _vmk = List<int>.from(vmkBytes);
+    notifyListeners();
   }
 
   void lock() {
@@ -28,5 +31,6 @@ class VaultSession {
     }
     _vmk = null;
     _vaultId = null;
+    notifyListeners();
   }
 }

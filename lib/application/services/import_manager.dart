@@ -77,6 +77,11 @@ class ImportManager extends ChangeNotifier {
   List<XFile> get pendingImportFiles =>
       List<XFile>.unmodifiable(_pendingImportFiles);
 
+  void notifyGalleryChanged() {
+    _galleryEventRevision += 1;
+    notifyListeners();
+  }
+
   void configureStorage({
     required bool useExternalStorageMirror,
     required bool driveEncryptedBackupEnabled,

@@ -36,6 +36,14 @@ class InMemoryPhotoRepository implements PhotoRepository {
   }
 
   @override
+  Future<List<VaultPhoto>> listTrashPhotos() async {
+    return _photos.values
+        .where((p) => p.isTrashed)
+        .toList()
+      ..sort((a, b) => b.modifiedTimeMs.compareTo(a.modifiedTimeMs));
+  }
+
+  @override
   Future<void> movePhotoToTrash(
     String photoId, {
     required int expiresAtMs,

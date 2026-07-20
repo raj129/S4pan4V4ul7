@@ -5,6 +5,7 @@ import '../../../application/services/import_manager.dart';
 import '../../../domain/entities/vault_photo.dart';
 import '../../../domain/entities/user_mode.dart';
 import '../../../domain/repositories/photo_repository.dart';
+import '../../../application/services/vault_session.dart';
 import '../import/import_screen.dart';
 
 /// Screen 8: Gallery home — empty state.
@@ -18,18 +19,26 @@ class GalleryHomeScreen extends StatelessWidget {
     required this.photoRepository,
     required this.importManager,
     required this.photoSyncEnabled,
+    this.vaultSession,
     super.key,
   });
   final UserMode mode;
   final PhotoRepository photoRepository;
   final ImportManager importManager;
   final bool photoSyncEnabled;
+  final VaultSession? vaultSession;
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Photo Vault'),
+        title: const Text('Photos'),
+        leading: IconButton(
+          icon: const Icon(Icons.menu),
+          onPressed: () {
+            Scaffold.of(context).openDrawer();
+          },
+        ),
         actions: [
           if (mode == UserMode.googleEnabled)
             const _BackupStatusBadge(synced: false),
@@ -46,6 +55,7 @@ class GalleryHomeScreen extends StatelessWidget {
         photoRepository: photoRepository,
         importManager: importManager,
         photoSyncEnabled: photoSyncEnabled,
+        vaultSession: vaultSession,
       ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () {
@@ -63,10 +73,12 @@ class _GalleryBody extends StatefulWidget {
     required this.photoRepository,
     required this.importManager,
     required this.photoSyncEnabled,
+    this.vaultSession,
   });
   final PhotoRepository photoRepository;
   final ImportManager importManager;
   final bool photoSyncEnabled;
+  final VaultSession? vaultSession;
 
   @override
   State<_GalleryBody> createState() => _GalleryBodyState();
@@ -81,12 +93,14 @@ class _GalleryBodyState extends State<_GalleryBody> {
   void initState() {
     super.initState();
     widget.importManager.addListener(_onImportChanged);
+    widget.vaultSession?.addListener(_load);
     _load();
   }
 
   @override
   void dispose() {
     widget.importManager.removeListener(_onImportChanged);
+    widget.vaultSession?.removeListener(_load);
     super.dispose();
   }
 
@@ -156,6 +170,7 @@ class _GalleryBodyState extends State<_GalleryBody> {
       photo.id,
       expiresAtMs: expiry,
     );
+    widget.importManager.notifyGalleryChanged();
     if (!mounted) return;
     setState(() {
       _photos = _photos.where((item) => item.id != photo.id).toList();
@@ -201,17 +216,8 @@ class _GalleryBodyState extends State<_GalleryBody> {
     return Center(
       child: Column(
         children: [
-          if (progress.status == ImportJobStatus.running)
-            LinearProgressIndicator(value: progress.ratio),
           if (widget.photoSyncEnabled)
             const LinearProgressIndicator(minHeight: 2),
-          if (progress.status == ImportJobStatus.running)
-            Padding(
-              padding: const EdgeInsets.all(8),
-              child: Text(
-                'Importing ${progress.completed}/${progress.total}...',
-              ),
-            ),
           if (widget.photoSyncEnabled)
             const Padding(
               padding: EdgeInsets.only(bottom: 4),
