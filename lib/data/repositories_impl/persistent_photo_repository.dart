@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:isolate';
 import 'package:flutter/foundation.dart';
 
 import '../../domain/entities/vault_photo.dart';
@@ -205,6 +206,25 @@ class PersistentPhotoRepositoryImpl implements PersistentPhotoRepository {
   }
 
   @override
+  Future<void> movePhotosToTrash(
+    List<String> photoIds, {
+    required int expiresAtMs,
+  }) async {
+    _requireInitialized();
+    try {
+      await _db.transaction(() async {
+        for (final id in photoIds) {
+          await _db.movePhotoToTrash(id, expiresAtMs);
+        }
+      });
+      debugPrint('🗑️  Batch moved to trash: ${photoIds.length} photos');
+    } catch (e) {
+      debugPrint('❌ Failed batch move to trash: $e');
+      rethrow;
+    }
+  }
+
+  @override
   Future<void> restoreFromTrash(String photoId) async {
     _requireInitialized();
     try {
@@ -212,6 +232,22 @@ class PersistentPhotoRepositoryImpl implements PersistentPhotoRepository {
       debugPrint('♻️  Photo restored: $photoId');
     } catch (e) {
       debugPrint('❌ Failed to restore: $e');
+      rethrow;
+    }
+  }
+
+  @override
+  Future<void> restorePhotosFromTrash(List<String> photoIds) async {
+    _requireInitialized();
+    try {
+      await _db.transaction(() async {
+        for (final id in photoIds) {
+          await _db.restorePhotoFromTrash(id);
+        }
+      });
+      debugPrint('♻️  Batch restored from trash: ${photoIds.length} photos');
+    } catch (e) {
+      debugPrint('❌ Failed batch restore: $e');
       rethrow;
     }
   }
@@ -242,6 +278,29 @@ class PersistentPhotoRepositoryImpl implements PersistentPhotoRepository {
       debugPrint('🔥 Photo permanently deleted: $photoId');
     } catch (e) {
       debugPrint('❌ Failed to permanently delete: $e');
+      rethrow;
+    }
+  }
+
+  @override
+  Future<void> permanentlyDeletePhotos(List<String> photoIds) async {
+    _requireInitialized();
+    try {
+      // Large file deletions should ideally be handled carefully
+      await _db.transaction(() async {
+        for (final id in photoIds) {
+          final photo = await _db.getPhotoById(id);
+          if (photo != null) {
+            // These file deletions are async and won't block the UI thread's event loop
+            await _deleteIfExists(photo.encryptedFilePath);
+            await _deleteIfExists(photo.thumbnailPath);
+          }
+          await _db.permanentlyDeletePhoto(id);
+        }
+      });
+      debugPrint('🔥 Batch permanently deleted: ${photoIds.length} photos');
+    } catch (e) {
+      debugPrint('❌ Failed batch permanent delete: $e');
       rethrow;
     }
   }

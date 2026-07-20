@@ -163,56 +163,70 @@ class ImportManager extends ChangeNotifier {
     if (cached != null) {
       return cached;
     }
-    final vmk = _vaultSession.requireVmk();
-    final wrappedDek = _parseWrappedDek(photo.wrappedDek);
-    final dek = await _cryptoService.unwrapKey(
-      wrappedDek,
-      vmk,
-      aad: utf8.encode('${photo.id}:dek:v${photo.encryptionVersion}'),
-    );
     try {
-      final thumbFile = File(photo.thumbnailPath);
-      if (!await thumbFile.exists()) {
-        final regenerated = await _regenerateThumbnail(photo: photo, dek: dek);
-        _thumbnailMemoryCache[photo.id] = regenerated;
-        return regenerated;
-      }
-      final payload = await _readPayloadFile(photo.thumbnailPath);
-      final plain = await _cryptoService.decrypt(
-        payload,
-        dek,
-        aad: utf8.encode('${photo.id}:thumb:v${photo.encryptionVersion}'),
+      final vmk = _vaultSession.requireVmk();
+      final wrappedDek = _parseWrappedDek(photo.wrappedDek);
+      final dek = await _cryptoService.unwrapKey(
+        wrappedDek,
+        vmk,
+        aad: utf8.encode('${photo.id}:dek:v${photo.encryptionVersion}'),
       );
-      final bytes = Uint8List.fromList(plain);
-      _thumbnailMemoryCache[photo.id] = bytes;
-      return bytes;
-    } finally {
       try {
-        dek.fillRange(0, dek.length, 0);
-      } catch (_) {}
+        final thumbFile = File(photo.thumbnailPath);
+        if (!await thumbFile.exists()) {
+          final regenerated = await _regenerateThumbnail(photo: photo, dek: dek);
+          _thumbnailMemoryCache[photo.id] = regenerated;
+          return regenerated;
+        }
+        final payload = await _readPayloadFile(photo.thumbnailPath);
+        final plain = await _cryptoService.decrypt(
+          payload,
+          dek,
+          aad: utf8.encode('${photo.id}:thumb:v${photo.encryptionVersion}'),
+        );
+        final bytes = Uint8List.fromList(plain);
+        _thumbnailMemoryCache[photo.id] = bytes;
+        return bytes;
+      } finally {
+        try {
+          dek.fillRange(0, dek.length, 0);
+        } catch (_) {}
+      }
+    } on VaultLockedException {
+      return null;
+    } catch (e) {
+      debugPrint('❌ Error loading thumbnail for ${photo.id}: $e');
+      return null;
     }
   }
 
   Future<Uint8List?> loadPhotoBytes(VaultPhoto photo) async {
-    final vmk = _vaultSession.requireVmk();
-    final wrappedDek = _parseWrappedDek(photo.wrappedDek);
-    final dek = await _cryptoService.unwrapKey(
-      wrappedDek,
-      vmk,
-      aad: utf8.encode('${photo.id}:dek:v${photo.encryptionVersion}'),
-    );
     try {
-      final payload = await _readPayloadFile(photo.encryptedFilePath);
-      final plain = await _cryptoService.decrypt(
-        payload,
-        dek,
-        aad: utf8.encode('${photo.id}:photo:v${photo.encryptionVersion}'),
+      final vmk = _vaultSession.requireVmk();
+      final wrappedDek = _parseWrappedDek(photo.wrappedDek);
+      final dek = await _cryptoService.unwrapKey(
+        wrappedDek,
+        vmk,
+        aad: utf8.encode('${photo.id}:dek:v${photo.encryptionVersion}'),
       );
-      return Uint8List.fromList(plain);
-    } finally {
       try {
-        dek.fillRange(0, dek.length, 0);
-      } catch (_) {}
+        final payload = await _readPayloadFile(photo.encryptedFilePath);
+        final plain = await _cryptoService.decrypt(
+          payload,
+          dek,
+          aad: utf8.encode('${photo.id}:photo:v${photo.encryptionVersion}'),
+        );
+        return Uint8List.fromList(plain);
+      } finally {
+        try {
+          dek.fillRange(0, dek.length, 0);
+        } catch (_) {}
+      }
+    } on VaultLockedException {
+      rethrow;
+    } catch (e) {
+      debugPrint('❌ Error loading photo bytes for ${photo.id}: $e');
+      rethrow;
     }
   }
 
@@ -220,42 +234,48 @@ class ImportManager extends ChangeNotifier {
     var page = 0;
     var removed = 0;
     while (true) {
-      final rows = await _photoRepository.listGalleryPage(
-        page: page,
-        pageSize: 500,
-      );
-      if (rows.isEmpty) break;
-      for (final photo in rows) {
-        final hasPhoto = await File(photo.encryptedFilePath).exists();
-        final hasThumb = await File(photo.thumbnailPath).exists();
-        if (!hasPhoto) {
-          await _photoRepository.deleteMetadataOnly(photo.id);
-          await _removeManifestEntry(photo.id);
-          _thumbnailMemoryCache.remove(photo.id);
-          _lastImportedPhotoId = null;
-          removed += 1;
-          _galleryEventRevision += 1;
-          notifyListeners();
-          continue;
-        }
-        if (!hasThumb) {
-          final vmk = _vaultSession.requireVmk();
-          final wrappedDek = _parseWrappedDek(photo.wrappedDek);
-          final dek = await _cryptoService.unwrapKey(
-            wrappedDek,
-            vmk,
-            aad: utf8.encode('${photo.id}:dek:v${photo.encryptionVersion}'),
-          );
-          try {
-            await _regenerateThumbnail(photo: photo, dek: dek);
-          } finally {
+      try {
+        final vmk = _vaultSession.requireVmk();
+        final rows = await _photoRepository.listGalleryPage(
+          page: page,
+          pageSize: 500,
+        );
+        if (rows.isEmpty) break;
+        for (final photo in rows) {
+          if (!_vaultSession.isUnlocked) break;
+          final hasPhoto = await File(photo.encryptedFilePath).exists();
+          final hasThumb = await File(photo.thumbnailPath).exists();
+          if (!hasPhoto) {
+            await _photoRepository.deleteMetadataOnly(photo.id);
+            await _removeManifestEntry(photo.id);
+            _thumbnailMemoryCache.remove(photo.id);
+            _lastImportedPhotoId = null;
+            removed += 1;
+            _galleryEventRevision += 1;
+            notifyListeners();
+            continue;
+          }
+          if (!hasThumb) {
+            final wrappedDek = _parseWrappedDek(photo.wrappedDek);
+            final dek = await _cryptoService.unwrapKey(
+              wrappedDek,
+              vmk,
+              aad: utf8.encode('${photo.id}:dek:v${photo.encryptionVersion}'),
+            );
             try {
-              dek.fillRange(0, dek.length, 0);
-            } catch (_) {}
+              await _regenerateThumbnail(photo: photo, dek: dek);
+            } finally {
+              try {
+                dek.fillRange(0, dek.length, 0);
+              } catch (_) {}
+            }
           }
         }
+        page += 1;
+      } on VaultLockedException {
+        debugPrint('⏳ Reconcile stopped: Vault locked.');
+        break;
       }
-      page += 1;
     }
     return removed;
   }
@@ -274,9 +294,11 @@ class ImportManager extends ChangeNotifier {
     notifyListeners();
 
     var completed = 0;
-    final vmk = _vaultSession.requireVmk();
     try {
       for (final file in files) {
+        // Each photo might take time, check session before each one
+        final vmk = _vaultSession.requireVmk();
+
         try {
           final prepared = await Isolate.run(
             () => _prepareImportFile(file.path),
@@ -392,6 +414,15 @@ class ImportManager extends ChangeNotifier {
         total: files.length,
         completed: files.length,
         status: ImportJobStatus.completed,
+      );
+      notifyListeners();
+    } on VaultLockedException {
+      _progress = ImportJobProgress(
+        jobId: jobId,
+        total: files.length,
+        completed: completed,
+        status: ImportJobStatus.failed,
+        errorMessage: 'Import failed: Vault locked.',
       );
       notifyListeners();
     } catch (_) {

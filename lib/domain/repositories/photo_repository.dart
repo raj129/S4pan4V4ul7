@@ -12,7 +12,10 @@ abstract class PhotoRepository {
   });
   Future<List<VaultPhoto>> listTrashPhotos();
   Future<void> movePhotoToTrash(String photoId, {required int expiresAtMs});
+  Future<void> movePhotosToTrash(List<String> photoIds, {required int expiresAtMs});
   Future<void> restoreFromTrash(String photoId);
+  Future<void> restorePhotosFromTrash(List<String> photoIds);
   Future<void> deleteMetadataOnly(String photoId);
   Future<void> permanentlyDelete(String photoId);
+  Future<void> permanentlyDeletePhotos(List<String> photoIds);
 }

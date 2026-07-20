@@ -1,5 +1,13 @@
 import 'package:flutter/foundation.dart';
 
+class VaultLockedException implements Exception {
+  final String message;
+  VaultLockedException([this.message = 'Vault session is locked.']);
+
+  @override
+  String toString() => 'VaultLockedException: $message';
+}
+
 class VaultSession extends ChangeNotifier {
   String? _vaultId;
   List<int>? _vmk;
@@ -10,7 +18,7 @@ class VaultSession extends ChangeNotifier {
   List<int> requireVmk() {
     final vmk = _vmk;
     if (_vaultId == null || vmk == null || vmk.isEmpty) {
-      throw StateError('Vault session is locked.');
+      throw VaultLockedException();
     }
     return List<int>.from(vmk);
   }

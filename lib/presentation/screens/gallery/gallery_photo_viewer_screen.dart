@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../application/services/import_manager.dart';
+import '../../../application/services/vault_session.dart';
 import '../../../domain/entities/vault_photo.dart';
 import '../../../domain/repositories/photo_repository.dart';
 
@@ -54,6 +55,13 @@ class _GalleryPhotoViewerScreenState extends State<GalleryPhotoViewerScreen> {
       setState(() {
         _photoBytes = bytes;
         _loading = false;
+        _error = null;
+      });
+    } on VaultLockedException {
+      if (!mounted) return;
+      setState(() {
+        _error = 'Vault session is locked. Please unlock to view.';
+        _loading = false;
       });
     } catch (e) {
       if (!mounted) return;
@@ -70,6 +78,27 @@ class _GalleryPhotoViewerScreenState extends State<GalleryPhotoViewerScreen> {
 
   @override
   Widget build(BuildContext context) {
+    if (_error != null && _error!.contains('locked')) {
+      return Scaffold(
+        appBar: AppBar(
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back),
+            onPressed: () => context.pop(),
+          ),
+        ),
+        body: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.lock_outline, size: 64, color: Colors.grey),
+              const SizedBox(height: 16),
+              Text(_error!),
+            ],
+          ),
+        ),
+      );
+    }
+
     return Scaffold(
       appBar: AppBar(
         leading: IconButton(

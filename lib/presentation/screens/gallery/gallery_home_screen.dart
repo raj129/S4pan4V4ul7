@@ -86,6 +86,8 @@ class _GalleryBody extends StatefulWidget {
 
 class _GalleryBodyState extends State<_GalleryBody> {
   List<VaultPhoto> _photos = const [];
+  final Set<String> _selectedIds = {};
+  bool _isSelectionMode = false;
   bool _loading = true;
   int _lastSeenGalleryRevision = 0;
 
@@ -142,6 +144,70 @@ class _GalleryBodyState extends State<_GalleryBody> {
       _photos = updated;
       _loading = false;
     });
+  }
+
+  void _toggleSelection(String photoId) {
+    setState(() {
+      if (_selectedIds.contains(photoId)) {
+        _selectedIds.remove(photoId);
+        if (_selectedIds.isEmpty) {
+          _isSelectionMode = false;
+        }
+      } else {
+        _selectedIds.add(photoId);
+        _isSelectionMode = true;
+      }
+    });
+  }
+
+  void _exitSelectionMode() {
+    setState(() {
+      _selectedIds.clear();
+      _isSelectionMode = false;
+    });
+  }
+
+  Future<void> _deleteSelected() async {
+    if (_selectedIds.isEmpty) return;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Delete ${_selectedIds.length} photos?'),
+        content: const Text('These photos will be moved to Secure Trash.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    final idsToDelete = _selectedIds.toList();
+    _exitSelectionMode();
+
+    final expiry = DateTime.now()
+        .add(const Duration(days: 30))
+        .millisecondsSinceEpoch;
+
+    await widget.photoRepository.movePhotosToTrash(
+      idsToDelete,
+      expiresAtMs: expiry,
+    );
+
+    widget.importManager.notifyGalleryChanged();
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('${idsToDelete.length} photos moved to Secure Trash')),
+    );
   }
 
   Future<void> _delete(VaultPhoto photo) async {
@@ -213,73 +279,116 @@ class _GalleryBodyState extends State<_GalleryBody> {
         ),
       );
     }
-    return Center(
-      child: Column(
-        children: [
-          if (widget.photoSyncEnabled)
-            const LinearProgressIndicator(minHeight: 2),
-          if (widget.photoSyncEnabled)
-            const Padding(
-              padding: EdgeInsets.only(bottom: 4),
-              child: Text('Sync is running in background'),
+    return Column(
+      children: [
+        if (_isSelectionMode)
+          AppBar(
+            backgroundColor: Theme.of(context).colorScheme.surfaceContainer,
+            title: Text('${_selectedIds.length} selected'),
+            leading: IconButton(
+              icon: const Icon(Icons.close),
+              onPressed: _exitSelectionMode,
             ),
-          Expanded(
-            child: GridView.builder(
-              padding: const EdgeInsets.all(8),
-              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: 3,
-                crossAxisSpacing: 8,
-                mainAxisSpacing: 8,
+            actions: [
+              IconButton(
+                icon: const Icon(Icons.delete_outline),
+                onPressed: _deleteSelected,
+                tooltip: 'Delete selected',
               ),
-              itemCount: _photos.length,
-              itemBuilder: (context, index) {
-                final photo = _photos[index];
-                return GestureDetector(
-                  onTap: () {
+            ],
+          ),
+        if (widget.photoSyncEnabled && !_isSelectionMode)
+          const LinearProgressIndicator(minHeight: 2),
+        if (widget.photoSyncEnabled && !_isSelectionMode)
+          const Padding(
+            padding: EdgeInsets.only(bottom: 4),
+            child: Text('Sync is running in background'),
+          ),
+        Expanded(
+          child: GridView.builder(
+            padding: const EdgeInsets.all(8),
+            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 3,
+              crossAxisSpacing: 8,
+              mainAxisSpacing: 8,
+            ),
+            itemCount: _photos.length,
+            itemBuilder: (context, index) {
+              final photo = _photos[index];
+              final isSelected = _selectedIds.contains(photo.id);
+              return GestureDetector(
+                onTap: () {
+                  if (_isSelectionMode) {
+                    _toggleSelection(photo.id);
+                  } else {
                     context.push('/gallery/photo', extra: photo);
-                  },
-                  child: Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(8),
-                        child: FutureBuilder(
-                          future: widget.importManager.loadThumbnailBytes(
-                            photo,
-                          ),
-                          builder: (context, snapshot) {
-                            final bytes = snapshot.data;
-                            if (snapshot.connectionState !=
-                                    ConnectionState.done ||
-                                bytes == null) {
-                              return Container(
-                                color: Theme.of(
-                                  context,
-                                ).colorScheme.surfaceContainerHighest,
-                                child: const Center(
-                                  child: SizedBox(
-                                    width: 20,
-                                    height: 20,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                    ),
+                  }
+                },
+                onLongPress: () {
+                  if (!_isSelectionMode) {
+                    _toggleSelection(photo.id);
+                  }
+                },
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(8),
+                      child: FutureBuilder(
+                        future: widget.importManager.loadThumbnailBytes(
+                          photo,
+                        ),
+                        builder: (context, snapshot) {
+                          final bytes = snapshot.data;
+                          if (snapshot.connectionState !=
+                                  ConnectionState.done ||
+                              bytes == null) {
+                            return Container(
+                              color: Theme.of(
+                                context,
+                              ).colorScheme.surfaceContainerHighest,
+                              child: const Center(
+                                child: SizedBox(
+                                  width: 20,
+                                  height: 20,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
                                   ),
                                 ),
-                              );
-                            }
-                            return Image.memory(
-                              bytes,
-                              fit: BoxFit.cover,
-                              errorBuilder: (_, _, _) => Container(
-                                color: Theme.of(
-                                  context,
-                                ).colorScheme.surfaceContainerHighest,
-                                child: const Icon(Icons.image_outlined),
                               ),
                             );
-                          },
+                          }
+                          return Image.memory(
+                            bytes,
+                            fit: BoxFit.cover,
+                            errorBuilder: (_, _, _) => Container(
+                              color: Theme.of(
+                                context,
+                              ).colorScheme.surfaceContainerHighest,
+                              child: const Icon(Icons.image_outlined),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                    if (isSelected)
+                      Container(
+                        decoration: BoxDecoration(
+                          color: Theme.of(context).colorScheme.primary.withOpacity(0.3),
+                          borderRadius: BorderRadius.circular(8),
                         ),
                       ),
+                    if (isSelected)
+                      const Positioned(
+                        top: 4,
+                        left: 4,
+                        child: Icon(
+                          Icons.check_circle,
+                          color: Colors.white,
+                          size: 20,
+                        ),
+                      ),
+                    if (!_isSelectionMode)
                       Positioned(
                         top: 4,
                         right: 4,
@@ -297,14 +406,13 @@ class _GalleryBodyState extends State<_GalleryBody> {
                           ),
                         ),
                       ),
-                    ],
-                  ),
-                );
-              },
-            ),
+                  ],
+                ),
+              );
+            },
           ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 }

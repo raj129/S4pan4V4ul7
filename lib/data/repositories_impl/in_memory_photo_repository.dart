@@ -73,6 +73,16 @@ class InMemoryPhotoRepository implements PhotoRepository {
   }
 
   @override
+  Future<void> movePhotosToTrash(
+    List<String> photoIds, {
+    required int expiresAtMs,
+  }) async {
+    for (final id in photoIds) {
+      await movePhotoToTrash(id, expiresAtMs: expiresAtMs);
+    }
+  }
+
+  @override
   Future<void> deleteMetadataOnly(String photoId) async {
     _photos.remove(photoId);
   }
@@ -83,6 +93,13 @@ class InMemoryPhotoRepository implements PhotoRepository {
     if (photo == null) return;
     await _deleteIfExists(photo.encryptedFilePath);
     await _deleteIfExists(photo.thumbnailPath);
+  }
+
+  @override
+  Future<void> permanentlyDeletePhotos(List<String> photoIds) async {
+    for (final id in photoIds) {
+      await permanentlyDelete(id);
+    }
   }
 
   @override
@@ -109,6 +126,13 @@ class InMemoryPhotoRepository implements PhotoRepository {
       albumId: photo.albumId,
       trashExpiresAtMs: null,
     );
+  }
+
+  @override
+  Future<void> restorePhotosFromTrash(List<String> photoIds) async {
+    for (final id in photoIds) {
+      await restoreFromTrash(id);
+    }
   }
 
   @override
