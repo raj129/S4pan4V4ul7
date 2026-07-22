@@ -31,45 +31,45 @@ dependencies:
   flutter:
     sdk: flutter
 
-  cupertino_icons: ^1.0.8
+  cupertino_icons: ^1.0.9
 
   # Cryptography primitives — AES-256-GCM, PBKDF2, HKDF
-  cryptography: ^2.7.0
+  cryptography: ^2.9.0
 
   # State management (OnboardingCubit + future cubits)
   flutter_bloc: ^9.1.1
-  equatable: ^2.0.7
+  equatable: ^2.1.0
 
   # Declarative routing with redirect guards (vault-status check)
-  go_router: ^15.1.2
+  go_router: ^17.3.0
 
   # Android Keystore-backed encrypted key/value store
-  flutter_secure_storage: ^9.2.4
+  flutter_secure_storage: ^10.3.1
 
   # SQLite ORM with typed migrations
-  drift: ^2.25.0
-  drift_flutter: ^0.2.4
+  drift: ^2.34.2
+  drift_flutter: ^0.3.1
 
   # Unique IDs for vault, photo, album records
-  uuid: ^4.5.1
+  uuid: ^4.6.0
 
   # App storage paths (app-private data directory)
-  path_provider: ^2.1.5
+  path_provider: ^2.1.6
   path: ^1.9.1
-  crypto: ^3.0.6
-  image: ^4.5.4
-  image_picker: ^1.1.2
-  receive_sharing_intent: ^1.8.1
-  firebase_core: ^4.11.0
-  firebase_auth: ^6.5.4
-  firebase_crashlytics: ^5.2.4
+  crypto: ^3.0.7
+  image: ^4.9.1
+  image_picker: ^1.2.3
+  receive_sharing_intent: ^1.9.0
+  firebase_core: ^4.12.1
+  firebase_auth: ^6.5.6
+  firebase_crashlytics: ^5.2.6
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^6.0.0
-  drift_dev: ^2.25.0
-  build_runner: ^2.4.14
+  drift_dev: ^2.34.0
+  build_runner: ^2.15.1
   bloc_test: ^10.0.0
 
 # For information on the generic Dart part of this file, see the
