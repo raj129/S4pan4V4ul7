@@ -1,11 +1,7 @@
-# Task: Google Sign-In, Recovery, and Photo Export
+# Task: Fix Google Sign-In 7.2.0 API
 
-- [x] Setup Dependencies
-- [x] Implement `FirebaseAuthRepository`
-- [x] Implement `VmkBackupRepository` Interfaces
-- [x] Implement `LocalVmkBackupRepository` (Documents/PhotoVault_Recovery/)
-- [x] Implement `GoogleDriveVmkRepository`
-- [x] Implement `ExportPhotoUseCase` (Downloads/)
-- [x] Integrate Backup into `CreateVaultUseCase`
-- [x] Integrate Restore into `RestoreFlowService`
-- [x] UI: Update `GoogleSignInScreen` & add Export button
+- [x] Migrate `google_sign_in` to 7.2.0 API
+    - [x] Initialize `GoogleSignIn.instance` in `main.dart` with `serverClientId`
+    - [x] Refactor `FirebaseAuthRepository` to use singleton and new methods
+    - [x] Update `idToken` and `accessToken` retrieval logic via `authorizationClient`
+- [x] Verify build and sign-in flow

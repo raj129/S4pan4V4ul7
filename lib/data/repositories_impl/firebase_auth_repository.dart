@@ -6,17 +6,15 @@ import '../../domain/repositories/auth_repository.dart';
 class FirebaseAuthRepository implements AuthRepository {
   FirebaseAuthRepository({
     FirebaseAuth? firebaseAuth,
-    GoogleSignIn? googleSignIn,
-  })  : _firebaseAuth = firebaseAuth ?? FirebaseAuth.instance,
-        _googleSignIn = googleSignIn ?? GoogleSignIn(
-          scopes: [
-            'email',
-            'https://www.googleapis.com/auth/drive.appdata',
-          ],
-        );
+  }) : _firebaseAuth = firebaseAuth ?? FirebaseAuth.instance;
 
   final FirebaseAuth _firebaseAuth;
-  final GoogleSignIn _googleSignIn;
+  final GoogleSignIn _googleSignIn = GoogleSignIn.instance;
+
+  static const List<String> _scopes = [
+    'email',
+    'https://www.googleapis.com/auth/drive.appdata',
+  ];
 
   @override
   Future<bool> isSignedIn() async {
@@ -26,15 +24,15 @@ class FirebaseAuthRepository implements AuthRepository {
   @override
   Future<AuthResult> signInWithGoogle() async {
     try {
-      final GoogleSignInAccount? googleUser = await _googleSignIn.signIn();
-      if (googleUser == null) {
-        throw const AuthException('Sign-in cancelled by user.');
-      }
+      final GoogleSignInAccount googleUser = await _googleSignIn.authenticate(
+        scopeHint: _scopes,
+      );
 
-      final GoogleSignInAuthentication googleAuth = await googleUser.authentication;
+      final GoogleSignInAuthentication googleAuth = googleUser.authentication;
+      final authorization = await googleUser.authorizationClient.authorizeScopes(_scopes);
 
       final AuthCredential credential = GoogleAuthProvider.credential(
-        accessToken: googleAuth.accessToken ?? '',
+        accessToken: authorization.accessToken,
         idToken: googleAuth.idToken,
       );
 
@@ -63,10 +61,12 @@ class FirebaseAuthRepository implements AuthRepository {
 
   @override
   Future<http.Client?> getAuthenticatedClient() async {
-    final account = await _googleSignIn.signInSilently();
+    final account = await _googleSignIn.attemptLightweightAuthentication();
     if (account == null) return null;
 
-    final authHeaders = await account.authHeaders;
+    final authHeaders = await account.authorizationClient.authorizationHeaders(_scopes);
+    if (authHeaders == null) return null;
+    
     return _AuthenticatedClient(authHeaders);
   }
 }
