@@ -59,7 +59,6 @@ class CreateVaultUseCase {
   Future<String> execute({
     required String pin,
     required UserMode mode,
-    required bool biometricEnabled,
   }) async {
     final vaultId = _uuid.v4();
     List<int>? vmkBytes;
@@ -98,7 +97,7 @@ class CreateVaultUseCase {
       // Step 6: write vault settings to local DB.
       final settings = VaultSettings.defaults(
         mode: mode,
-      ).copyWith(biometricEnabled: biometricEnabled);
+      );
       await _vaultRepository.initializeVault(
         vaultId: vaultId,
         settings: settings,
@@ -134,13 +133,12 @@ class CreateVaultUseCase {
 }
 
 extension _VaultSettingsCopyWith on VaultSettings {
-  VaultSettings copyWith({bool? biometricEnabled}) {
+  VaultSettings copyWith({bool? photoSyncEnabled}) {
     return VaultSettings(
       mode: mode,
-      biometricEnabled: biometricEnabled ?? this.biometricEnabled,
       appLockOnOpen: appLockOnOpen,
       autoLockOnBackground: autoLockOnBackground,
-      photoSyncEnabled: photoSyncEnabled,
+      photoSyncEnabled: photoSyncEnabled ?? this.photoSyncEnabled,
       vmkBackupEnabled: vmkBackupEnabled,
     );
   }

@@ -1,157 +1,172 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../../application/services/pin_validator.dart';
-import '../../../application/usecases/unlock_vault_usecase.dart';
+import '../../../application/usecases/change_pin_usecase.dart';
 
-class LockScreen extends StatefulWidget {
-  const LockScreen({
-    required this.unlockVaultUseCase,
+enum ChangePinStep { verifyOld, enterNew, confirmNew }
+
+class ChangePinScreen extends StatefulWidget {
+  const ChangePinScreen({
+    required this.changePinUseCase,
     required this.pinValidator,
-    required this.onUnlocked,
     super.key,
   });
 
-  final UnlockVaultUseCase unlockVaultUseCase;
+  final ChangePinUseCase changePinUseCase;
   final PinValidator pinValidator;
-  final VoidCallback onUnlocked;
+
   @override
-  State<LockScreen> createState() => _LockScreenState();
+  State<ChangePinScreen> createState() => _ChangePinScreenState();
 }
 
-class _LockScreenState extends State<LockScreen> {
+class _ChangePinScreenState extends State<ChangePinScreen> {
   static const int _pinLength = PinValidator.requiredLength;
-  static const List<int> _lockoutScheduleSeconds = <int>[0, 0, 0, 10, 30, 60];
   final _digits = <int>[];
-  bool _unlocking = false;
+  ChangePinStep _step = ChangePinStep.verifyOld;
+  String _oldPin = '';
+  String _newPin = '';
   String? _error;
-  int _failedAttempts = 0;
-  DateTime? _lockedUntil;
-
-  @override
-  void initState() {
-    super.initState();
-  }
+  bool _busy = false;
 
   void _onDigitTap(int digit) {
-    if (_isTemporarilyLocked) return;
-    if (_unlocking || _digits.length >= _pinLength) return;
-    setState(() => _digits.add(digit));
+    if (_busy || _digits.length >= _pinLength) return;
+    setState(() {
+      _digits.add(digit);
+      _error = null;
+    });
     if (_digits.length == _pinLength) {
-      _submit();
+      _nextStep();
     }
   }
 
   void _onDelete() {
-    if (_unlocking || _digits.isEmpty) return;
+    if (_busy || _digits.isEmpty) return;
     setState(() => _digits.removeLast());
   }
 
-  Future<void> _submit() async {
-    if (_isTemporarilyLocked) {
-      setState(() {
-        _error = _lockoutMessage;
-      });
-      return;
-    }
+  Future<void> _nextStep() async {
     final pin = _digits.join();
+    setState(() => _digits.clear());
+
+    switch (_step) {
+      case ChangePinStep.verifyOld:
+        setState(() {
+          _oldPin = pin;
+          _step = ChangePinStep.enterNew;
+        });
+        break;
+      case ChangePinStep.enterNew:
+        final pinError = widget.pinValidator.validate(pin);
+        if (pinError != null) {
+          setState(() {
+            _error = pinError;
+          });
+          return;
+        }
+        setState(() {
+          _newPin = pin;
+          _step = ChangePinStep.confirmNew;
+        });
+        break;
+      case ChangePinStep.confirmNew:
+        if (pin != _newPin) {
+          setState(() {
+            _error = 'PINs do not match. Try again.';
+            _step = ChangePinStep.enterNew;
+            _newPin = '';
+          });
+          return;
+        }
+        _submit();
+        break;
+    }
+  }
+
+  Future<void> _submit() async {
     setState(() {
-      _unlocking = true;
+      _busy = true;
       _error = null;
-      _digits.clear();
     });
 
-    final pinError = widget.pinValidator.validate(pin);
-    if (pinError != null) {
+    try {
+      await widget.changePinUseCase.execute(
+        oldPin: _oldPin,
+        newPin: _newPin,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('PIN changed successfully.')),
+      );
+      context.pop();
+    } catch (e) {
       setState(() {
-        _unlocking = false;
-        _error = pinError;
+        _busy = false;
+        _error = e.toString();
+        // Reset to first step if old PIN was wrong
+        if (e.toString().contains('Incorrect old PIN')) {
+          _step = ChangePinStep.verifyOld;
+          _oldPin = '';
+        } else {
+          _step = ChangePinStep.enterNew;
+          _newPin = '';
+        }
       });
-      return;
     }
-
-    final ok = await widget.unlockVaultUseCase.execute(pin);
-    if (!mounted) return;
-    if (ok) {
-      _failedAttempts = 0;
-      _lockedUntil = null;
-      widget.onUnlocked();
-      return;
-    }
-    _failedAttempts += 1;
-    final lockSeconds = _lockoutScheduleSeconds[_failedAttempts.clamp(
-      0,
-      _lockoutScheduleSeconds.length - 1,
-    )];
-    if (lockSeconds > 0) {
-      _lockedUntil = DateTime.now().add(Duration(seconds: lockSeconds));
-    }
-    setState(() {
-      _unlocking = false;
-      _error = _isTemporarilyLocked ? _lockoutMessage : 'Incorrect PIN. Try again.';
-    });
-  }
-
-  bool get _isTemporarilyLocked {
-    final until = _lockedUntil;
-    return until != null && DateTime.now().isBefore(until);
-  }
-
-  String get _lockoutMessage {
-    final until = _lockedUntil;
-    if (until == null) {
-      return 'Too many failed attempts. Try again later.';
-    }
-    final seconds = until.difference(DateTime.now()).inSeconds;
-    return 'Too many failed attempts. Try again in ${seconds > 0 ? seconds : 1}s.';
-  }
-
-  @override
-  void dispose() {
-    _digits.clear();
-    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
+    String title = '';
+    String subtitle = '';
+
+    switch (_step) {
+      case ChangePinStep.verifyOld:
+        title = 'Confirm Old PIN';
+        subtitle = 'Enter your current app PIN to continue.';
+        break;
+      case ChangePinStep.enterNew:
+        title = 'Enter New PIN';
+        subtitle = 'Choose a new 6-digit PIN.';
+        break;
+      case ChangePinStep.confirmNew:
+        title = 'Confirm New PIN';
+        subtitle = 'Re-enter your new PIN.';
+        break;
+    }
+
     return Scaffold(
-      appBar: AppBar(title: const Text('Unlock Vault')),
+      appBar: AppBar(title: const Text('Change PIN')),
       body: Padding(
         padding: const EdgeInsets.all(20),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            const SizedBox(height: 20),
             Text(
-              'Enter your app PIN',
-              style: Theme.of(context).textTheme.titleLarge,
+              title,
+              style: Theme.of(context).textTheme.headlineSmall,
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 8),
             Text(
-              'This PIN is separate from your device PIN.',
+              subtitle,
               style: Theme.of(context).textTheme.bodyMedium,
               textAlign: TextAlign.center,
             ),
-            const SizedBox(height: 24),
+            const SizedBox(height: 32),
             _PinDotRow(filledCount: _digits.length, total: _pinLength),
             if (_error != null) ...[
-              const SizedBox(height: 12),
+              const SizedBox(height: 24),
               Text(
                 _error!,
                 textAlign: TextAlign.center,
                 style: TextStyle(color: Theme.of(context).colorScheme.error),
               ),
             ],
-            if (_isTemporarilyLocked) ...[
-              const SizedBox(height: 8),
-              Text(
-                _lockoutMessage,
-                textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
-            ],
-            if (_unlocking) ...[
-              const SizedBox(height: 12),
+            if (_busy) ...[
+              const SizedBox(height: 24),
               const Center(child: CircularProgressIndicator()),
             ],
             const Spacer(),
@@ -182,7 +197,7 @@ class _PinDotRow extends StatelessWidget {
             shape: BoxShape.circle,
             color: filled
                 ? Theme.of(context).colorScheme.primary
-                : Theme.of(context).colorScheme.outline,
+                : Theme.of(context).colorScheme.outlineVariant,
           ),
         );
       }),

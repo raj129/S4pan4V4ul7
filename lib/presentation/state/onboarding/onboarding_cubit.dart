@@ -1,6 +1,5 @@
 import 'package:flutter_bloc/flutter_bloc.dart';
 
-import '../../../application/services/biometric_service.dart';
 import '../../../application/services/pin_validator.dart';
 import '../../../application/usecases/create_vault_usecase.dart';
 import '../../../domain/entities/user_mode.dart';
@@ -16,17 +15,14 @@ import 'onboarding_state.dart';
 class OnboardingCubit extends Cubit<OnboardingState> {
   OnboardingCubit({
     required AuthRepository authRepository,
-    required BiometricService biometricService,
     required CreateVaultUseCase createVaultUseCase,
     required PinValidator pinValidator,
   }) : _authRepository = authRepository,
-       _biometricService = biometricService,
        _createVaultUseCase = createVaultUseCase,
        _pinValidator = pinValidator,
        super(const OnboardingInitial());
 
   final AuthRepository _authRepository;
-  final BiometricService _biometricService;
   final CreateVaultUseCase _createVaultUseCase;
   final PinValidator _pinValidator;
 
@@ -122,35 +118,7 @@ class OnboardingCubit extends Cubit<OnboardingState> {
       );
       return;
     }
-    await _checkBiometric(mode);
-  }
-
-  // ─────────────────────────────────────────────────
-  // Step 3: Biometric setup
-  // ─────────────────────────────────────────────────
-
-  Future<void> _checkBiometric(UserMode mode) async {
-    emit(OnboardingBiometricCheck(mode: mode));
-    final availability = await _biometricService.checkAvailability();
-    if (availability == BiometricAvailability.available) {
-      emit(
-        OnboardingBiometricAvailable(mode: mode, availability: availability),
-      );
-    } else {
-      // Skip biometric — unavailable or not enrolled.
-      emit(OnboardingBiometricSkipped(mode: mode));
-      await _createVault(mode: mode, biometricEnabled: false);
-    }
-  }
-
-  Future<void> enableBiometric(UserMode mode) async {
-    emit(OnboardingBiometricEnabled(mode: mode));
-    await _createVault(mode: mode, biometricEnabled: true);
-  }
-
-  Future<void> skipBiometric(UserMode mode) async {
-    emit(OnboardingBiometricSkipped(mode: mode));
-    await _createVault(mode: mode, biometricEnabled: false);
+    await _createVault(mode: mode);
   }
 
   // ─────────────────────────────────────────────────
@@ -159,7 +127,6 @@ class OnboardingCubit extends Cubit<OnboardingState> {
 
   Future<void> _createVault({
     required UserMode mode,
-    required bool biometricEnabled,
   }) async {
     final pin = _firstPin;
     if (pin == null) {
@@ -175,7 +142,6 @@ class OnboardingCubit extends Cubit<OnboardingState> {
     emit(
       OnboardingCreatingVault(
         mode: mode,
-        biometricEnabled: biometricEnabled,
         step: VaultCreationStep.generatingKeys,
       ),
     );
@@ -184,7 +150,6 @@ class OnboardingCubit extends Cubit<OnboardingState> {
       emit(
         OnboardingCreatingVault(
           mode: mode,
-          biometricEnabled: biometricEnabled,
           step: VaultCreationStep.wrappingVmk,
         ),
       );
@@ -192,7 +157,6 @@ class OnboardingCubit extends Cubit<OnboardingState> {
       final vaultId = await _createVaultUseCase.execute(
         pin: pin,
         mode: mode,
-        biometricEnabled: biometricEnabled,
       );
 
       // Clear PIN from memory immediately after use.
@@ -201,7 +165,6 @@ class OnboardingCubit extends Cubit<OnboardingState> {
       emit(
         OnboardingCreatingVault(
           mode: mode,
-          biometricEnabled: biometricEnabled,
           step: VaultCreationStep.done,
         ),
       );

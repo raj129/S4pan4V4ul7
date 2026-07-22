@@ -9,7 +9,6 @@ import 'package:photo_vault/data/repositories_impl/in_memory_secure_storage_repo
 import 'package:photo_vault/data/repositories_impl/in_memory_vault_repository.dart';
 import 'package:photo_vault/data/repositories_impl/stub_auth_repository.dart';
 import 'package:photo_vault/data/services/pbkdf2_kdf_service.dart';
-import 'package:photo_vault/data/services/stub_biometric_service.dart';
 import 'package:photo_vault/domain/entities/user_mode.dart';
 import 'package:photo_vault/presentation/state/onboarding/onboarding_cubit.dart';
 import 'package:photo_vault/presentation/state/onboarding/onboarding_state.dart';
@@ -19,7 +18,6 @@ OnboardingCubit _makeCubit() {
   final secureRepo = InMemorySecureStorageRepository();
   return OnboardingCubit(
     authRepository: const StubAuthRepository(),
-    biometricService: const StubBiometricService(),
     createVaultUseCase: CreateVaultUseCase(
       cryptoService: AesGcmCryptoService(),
       kdfService: Pbkdf2KdfService(iterations: 1000),
@@ -103,8 +101,6 @@ void main() {
         const OnboardingModeSelectedLocal(),
         const OnboardingPinEntry(mode: UserMode.localOnly),
         const OnboardingPinConfirm(mode: UserMode.localOnly),
-        isA<OnboardingBiometricCheck>(),
-        isA<OnboardingBiometricSkipped>(),
         isA<OnboardingCreatingVault>().having(
           (s) => s.step,
           'step',

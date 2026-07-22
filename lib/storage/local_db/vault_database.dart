@@ -202,7 +202,7 @@ class TrashItems extends Table {
   Set<Column> get primaryKey => {photoId};
 }
 
-/// App settings: user preferences (biometric enabled, backup policy, etc.).
+/// App settings: user preferences (backup policy, etc.).
 @DataClassName('AppSettingEntry')
 class AppSettings extends Table {
   TextColumn get key => text()();
@@ -260,30 +260,36 @@ class VaultDatabase extends _$VaultDatabase {
   // PHOTO QUERIES
   // =========================================================================
 
-  /// Get all non-trashed photos, ordered by most recent imported first.
-  Future<List<VaultPhoto>> getGalleryPhotos() async {
-    return (select(photos)
-          ..where((p) => p.isTrashed.equals(0))
-          ..orderBy([
-            (p) => OrderingTerm(
-              expression: p.importedTimeMs,
-              mode: OrderingMode.desc,
-            ),
-          ]))
-        .get();
+  /// Get non-trashed photos with pagination, ordered by most recent imported first.
+  Future<List<VaultPhoto>> getGalleryPhotos({int? limit, int? offset}) async {
+    final query = select(photos)
+      ..where((p) => p.isTrashed.equals(0))
+      ..orderBy([
+        (p) => OrderingTerm(
+          expression: p.importedTimeMs,
+          mode: OrderingMode.desc,
+        ),
+      ]);
+    if (limit != null) {
+      query.limit(limit, offset: offset);
+    }
+    return query.get();
   }
 
-  /// Get all trashed photos.
-  Future<List<VaultPhoto>> getTrashedPhotos() async {
-    return (select(photos)
-          ..where((p) => p.isTrashed.equals(1))
-          ..orderBy([
-            (p) => OrderingTerm(
-              expression: p.trashExpiresAtMs,
-              mode: OrderingMode.desc,
-            ),
-          ]))
-        .get();
+  /// Get trashed photos with pagination.
+  Future<List<VaultPhoto>> getTrashedPhotos({int? limit, int? offset}) async {
+    final query = select(photos)
+      ..where((p) => p.isTrashed.equals(1))
+      ..orderBy([
+        (p) => OrderingTerm(
+          expression: p.trashExpiresAtMs,
+          mode: OrderingMode.desc,
+        ),
+      ]);
+    if (limit != null) {
+      query.limit(limit, offset: offset);
+    }
+    return query.get();
   }
 
   /// Get all photos (including trashed) by album.

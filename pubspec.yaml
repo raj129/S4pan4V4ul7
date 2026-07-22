@@ -46,9 +46,6 @@ dependencies:
   # Android Keystore-backed encrypted key/value store
   flutter_secure_storage: ^9.2.4
 
-  # Biometric / device-credential unlock prompt
-  local_auth: ^2.3.0
-
   # SQLite ORM with typed migrations
   drift: ^2.25.0
   drift_flutter: ^0.2.4

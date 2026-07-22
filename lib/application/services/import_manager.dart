@@ -185,6 +185,11 @@ class ImportManager extends ChangeNotifier {
           aad: utf8.encode('${photo.id}:thumb:v${photo.encryptionVersion}'),
         );
         final bytes = Uint8List.fromList(plain);
+        
+        // LRU-ish cache limit: if cache too big, clear it to prevent OOM
+        if (_thumbnailMemoryCache.length > 200) {
+          _thumbnailMemoryCache.clear();
+        }
         _thumbnailMemoryCache[photo.id] = bytes;
         return bytes;
       } finally {

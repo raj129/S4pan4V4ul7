@@ -36,8 +36,7 @@ class ModeInfoSheet extends StatelessWidget {
             description:
                 'Photos stay encrypted on this device only. '
                 'No cloud backup. No account required. '
-                'If you lose this device without biometric recovery, '
-                'the vault cannot be restored.',
+                'If you lose this device, the vault cannot be restored.',
           ),
           const SizedBox(height: 16),
           const _ModeRow(

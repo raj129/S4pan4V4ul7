@@ -40,7 +40,6 @@ class PersistentVaultRepository implements VaultRepository {
     await _kv.write(StorageKeys.vaultStatus, 'ready');
     await _kv.delete(StorageKeys.vaultCreatingId);
     await _kv.write(StorageKeys.userMode, StorageModeCodec.serialize(settings.mode));
-    await _kv.write(StorageKeys.biometricEnabled, settings.biometricEnabled.toString());
     await _kv.write(StorageKeys.appLockOnOpen, settings.appLockOnOpen.toString());
     await _kv.write(
       StorageKeys.autoLockOnBackground,

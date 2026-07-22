@@ -21,17 +21,6 @@ class PersistentSettingsRepository implements SettingsRepository {
   }
 
   @override
-  Future<bool> isBiometricUnlockEnabled() async {
-    final raw = await _kv.read(StorageKeys.biometricEnabled);
-    return raw == 'true';
-  }
-
-  @override
-  Future<void> setBiometricUnlockEnabled(bool enabled) {
-    return _kv.write(StorageKeys.biometricEnabled, enabled.toString());
-  }
-
-  @override
   Future<bool> isPhotoSyncEnabled() async {
     final raw = await _kv.read(StorageKeys.photoSyncEnabled);
     return raw == 'true';

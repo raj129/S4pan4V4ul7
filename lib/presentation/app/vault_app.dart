@@ -13,6 +13,7 @@ import '../../application/services/pin_validator.dart';
 import '../../application/services/vault_session.dart';
 import '../../application/usecases/create_vault_usecase.dart';
 import '../../application/usecases/unlock_vault_usecase.dart';
+import '../../application/usecases/change_pin_usecase.dart';
 import '../../crypto/services/aes_gcm_crypto_service.dart';
 import '../../data/repositories_impl/in_memory_auth_repository.dart';
 import '../../data/repositories_impl/flutter_secure_string_kv.dart';
@@ -25,7 +26,6 @@ import '../../data/repositories_impl/persistent_settings_repository.dart';
 import '../../data/repositories_impl/persistent_vault_repository.dart';
 import '../../data/repositories_impl/secure_storage_flutter_repository.dart';
 import '../../data/services/pbkdf2_kdf_service.dart';
-import '../../data/services/local_auth_biometric_service.dart';
 import '../../data/services/stub_restore_flow_service.dart';
 import '../../domain/entities/user_mode.dart';
 import '../../domain/entities/vault_photo.dart';
@@ -37,13 +37,13 @@ import '../screens/trash/trash_screen.dart';
 import '../screens/files/files_screen.dart';
 import '../screens/import/import_screen.dart';
 import '../screens/lock/lock_screen.dart';
-import '../screens/onboarding/biometric_setup_screen.dart';
 import '../screens/onboarding/google_signin_screen.dart';
 import '../screens/onboarding/pin_screens.dart';
 import '../screens/onboarding/vault_creation_screen.dart';
 import '../screens/onboarding/welcome_screen.dart';
 import '../screens/restore/restore_flow_screen.dart';
 import '../screens/settings/settings_screen.dart';
+import '../screens/settings/change_pin_screen.dart';
 import '../state/onboarding/onboarding_cubit.dart';
 import '../state/onboarding/onboarding_state.dart';
 import 'main_scaffold.dart';
@@ -52,7 +52,7 @@ import 'main_scaffold.dart';
 ///
 /// Production: replace in-memory/stub implementations with real
 /// Drift DB, FlutterSecureStorage, FirebaseAuthRepository, and
-/// LocalAuthBiometricService once available.
+/// StubRestoreFlowService once available.
 class VaultApp extends StatefulWidget {
   const VaultApp({super.key, this.persistentState = true});
 
@@ -84,18 +84,17 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
   final _cryptoService = AesGcmCryptoService();
   final _kdfService = Pbkdf2KdfService();
   final _vaultSession = VaultSession();
-  final _biometricService = LocalAuthBiometricService();
   final RestoreFlowService _restoreFlowService = const StubRestoreFlowService();
   final _pinValidator = PinValidator();
   late final ImportManager _importManager;
 
   late final CreateVaultUseCase _createVaultUseCase;
   late final UnlockVaultUseCase _unlockVaultUseCase;
+  late final ChangePinUseCase _changePinUseCase;
   late final OnboardingCubit _onboardingCubit;
   late final GoRouter _router;
   StreamSubscription<List<SharedMediaFile>>? _shareStreamSub;
   UserMode _lastKnownMode = UserMode.localOnly;
-  bool _biometricUnlockEnabled = false;
   bool _photoSyncEnabled = false;
   final ValueNotifier<bool> _sessionUnlocked = ValueNotifier<bool>(false);
   Timer? _backgroundLockTimer;
@@ -118,6 +117,13 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
       cryptoService: _cryptoService,
       vaultSession: _vaultSession,
     );
+    _changePinUseCase = ChangePinUseCase(
+      vaultRepository: _vaultRepository,
+      secureStorageRepository: _secureStorageRepository,
+      kdfService: _kdfService,
+      cryptoService: _cryptoService,
+      vaultSession: _vaultSession,
+    );
     _importManager = ImportManager(
       photoRepository: _photoRepository,
       cryptoService: _cryptoService,
@@ -125,7 +131,6 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
     );
     _onboardingCubit = OnboardingCubit(
       authRepository: _authRepository,
-      biometricService: _biometricService,
       createVaultUseCase: _createVaultUseCase,
       pinValidator: _pinValidator,
     );
@@ -148,8 +153,6 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
 
   Future<void> _hydrateSessionSettings() async {
     final mode = await _settingsRepository.getUserMode();
-    final biometricEnabled = await _settingsRepository
-        .isBiometricUnlockEnabled();
     final photoSyncEnabled = await _settingsRepository.isPhotoSyncEnabled();
     final externalMirrorEnabled = await _settingsRepository
         .isExternalStorageMirrorEnabled();
@@ -160,7 +163,6 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
       if (mode != null) {
         _lastKnownMode = mode;
       }
-      _biometricUnlockEnabled = biometricEnabled;
       _photoSyncEnabled = photoSyncEnabled;
     });
     _importManager.configureStorage(
@@ -322,6 +324,15 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
             settingsRepository: _settingsRepository,
             onSettingsChanged: _hydrateSessionSettings,
           ),
+          routes: [
+            GoRoute(
+              path: 'change-pin',
+              builder: (context, state) => ChangePinScreen(
+                changePinUseCase: _changePinUseCase,
+                pinValidator: _pinValidator,
+              ),
+            ),
+          ],
         ),
         GoRoute(
           path: '/lock',
@@ -333,8 +344,6 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
             return LockScreen(
               unlockVaultUseCase: _unlockVaultUseCase,
               pinValidator: _pinValidator,
-              biometricService: _biometricService,
-              biometricEnabled: _biometricUnlockEnabled,
               onUnlocked: () {
                 _sessionUnlocked.value = true;
                 unawaited(_importManager.reconcileVaultFiles());
@@ -355,7 +364,6 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
               await _createVaultUseCase.execute(
                 pin: pin,
                 mode: UserMode.googleEnabled,
-                biometricEnabled: false,
               );
               _lastKnownMode = UserMode.googleEnabled;
               await _settingsRepository.saveUserMode(UserMode.googleEnabled);
@@ -406,11 +414,6 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
       OnboardingPinEntry(mode: final m) => CreatePinScreen(mode: m),
       OnboardingPinConfirm(mode: final m) => ConfirmPinScreen(mode: m),
       OnboardingPinInvalid(mode: final m) => CreatePinScreen(mode: m),
-      OnboardingBiometricCheck() => const WelcomeScreen(),
-      OnboardingBiometricAvailable(mode: final m, availability: final a) =>
-        BiometricSetupScreen(mode: m, availability: a),
-      OnboardingBiometricEnabled(mode: final m) => VaultCreationScreen(mode: m),
-      OnboardingBiometricSkipped(mode: final m) => VaultCreationScreen(mode: m),
       OnboardingCreatingVault(mode: final m) => VaultCreationScreen(mode: m),
       OnboardingVaultCreated() => const SizedBox.shrink(),
       OnboardingError() => const WelcomeScreen(),

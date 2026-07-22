@@ -100,17 +100,16 @@ class _GalleryPhotoViewerScreenState extends State<GalleryPhotoViewerScreen> {
     }
 
     return Scaffold(
+      backgroundColor: Colors.black,
       appBar: AppBar(
+        backgroundColor: Colors.black.withOpacity(0.5),
+        foregroundColor: Colors.white,
+        elevation: 0,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
           onPressed: () => context.pop(),
         ),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.zoom_out_outlined),
-            onPressed: _resetZoom,
-            tooltip: 'Reset zoom',
-          ),
           IconButton(
             icon: const Icon(Icons.info_outlined),
             onPressed: () => _showPhotoInfo(context),
@@ -123,6 +122,7 @@ class _GalleryPhotoViewerScreenState extends State<GalleryPhotoViewerScreen> {
           ),
         ],
       ),
+      extendBodyBehindAppBar: true,
       body: _buildBody(),
     );
   }
@@ -146,7 +146,7 @@ class _GalleryPhotoViewerScreenState extends State<GalleryPhotoViewerScreen> {
             Text(
               _error ?? 'Failed to load photo',
               textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.bodyMedium,
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: Colors.white),
             ),
           ],
         ),
@@ -154,55 +154,69 @@ class _GalleryPhotoViewerScreenState extends State<GalleryPhotoViewerScreen> {
     }
 
     if (_photoBytes == null) {
-      return const Center(child: Text('No photo data'));
+      return const Center(child: Text('No photo data', style: TextStyle(color: Colors.white)));
     }
 
-    return Center(
-      child: GestureDetector(
-        onDoubleTap: () {
-          if (_transformationController.value != Matrix4.identity()) {
-            _resetZoom();
-          } else {
-            _transformationController.value = Matrix4.diagonal3Values(
-              2.0,
-              2.0,
-              1.0,
-            );
-          }
-        },
-        child: InteractiveViewer(
-          transformationController: _transformationController,
-          minScale: 1,
-          maxScale: 4,
-          child: Container(
-            color: Colors.black,
-            child: Image.memory(
-              _photoBytes!,
-              fit: BoxFit.contain,
-              errorBuilder: (context, error, stackTrace) => Center(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Icon(
-                      Icons.image_not_supported_outlined,
-                      size: 64,
-                      color: Colors.grey,
-                    ),
-                    const SizedBox(height: 16),
-                    Text(
-                      'Cannot display photo',
-                      style: Theme.of(
-                        context,
-                      ).textTheme.bodyMedium?.copyWith(color: Colors.grey),
-                    ),
-                  ],
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        return GestureDetector(
+          onDoubleTapDown: (details) {
+            _handleDoubleTap(details.localPosition, constraints);
+          },
+          child: InteractiveViewer(
+            transformationController: _transformationController,
+            minScale: 1.0,
+            maxScale: 5.0,
+            boundaryMargin: const EdgeInsets.all(0),
+            clipBehavior: Clip.none,
+            child: SizedBox(
+              width: constraints.maxWidth,
+              height: constraints.maxHeight,
+              child: Image.memory(
+                _photoBytes!,
+                fit: BoxFit.contain,
+                errorBuilder: (context, error, stackTrace) => Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(
+                        Icons.image_not_supported_outlined,
+                        size: 64,
+                        color: Colors.grey,
+                      ),
+                      const SizedBox(height: 16),
+                      Text(
+                        'Cannot display photo',
+                        style: Theme.of(
+                          context,
+                        ).textTheme.bodyMedium?.copyWith(color: Colors.grey),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),
           ),
-        ),
-      ),
+        );
+      },
     );
+  }
+
+  void _handleDoubleTap(Offset localPosition, BoxConstraints constraints) {
+    if (_transformationController.value != Matrix4.identity()) {
+      _resetZoom();
+    } else {
+      // Zoom in towards the tap location
+      final x = -localPosition.dx * 1.5;
+      final y = -localPosition.dy * 1.5;
+      final zoomed = Matrix4.identity()
+        ..translate(x, y)
+        ..scale(2.5);
+      
+      setState(() {
+        _transformationController.value = zoomed;
+      });
+    }
   }
 
   void _showPhotoInfo(BuildContext context) {

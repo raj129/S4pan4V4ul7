@@ -22,7 +22,6 @@ class SettingsScreen extends StatefulWidget {
 class _SettingsScreenState extends State<SettingsScreen> {
   bool _appLockOnOpen = true;
   bool _autoLockOnBackground = true;
-  bool _biometricUnlock = false;
   bool _photoSyncEnabled = false;
   bool _vmkBackupEnabled = false;
   bool _wifiOnlyBackup = true;
@@ -42,7 +41,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _loadSettings() async {
-    final biometric = await widget.settingsRepository.isBiometricUnlockEnabled();
     final photoSync = await widget.settingsRepository.isPhotoSyncEnabled();
     final externalMirror =
         await widget.settingsRepository.isExternalStorageMirrorEnabled();
@@ -50,7 +48,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
         await widget.settingsRepository.isDriveEncryptedBackupEnabled();
     if (!mounted) return;
     setState(() {
-      _biometricUnlock = biometric;
       _photoSyncEnabled = photoSync;
       _externalStorageMirrorEnabled = externalMirror;
       _driveEncryptedBackupEnabled = driveBackup;
@@ -66,7 +63,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           const _SectionHeader('Security'),
           SwitchListTile(
             title: const Text('Lock app on open'),
-            subtitle: const Text('Require PIN/biometric whenever app opens'),
+            subtitle: const Text('Require PIN whenever app opens'),
             value: _appLockOnOpen,
             onChanged: (v) => setState(() => _appLockOnOpen = v),
           ),
@@ -75,16 +72,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
             subtitle: const Text('Lock vault when app goes to background'),
             value: _autoLockOnBackground,
             onChanged: (v) => setState(() => _autoLockOnBackground = v),
-          ),
-          SwitchListTile(
-            title: const Text('Biometric unlock'),
-            subtitle: const Text('Use biometric on lock screen; PIN always available'),
-            value: _biometricUnlock,
-            onChanged: (v) async {
-              setState(() => _biometricUnlock = v);
-              await widget.settingsRepository.setBiometricUnlockEnabled(v);
-              await widget.onSettingsChanged();
-            },
           ),
           const Divider(height: 1),
           const _SectionHeader('Backup & Sync'),
@@ -184,7 +171,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ListTile(
             leading: const Icon(Icons.lock_outline),
             title: const Text('Change app PIN'),
-            onTap: () {},
+            onTap: () => context.push('/settings/change-pin'),
           ),
           ListTile(
             leading: const Icon(Icons.cloud_outlined),

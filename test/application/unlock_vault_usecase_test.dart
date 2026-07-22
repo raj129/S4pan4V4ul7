@@ -43,7 +43,6 @@ void main() {
       await createUseCase.execute(
         pin: '847291',
         mode: UserMode.localOnly,
-        biometricEnabled: false,
       );
 
       final ok = await unlockUseCase.execute('847291');
@@ -54,7 +53,6 @@ void main() {
       await createUseCase.execute(
         pin: '847291',
         mode: UserMode.localOnly,
-        biometricEnabled: false,
       );
 
       final ok = await unlockUseCase.execute('847292');

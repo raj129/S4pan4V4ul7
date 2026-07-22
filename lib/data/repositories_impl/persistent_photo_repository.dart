@@ -155,23 +155,27 @@ class PersistentPhotoRepositoryImpl implements PersistentPhotoRepository {
   }) async {
     _requireInitialized();
     try {
-      // For now, fetch all gallery photos and paginate in memory
-      // TODO: Optimize with OFFSET/LIMIT in SQL query
-      final allPhotos = await _db.getGalleryPhotos();
-
-      var filtered = allPhotos.map(_todomainPhoto).toList();
-      if (albumId != null) {
-        filtered = filtered.where((p) => p.albumId == albumId).toList();
+      if (albumId != null || favoritesOnly) {
+        // Fallback for complex filters until optimized in DB
+        final allPhotos = await _db.getGalleryPhotos();
+        var filtered = allPhotos.map(_todomainPhoto).toList();
+        if (albumId != null) {
+          filtered = filtered.where((p) => p.albumId == albumId).toList();
+        }
+        if (favoritesOnly) {
+          filtered = filtered.where((p) => p.favorite).toList();
+        }
+        final start = page * pageSize;
+        if (start >= filtered.length) return const [];
+        final end = (start + pageSize).clamp(0, filtered.length);
+        return filtered.sublist(start, end);
       }
-      if (favoritesOnly) {
-        filtered = filtered.where((p) => p.favorite).toList();
-      }
 
-      final start = page * pageSize;
-      if (start >= filtered.length) return const [];
-
-      final end = (start + pageSize).clamp(0, filtered.length);
-      return filtered.sublist(start, end);
+      final driftPhotos = await _db.getGalleryPhotos(
+        limit: pageSize,
+        offset: page * pageSize,
+      );
+      return driftPhotos.map(_todomainPhoto).toList();
     } catch (e) {
       debugPrint('❌ Failed to list gallery page: $e');
       return [];
@@ -182,6 +186,7 @@ class PersistentPhotoRepositoryImpl implements PersistentPhotoRepository {
   Future<List<VaultPhoto>> listTrashPhotos() async {
     _requireInitialized();
     try {
+      // For now fetching all, but could also paginate if needed
       final trashed = await _db.getTrashedPhotos();
       return trashed.map(_todomainPhoto).toList();
     } catch (e) {

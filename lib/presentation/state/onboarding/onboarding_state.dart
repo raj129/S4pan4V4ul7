@@ -1,7 +1,6 @@
 import 'package:equatable/equatable.dart';
 
 import '../../../domain/entities/user_mode.dart';
-import '../../../application/services/biometric_service.dart';
 
 /// Complete state machine for the first-launch onboarding flow.
 ///
@@ -80,54 +79,16 @@ final class OnboardingPinInvalid extends OnboardingState {
   List<Object?> get props => [mode, message];
 }
 
-/// Biometric availability is being checked.
-final class OnboardingBiometricCheck extends OnboardingState {
-  const OnboardingBiometricCheck({required this.mode});
-  final UserMode mode;
-  @override
-  List<Object?> get props => [mode];
-}
-
-/// Biometric is available; user is being offered setup.
-final class OnboardingBiometricAvailable extends OnboardingState {
-  const OnboardingBiometricAvailable({
-    required this.mode,
-    required this.availability,
-  });
-  final UserMode mode;
-  final BiometricAvailability availability;
-  @override
-  List<Object?> get props => [mode, availability];
-}
-
-/// User enabled biometric unlock.
-final class OnboardingBiometricEnabled extends OnboardingState {
-  const OnboardingBiometricEnabled({required this.mode});
-  final UserMode mode;
-  @override
-  List<Object?> get props => [mode];
-}
-
-/// User skipped biometric (or it was unavailable).
-final class OnboardingBiometricSkipped extends OnboardingState {
-  const OnboardingBiometricSkipped({required this.mode});
-  final UserMode mode;
-  @override
-  List<Object?> get props => [mode];
-}
-
 /// Vault creation is in progress — show animated progress UI.
 final class OnboardingCreatingVault extends OnboardingState {
   const OnboardingCreatingVault({
     required this.mode,
-    required this.biometricEnabled,
     this.step = VaultCreationStep.generatingKeys,
   });
   final UserMode mode;
-  final bool biometricEnabled;
   final VaultCreationStep step;
   @override
-  List<Object?> get props => [mode, biometricEnabled, step];
+  List<Object?> get props => [mode, step];
 }
 
 /// Discrete step labels shown in the vault creation progress UI.

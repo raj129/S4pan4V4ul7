@@ -31,7 +31,6 @@ void main() {
       final vaultId = await useCase.execute(
         pin: '847291',
         mode: UserMode.localOnly,
-        biometricEnabled: false,
       );
 
       expect(vaultId, isNotEmpty);
@@ -42,7 +41,6 @@ void main() {
       final vaultId = await useCase.execute(
         pin: '847291',
         mode: UserMode.localOnly,
-        biometricEnabled: false,
       );
 
       final stored = await secureRepo.loadWrappedVmk(vaultId);
@@ -64,7 +62,6 @@ void main() {
         failingUseCase.execute(
           pin: '847291',
           mode: UserMode.localOnly,
-          biometricEnabled: false,
         ),
         throwsA(isA<VaultCreationException>()),
       );
@@ -87,7 +84,6 @@ void main() {
           await failingUseCase.execute(
             pin: '847291',
             mode: UserMode.localOnly,
-            biometricEnabled: false,
           );
         } catch (_) {}
 

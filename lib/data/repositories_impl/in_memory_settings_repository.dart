@@ -3,7 +3,6 @@ import '../../domain/repositories/settings_repository.dart';
 
 class InMemorySettingsRepository implements SettingsRepository {
   UserMode? _selectedMode;
-  bool _biometricUnlockEnabled = false;
   bool _photoSyncEnabled = false;
   bool _externalStorageMirrorEnabled = true;
   bool _driveEncryptedBackupEnabled = false;
@@ -14,14 +13,6 @@ class InMemorySettingsRepository implements SettingsRepository {
   @override
   Future<void> saveUserMode(UserMode mode) async {
     _selectedMode = mode;
-  }
-
-  @override
-  Future<bool> isBiometricUnlockEnabled() async => _biometricUnlockEnabled;
-
-  @override
-  Future<void> setBiometricUnlockEnabled(bool enabled) async {
-    _biometricUnlockEnabled = enabled;
   }
 
   @override

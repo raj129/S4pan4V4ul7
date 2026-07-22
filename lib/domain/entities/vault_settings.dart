@@ -4,7 +4,6 @@ import 'user_mode.dart';
 class VaultSettings {
   const VaultSettings({
     required this.mode,
-    required this.biometricEnabled,
     required this.appLockOnOpen,
     required this.autoLockOnBackground,
     required this.photoSyncEnabled,
@@ -12,7 +11,6 @@ class VaultSettings {
   });
 
   final UserMode mode;
-  final bool biometricEnabled;
   final bool appLockOnOpen;
   final bool autoLockOnBackground;
 
@@ -26,7 +24,6 @@ class VaultSettings {
   factory VaultSettings.defaults({required UserMode mode}) {
     return VaultSettings(
       mode: mode,
-      biometricEnabled: false,
       appLockOnOpen: true,
       autoLockOnBackground: true,
       photoSyncEnabled: false,
