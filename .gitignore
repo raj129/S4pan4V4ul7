@@ -43,3 +43,9 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Generated code (drift / build_runner)
+/lib/storage/local_db/*.g.dart
+/lib/storage/local_db/*.drift
+# If other generated files are intentionally committed, document why in README.md
+
