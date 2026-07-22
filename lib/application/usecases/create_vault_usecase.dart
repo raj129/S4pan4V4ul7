@@ -1,10 +1,12 @@
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 
 import '../../crypto/services/crypto_service.dart';
 import '../../domain/entities/user_mode.dart';
 import '../../domain/entities/vault_settings.dart';
 import '../../domain/repositories/secure_storage_repository.dart';
 import '../../domain/repositories/vault_repository.dart';
+import '../../domain/repositories/vmk_backup_repository.dart';
 import '../services/kdf_service.dart';
 import '../services/vault_session.dart';
 import 'package:uuid/uuid.dart';
@@ -27,9 +29,10 @@ class VaultCreationException implements Exception {
 /// 4. Derive PIN-KEK via KDF
 /// 5. Wrap VMK with PIN-KEK using AES-256-GCM
 /// 6. Persist wrapped VMK in secure storage
-/// 7. Write vault settings to local DB
-/// 8. Zero VMK and KEK bytes (best-effort)
-/// 9. Clean up on any failure
+/// 7. Back up wrapped VMK to external destinations (Drive, Documents)
+/// 8. Write vault settings to local DB
+/// 9. Zero VMK and KEK bytes (best-effort)
+/// 10. Clean up on any failure
 ///
 /// Security rules:
 /// - VMK bytes are only created inside this use-case scope.
@@ -42,17 +45,20 @@ class CreateVaultUseCase {
     required VaultRepository vaultRepository,
     required SecureStorageRepository secureStorageRepository,
     required VaultSession vaultSession,
+    required List<VmkBackupRepository> backupRepositories,
   }) : _cryptoService = cryptoService,
        _kdfService = kdfService,
        _vaultRepository = vaultRepository,
        _secureStorageRepository = secureStorageRepository,
-       _vaultSession = vaultSession;
+       _vaultSession = vaultSession,
+       _backupRepositories = backupRepositories;
 
   final CryptoService _cryptoService;
   final KdfService _kdfService;
   final VaultRepository _vaultRepository;
   final SecureStorageRepository _secureStorageRepository;
   final VaultSession _vaultSession;
+  final List<VmkBackupRepository> _backupRepositories;
 
   static const _uuid = Uuid();
 
@@ -94,7 +100,26 @@ class CreateVaultUseCase {
         encVersion: _cryptoService.encryptionVersion,
       );
 
-      // Step 6: write vault settings to local DB.
+      // Step 6: Back up wrapped VMK to external destinations.
+      final backupPayload = {
+        'wrappedVmk': base64Encode(wrapped.wrappedBytes),
+        'nonce': base64Encode(wrapped.nonce),
+        'mac': base64Encode(wrapped.mac),
+        'salt': base64Encode(salt),
+        'encVersion': _cryptoService.encryptionVersion.toString(),
+      };
+
+      for (final repo in _backupRepositories) {
+        try {
+          await repo.backupVmk(vaultId: vaultId, payload: backupPayload);
+        } catch (e) {
+          // Backup failure shouldn't necessarily block vault creation, 
+          // but we should probably log it or handle it based on UserMode.
+          debugPrint('⚠️ Backup failed for ${repo.runtimeType}: $e');
+        }
+      }
+
+      // Step 7: write vault settings to local DB.
       final settings = VaultSettings.defaults(
         mode: mode,
       );

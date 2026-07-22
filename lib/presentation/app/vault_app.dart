@@ -14,8 +14,11 @@ import '../../application/services/vault_session.dart';
 import '../../application/usecases/create_vault_usecase.dart';
 import '../../application/usecases/unlock_vault_usecase.dart';
 import '../../application/usecases/change_pin_usecase.dart';
+import '../../application/usecases/export_photo_usecase.dart';
 import '../../crypto/services/aes_gcm_crypto_service.dart';
-import '../../data/repositories_impl/in_memory_auth_repository.dart';
+import '../../data/repositories_impl/firebase_auth_repository.dart';
+import '../../data/repositories_impl/google_drive_vmk_repository.dart';
+import '../../data/repositories_impl/local_vmk_backup_repository.dart';
 import '../../data/repositories_impl/flutter_secure_string_kv.dart';
 import '../../data/repositories_impl/in_memory_photo_repository.dart';
 import '../../data/repositories_impl/in_memory_secure_storage_repository.dart';
@@ -26,10 +29,11 @@ import '../../data/repositories_impl/persistent_settings_repository.dart';
 import '../../data/repositories_impl/persistent_vault_repository.dart';
 import '../../data/repositories_impl/secure_storage_flutter_repository.dart';
 import '../../data/services/pbkdf2_kdf_service.dart';
-import '../../data/services/stub_restore_flow_service.dart';
+import '../../data/services/backup_restore_flow_service.dart';
 import '../../domain/entities/user_mode.dart';
 import '../../domain/entities/vault_photo.dart';
 import '../../domain/entities/vault_status.dart';
+import '../../domain/repositories/vmk_backup_repository.dart';
 import '../screens/gallery/gallery_home_screen.dart';
 import '../screens/gallery/gallery_photo_viewer_screen.dart';
 import '../screens/chat/chat_screen.dart';
@@ -80,17 +84,19 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
   late final _photoRepository = widget.persistentState
       ? PersistentPhotoRepositoryImpl()
       : InMemoryPhotoRepository();
-  final _authRepository = InMemoryAuthRepository();
+  late final _authRepository = FirebaseAuthRepository();
   final _cryptoService = AesGcmCryptoService();
   final _kdfService = Pbkdf2KdfService();
   final _vaultSession = VaultSession();
-  final RestoreFlowService _restoreFlowService = const StubRestoreFlowService();
+  late final List<VmkBackupRepository> _backupRepositories;
+  late final RestoreFlowService _restoreFlowService;
   final _pinValidator = PinValidator();
   late final ImportManager _importManager;
 
   late final CreateVaultUseCase _createVaultUseCase;
   late final UnlockVaultUseCase _unlockVaultUseCase;
   late final ChangePinUseCase _changePinUseCase;
+  late final ExportPhotoUseCase _exportPhotoUseCase;
   late final OnboardingCubit _onboardingCubit;
   late final GoRouter _router;
   StreamSubscription<List<SharedMediaFile>>? _shareStreamSub;
@@ -103,12 +109,24 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    
+    _backupRepositories = [
+      LocalVmkBackupRepository(),
+      GoogleDriveVmkRepository(authRepository: _authRepository),
+    ];
+    
+    _restoreFlowService = BackupRestoreFlowService(
+      secureStorageRepository: _secureStorageRepository,
+      backupRepositories: _backupRepositories,
+    );
+    
     _createVaultUseCase = CreateVaultUseCase(
       cryptoService: _cryptoService,
       kdfService: _kdfService,
       vaultRepository: _vaultRepository,
       secureStorageRepository: _secureStorageRepository,
       vaultSession: _vaultSession,
+      backupRepositories: _backupRepositories,
     );
     _unlockVaultUseCase = UnlockVaultUseCase(
       vaultRepository: _vaultRepository,
@@ -121,6 +139,10 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
       vaultRepository: _vaultRepository,
       secureStorageRepository: _secureStorageRepository,
       kdfService: _kdfService,
+      cryptoService: _cryptoService,
+      vaultSession: _vaultSession,
+    );
+    _exportPhotoUseCase = ExportPhotoUseCase(
       cryptoService: _cryptoService,
       vaultSession: _vaultSession,
     );
@@ -281,6 +303,7 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
                           photo: photo,
                           importManager: _importManager,
                           photoRepository: _photoRepository,
+                          exportPhotoUseCase: _exportPhotoUseCase,
                         );
                       },
                     ),

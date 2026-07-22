@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../application/usecases/export_photo_usecase.dart';
 import '../../../application/services/import_manager.dart';
 import '../../../application/services/vault_session.dart';
 import '../../../domain/entities/vault_photo.dart';
@@ -17,12 +18,14 @@ class GalleryPhotoViewerScreen extends StatefulWidget {
     required this.photo,
     required this.importManager,
     required this.photoRepository,
+    required this.exportPhotoUseCase,
     super.key,
   });
 
   final VaultPhoto photo;
   final ImportManager importManager;
   final PhotoRepository photoRepository;
+  final ExportPhotoUseCase exportPhotoUseCase;
 
   @override
   State<GalleryPhotoViewerScreen> createState() =>
@@ -110,6 +113,11 @@ class _GalleryPhotoViewerScreenState extends State<GalleryPhotoViewerScreen> {
           onPressed: () => context.pop(),
         ),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.file_download_outlined),
+            onPressed: () => _exportPhoto(context),
+            tooltip: 'Export to Downloads',
+          ),
           IconButton(
             icon: const Icon(Icons.info_outlined),
             onPressed: () => _showPhotoInfo(context),
@@ -224,6 +232,24 @@ class _GalleryPhotoViewerScreenState extends State<GalleryPhotoViewerScreen> {
       context: context,
       builder: (context) => _PhotoInfoBottomSheet(photo: widget.photo),
     );
+  }
+
+  Future<void> _exportPhoto(BuildContext context) async {
+    try {
+      final path = await widget.exportPhotoUseCase.execute(widget.photo);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Photo exported to Downloads: ${path.split('/').last}'),
+          action: SnackBarAction(label: 'OK', onPressed: () {}),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to export photo: $e')),
+      );
+    }
   }
 
   Future<void> _confirmDelete(BuildContext context) async {

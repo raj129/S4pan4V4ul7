@@ -1,5 +1,4 @@
 import 'dart:io';
-import 'dart:isolate';
 import 'package:flutter/foundation.dart';
 
 import '../../domain/entities/vault_photo.dart';

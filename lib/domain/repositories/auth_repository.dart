@@ -1,3 +1,5 @@
+import 'package:http/http.dart' as http;
+
 /// Authentication result from Google sign-in.
 class AuthResult {
   const AuthResult({required this.userId, required this.email});
@@ -19,6 +21,9 @@ abstract class AuthRepository {
 
   /// Sign out and revoke the current Google session.
   Future<void> signOut();
+
+  /// Returns an authenticated HTTP client for Google APIs.
+  Future<http.Client?> getAuthenticatedClient();
 }
 
 class AuthException implements Exception {
