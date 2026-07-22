@@ -34,7 +34,7 @@ class FirebaseAuthRepository implements AuthRepository {
       final GoogleSignInAuthentication googleAuth = await googleUser.authentication;
 
       final AuthCredential credential = GoogleAuthProvider.credential(
-        accessToken: googleAuth.accessToken,
+        accessToken: googleAuth.accessToken ?? '',
         idToken: googleAuth.idToken,
       );
 
@@ -63,7 +63,7 @@ class FirebaseAuthRepository implements AuthRepository {
 
   @override
   Future<http.Client?> getAuthenticatedClient() async {
-    final account = _googleSignIn.currentUser;
+    final account = await _googleSignIn.signInSilently();
     if (account == null) return null;
 
     final authHeaders = await account.authHeaders;
