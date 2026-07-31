@@ -64,10 +64,17 @@ dependencies:
   firebase_core: ^4.12.1
   firebase_auth: ^6.5.6
   firebase_crashlytics: ^5.2.6
+  cloud_firestore: ^6.7.1
+  firebase_storage: ^13.4.5
   google_sign_in: ^7.2.0
   googleapis: ^16.0.0
   googleapis_auth: ^2.3.3
   http: ^1.2.1
+
+  # Chat UI helpers
+  cached_network_image: ^3.4.1
+  video_player: ^2.9.2
+  intl: ^0.20.2
 
 dev_dependencies:
   flutter_test:
