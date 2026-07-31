@@ -37,7 +37,7 @@ import '../../domain/entities/vault_status.dart';
 import '../../domain/repositories/vmk_backup_repository.dart';
 import '../screens/gallery/gallery_home_screen.dart';
 import '../screens/gallery/gallery_photo_viewer_screen.dart';
-import '../screens/chat/chat_screen.dart';
+import '../app/chat_app.dart';
 import '../screens/trash/trash_screen.dart';
 import '../screens/files/files_screen.dart';
 import '../screens/import/import_screen.dart';
@@ -320,7 +320,7 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
               routes: [
                 GoRoute(
                   path: '/chat',
-                  builder: (context, state) => const ChatScreen(),
+                  builder: (context, state) => const ChatApp(),
                 ),
               ],
             ),
