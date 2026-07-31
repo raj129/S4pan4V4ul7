@@ -1,4 +1,5 @@
 import '../../domain/repositories/auth_repository.dart';
+import 'package:http/http.dart' as http;
 
 /// Stub auth repository used until Firebase is configured.
 ///
@@ -24,4 +25,7 @@ class StubAuthRepository implements AuthRepository {
 
   @override
   Future<void> signOut() async {}
+
+  @override
+  Future<http.Client?> getAuthenticatedClient() async => null;
 }

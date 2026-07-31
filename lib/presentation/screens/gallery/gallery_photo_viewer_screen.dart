@@ -4,10 +4,13 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../application/usecases/export_photo_usecase.dart';
+import '../../../application/usecases/unlock_vault_usecase.dart';
 import '../../../application/services/import_manager.dart';
+import '../../../application/services/pin_validator.dart';
 import '../../../application/services/vault_session.dart';
 import '../../../domain/entities/vault_photo.dart';
 import '../../../domain/repositories/photo_repository.dart';
+import '../../widgets/pin_reauth_dialog.dart';
 
 /// Full-screen photo viewer with zoom/pan capability.
 ///
@@ -19,6 +22,8 @@ class GalleryPhotoViewerScreen extends StatefulWidget {
     required this.importManager,
     required this.photoRepository,
     required this.exportPhotoUseCase,
+    required this.unlockVaultUseCase,
+    required this.pinValidator,
     super.key,
   });
 
@@ -26,6 +31,8 @@ class GalleryPhotoViewerScreen extends StatefulWidget {
   final ImportManager importManager;
   final PhotoRepository photoRepository;
   final ExportPhotoUseCase exportPhotoUseCase;
+  final UnlockVaultUseCase unlockVaultUseCase;
+  final PinValidator pinValidator;
 
   @override
   State<GalleryPhotoViewerScreen> createState() =>
@@ -235,6 +242,35 @@ class _GalleryPhotoViewerScreenState extends State<GalleryPhotoViewerScreen> {
   }
 
   Future<void> _exportPhoto(BuildContext context) async {
+    final approved = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Export decrypted photo?'),
+        content: const Text(
+          'This will export plaintext outside the vault. Continue only if you trust the destination.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Continue'),
+          ),
+        ],
+      ),
+    );
+    if (approved != true || !context.mounted) return;
+
+    final allowed = await requirePinReauth(
+      context: context,
+      unlockVaultUseCase: widget.unlockVaultUseCase,
+      pinValidator: widget.pinValidator,
+      actionLabel: 'export this photo',
+    );
+    if (!allowed) return;
+
     try {
       final path = await widget.exportPhotoUseCase.execute(widget.photo);
       if (!mounted) return;

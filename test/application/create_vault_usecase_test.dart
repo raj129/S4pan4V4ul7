@@ -8,6 +8,7 @@ import 'package:photo_vault/data/repositories_impl/in_memory_vault_repository.da
 import 'package:photo_vault/data/services/pbkdf2_kdf_service.dart';
 import 'package:photo_vault/domain/entities/user_mode.dart';
 import 'package:photo_vault/domain/entities/vault_status.dart';
+import 'package:photo_vault/domain/repositories/vmk_backup_repository.dart';
 
 void main() {
   group('CreateVaultUseCase', () {
@@ -24,12 +25,13 @@ void main() {
         vaultRepository: vaultRepo,
         secureStorageRepository: secureRepo,
         vaultSession: VaultSession(),
+        backupRepositories: [_NoopVmkBackupRepository()],
       );
     });
 
     test('creates vault in local-only mode successfully', () async {
       final vaultId = await useCase.execute(
-        pin: '847291',
+        pin: '8472',
         mode: UserMode.localOnly,
       );
 
@@ -39,7 +41,7 @@ void main() {
 
     test('persists wrapped VMK in secure storage', () async {
       final vaultId = await useCase.execute(
-        pin: '847291',
+        pin: '8472',
         mode: UserMode.localOnly,
       );
 
@@ -56,11 +58,12 @@ void main() {
         vaultRepository: vaultRepo,
         secureStorageRepository: secureRepo,
         vaultSession: VaultSession(),
+        backupRepositories: [_NoopVmkBackupRepository()],
       );
 
       await expectLater(
         failingUseCase.execute(
-          pin: '847291',
+          pin: '8472',
           mode: UserMode.localOnly,
         ),
         throwsA(isA<VaultCreationException>()),
@@ -78,11 +81,12 @@ void main() {
           vaultRepository: vaultRepo,
           secureStorageRepository: secureRepo,
           vaultSession: VaultSession(),
+          backupRepositories: [_NoopVmkBackupRepository()],
         );
 
         try {
           await failingUseCase.execute(
-            pin: '847291',
+            pin: '8472',
             mode: UserMode.localOnly,
           );
         } catch (_) {}
@@ -102,4 +106,21 @@ class _AlwaysFailKdfService extends Pbkdf2KdfService {
   Future<List<int>> deriveKey(String pin, List<int> saltBytes) {
     throw Exception('Simulated KDF failure');
   }
+}
+
+class _NoopVmkBackupRepository implements VmkBackupRepository {
+  @override
+  Future<void> backupVmk({
+    required String vaultId,
+    required Map<String, String> payload,
+  }) async {}
+
+  @override
+  Future<bool> hasBackup(String vaultId) async => false;
+
+  @override
+  Future<List<String>> listVaultIds() async => const [];
+
+  @override
+  Future<Map<String, String>?> restoreVmk(String vaultId) async => null;
 }

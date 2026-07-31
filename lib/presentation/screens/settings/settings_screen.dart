@@ -1,18 +1,25 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../application/services/pin_validator.dart';
+import '../../../application/usecases/unlock_vault_usecase.dart';
 import '../../../domain/entities/user_mode.dart';
 import '../../../domain/repositories/settings_repository.dart';
+import '../../widgets/pin_reauth_dialog.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({
     required this.mode,
     required this.settingsRepository,
+    required this.unlockVaultUseCase,
+    required this.pinValidator,
     required this.onSettingsChanged,
     super.key,
   });
   final UserMode mode;
   final SettingsRepository settingsRepository;
+  final UnlockVaultUseCase unlockVaultUseCase;
+  final PinValidator pinValidator;
   final Future<void> Function() onSettingsChanged;
 
   @override
@@ -92,6 +99,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
             subtitle: const Text('Disabled by default; enable explicitly'),
             value: _photoSyncEnabled,
             onChanged: (v) async {
+              if (!v) {
+                final allowed = await requirePinReauth(
+                  context: context,
+                  unlockVaultUseCase: widget.unlockVaultUseCase,
+                  pinValidator: widget.pinValidator,
+                  actionLabel: 'disable photo sync',
+                );
+                if (!allowed) return;
+              }
               setState(() => _photoSyncEnabled = v);
               await widget.settingsRepository.setPhotoSyncEnabled(v);
               await widget.onSettingsChanged();
@@ -117,6 +133,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
             value: _driveEncryptedBackupEnabled,
             onChanged: widget.mode == UserMode.googleEnabled
                 ? (v) async {
+                    if (!v) {
+                      final allowed = await requirePinReauth(
+                        context: context,
+                        unlockVaultUseCase: widget.unlockVaultUseCase,
+                        pinValidator: widget.pinValidator,
+                        actionLabel: 'disable Drive backup',
+                      );
+                      if (!allowed) return;
+                    }
                     setState(() => _driveEncryptedBackupEnabled = v);
                     await widget.settingsRepository
                         .setDriveEncryptedBackupEnabled(v);
@@ -171,13 +196,31 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ListTile(
             leading: const Icon(Icons.lock_outline),
             title: const Text('Change app PIN'),
-            onTap: () => context.push('/settings/change-pin'),
+            onTap: () async {
+              final allowed = await requirePinReauth(
+                context: context,
+                unlockVaultUseCase: widget.unlockVaultUseCase,
+                pinValidator: widget.pinValidator,
+                actionLabel: 'change your PIN',
+              );
+              if (!allowed || !context.mounted) return;
+              context.push('/settings/change-pin');
+            },
           ),
           ListTile(
             leading: const Icon(Icons.cloud_outlined),
             title: const Text('Google mode & restore'),
             subtitle: Text(widget.mode.title),
-            onTap: () => context.push('/restore'),
+            onTap: () async {
+              final allowed = await requirePinReauth(
+                context: context,
+                unlockVaultUseCase: widget.unlockVaultUseCase,
+                pinValidator: widget.pinValidator,
+                actionLabel: 'open restore',
+              );
+              if (!allowed || !context.mounted) return;
+              context.push('/restore');
+            },
           ),
           ListTile(
             leading: const Icon(Icons.delete_forever_outlined),

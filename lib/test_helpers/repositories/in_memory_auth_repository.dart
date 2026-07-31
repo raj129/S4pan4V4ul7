@@ -1,4 +1,5 @@
 import '../../domain/repositories/auth_repository.dart';
+import 'package:http/http.dart' as http;
 
 class InMemoryAuthRepository implements AuthRepository {
   InMemoryAuthRepository({this.defaultSignedIn = false});
@@ -27,4 +28,7 @@ class InMemoryAuthRepository implements AuthRepository {
   Future<void> signOut() async {
     _signedIn = false;
   }
+
+  @override
+  Future<http.Client?> getAuthenticatedClient() async => null;
 }

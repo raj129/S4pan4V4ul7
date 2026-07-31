@@ -21,6 +21,7 @@ import '../../data/repositories_impl/google_drive_vmk_repository.dart';
 import '../../data/repositories_impl/local_vmk_backup_repository.dart';
 import '../../data/repositories_impl/flutter_secure_string_kv.dart';
 import '../../data/repositories_impl/in_memory_photo_repository.dart';
+import '../../data/repositories_impl/in_memory_auth_repository.dart';
 import '../../data/repositories_impl/in_memory_secure_storage_repository.dart';
 import '../../data/repositories_impl/in_memory_settings_repository.dart';
 import '../../data/repositories_impl/in_memory_vault_repository.dart';
@@ -84,7 +85,9 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
   late final _photoRepository = widget.persistentState
       ? PersistentPhotoRepositoryImpl()
       : InMemoryPhotoRepository();
-  late final _authRepository = FirebaseAuthRepository();
+  late final _authRepository = widget.persistentState
+      ? FirebaseAuthRepository()
+      : InMemoryAuthRepository();
   final _cryptoService = AesGcmCryptoService();
   final _kdfService = Pbkdf2KdfService();
   final _vaultSession = VaultSession();
@@ -304,6 +307,8 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
                           importManager: _importManager,
                           photoRepository: _photoRepository,
                           exportPhotoUseCase: _exportPhotoUseCase,
+                          unlockVaultUseCase: _unlockVaultUseCase,
+                          pinValidator: _pinValidator,
                         );
                       },
                     ),
@@ -345,6 +350,8 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
           builder: (context, state) => SettingsScreen(
             mode: _lastKnownMode,
             settingsRepository: _settingsRepository,
+            unlockVaultUseCase: _unlockVaultUseCase,
+            pinValidator: _pinValidator,
             onSettingsChanged: _hydrateSessionSettings,
           ),
           routes: [

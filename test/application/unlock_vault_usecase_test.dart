@@ -7,6 +7,7 @@ import 'package:photo_vault/data/repositories_impl/in_memory_secure_storage_repo
 import 'package:photo_vault/data/repositories_impl/in_memory_vault_repository.dart';
 import 'package:photo_vault/data/services/pbkdf2_kdf_service.dart';
 import 'package:photo_vault/domain/entities/user_mode.dart';
+import 'package:photo_vault/domain/repositories/vmk_backup_repository.dart';
 
 void main() {
   group('UnlockVaultUseCase', () {
@@ -29,6 +30,7 @@ void main() {
         vaultRepository: vaultRepo,
         secureStorageRepository: secureRepo,
         vaultSession: vaultSession,
+        backupRepositories: [_NoopVmkBackupRepository()],
       );
       unlockUseCase = UnlockVaultUseCase(
         vaultRepository: vaultRepo,
@@ -41,27 +43,44 @@ void main() {
 
     test('returns true with correct PIN', () async {
       await createUseCase.execute(
-        pin: '847291',
+        pin: '8472',
         mode: UserMode.localOnly,
       );
 
-      final ok = await unlockUseCase.execute('847291');
+      final ok = await unlockUseCase.execute('8472');
       expect(ok, isTrue);
     });
 
     test('returns false with incorrect PIN', () async {
       await createUseCase.execute(
-        pin: '847291',
+        pin: '8472',
         mode: UserMode.localOnly,
       );
 
-      final ok = await unlockUseCase.execute('847292');
+      final ok = await unlockUseCase.execute('8473');
       expect(ok, isFalse);
     });
 
     test('returns false when no vault exists', () async {
-      final ok = await unlockUseCase.execute('847291');
+      final ok = await unlockUseCase.execute('8472');
       expect(ok, isFalse);
     });
   });
+}
+
+class _NoopVmkBackupRepository implements VmkBackupRepository {
+  @override
+  Future<void> backupVmk({
+    required String vaultId,
+    required Map<String, String> payload,
+  }) async {}
+
+  @override
+  Future<bool> hasBackup(String vaultId) async => false;
+
+  @override
+  Future<List<String>> listVaultIds() async => const [];
+
+  @override
+  Future<Map<String, String>?> restoreVmk(String vaultId) async => null;
 }

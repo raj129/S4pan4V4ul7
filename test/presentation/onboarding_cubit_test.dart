@@ -10,6 +10,7 @@ import 'package:photo_vault/data/repositories_impl/in_memory_vault_repository.da
 import 'package:photo_vault/data/repositories_impl/stub_auth_repository.dart';
 import 'package:photo_vault/data/services/pbkdf2_kdf_service.dart';
 import 'package:photo_vault/domain/entities/user_mode.dart';
+import 'package:photo_vault/domain/repositories/vmk_backup_repository.dart';
 import 'package:photo_vault/presentation/state/onboarding/onboarding_cubit.dart';
 import 'package:photo_vault/presentation/state/onboarding/onboarding_state.dart';
 
@@ -24,6 +25,7 @@ OnboardingCubit _makeCubit() {
       vaultRepository: vaultRepo,
       secureStorageRepository: secureRepo,
       vaultSession: VaultSession(),
+      backupRepositories: [_NoopVmkBackupRepository()],
     ),
     pinValidator: PinValidator(),
   );
@@ -46,7 +48,7 @@ void main() {
       build: _makeCubit,
       act: (cubit) {
         cubit.selectLocalMode();
-        cubit.pinEntered(UserMode.localOnly, '123456');
+        cubit.pinEntered(UserMode.localOnly, '1234');
       },
       expect: () => [
         const OnboardingModeSelectedLocal(),
@@ -64,7 +66,7 @@ void main() {
       build: _makeCubit,
       act: (cubit) {
         cubit.selectLocalMode();
-        cubit.pinEntered(UserMode.localOnly, '847291');
+        cubit.pinEntered(UserMode.localOnly, '8472');
       },
       expect: () => [
         const OnboardingModeSelectedLocal(),
@@ -78,8 +80,8 @@ void main() {
       build: _makeCubit,
       act: (cubit) {
         cubit.selectLocalMode();
-        cubit.pinEntered(UserMode.localOnly, '847291');
-        cubit.pinConfirmed(UserMode.localOnly, '847292'); // wrong
+        cubit.pinEntered(UserMode.localOnly, '8472');
+        cubit.pinConfirmed(UserMode.localOnly, '8473'); // wrong
       },
       expect: () => [
         const OnboardingModeSelectedLocal(),
@@ -94,8 +96,8 @@ void main() {
       build: _makeCubit,
       act: (cubit) async {
         cubit.selectLocalMode();
-        cubit.pinEntered(UserMode.localOnly, '847291');
-        await cubit.pinConfirmed(UserMode.localOnly, '847291');
+        cubit.pinEntered(UserMode.localOnly, '8472');
+        await cubit.pinConfirmed(UserMode.localOnly, '8472');
       },
       expect: () => [
         const OnboardingModeSelectedLocal(),
@@ -149,4 +151,21 @@ void main() {
       ],
     );
   });
+}
+
+class _NoopVmkBackupRepository implements VmkBackupRepository {
+  @override
+  Future<void> backupVmk({
+    required String vaultId,
+    required Map<String, String> payload,
+  }) async {}
+
+  @override
+  Future<bool> hasBackup(String vaultId) async => false;
+
+  @override
+  Future<List<String>> listVaultIds() async => const [];
+
+  @override
+  Future<Map<String, String>?> restoreVmk(String vaultId) async => null;
 }

@@ -128,7 +128,7 @@ class _ChangePinScreenState extends State<ChangePinScreen> {
         break;
       case ChangePinStep.enterNew:
         title = 'Enter New PIN';
-        subtitle = 'Choose a new 6-digit PIN.';
+        subtitle = 'Choose a new 4-digit PIN.';
         break;
       case ChangePinStep.confirmNew:
         title = 'Confirm New PIN';
