@@ -1,4 +1,5 @@
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/services.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:http/http.dart' as http;
 import '../../domain/repositories/auth_repository.dart';
@@ -11,8 +12,14 @@ class FirebaseAuthRepository implements AuthRepository {
   final FirebaseAuth _firebaseAuth;
   final GoogleSignIn _googleSignIn = GoogleSignIn.instance;
 
-  static const List<String> _scopes = [
-    'email',
+  // Only the email scope is required to obtain a Firebase credential.
+  // Requesting drive.appdata here causes Android's Credential Manager to
+  // reject the entire flow (error code 16 / reauth failed) because sensitive
+  // OAuth scopes cannot be pre-authorized inline in the account picker.
+  static const List<String> _authScopes = ['email'];
+
+  // Drive scope is requested lazily only when Google Drive backup is needed.
+  static const List<String> _driveScopes = [
     'https://www.googleapis.com/auth/drive.appdata',
   ];
 
@@ -25,15 +32,24 @@ class FirebaseAuthRepository implements AuthRepository {
   Future<AuthResult> signInWithGoogle() async {
     try {
       final GoogleSignInAccount googleUser = await _googleSignIn.authenticate(
-        scopeHint: _scopes,
+        scopeHint: _authScopes,
       );
 
       final GoogleSignInAuthentication googleAuth = googleUser.authentication;
-      final authorization = await googleUser.authorizationClient.authorizeScopes(_scopes);
+      final authorization = await googleUser.authorizationClient
+          .authorizeScopes(_authScopes);
+
+      final accessToken = authorization.accessToken;
+      final idToken = googleAuth.idToken;
+      if (accessToken == null && idToken == null) {
+        throw const AuthException(
+          'Google did not return an authentication token.',
+        );
+      }
 
       final AuthCredential credential = GoogleAuthProvider.credential(
-        accessToken: authorization.accessToken,
-        idToken: googleAuth.idToken,
+        accessToken: accessToken,
+        idToken: idToken,
       );
 
       final UserCredential userCredential =
@@ -47,6 +63,20 @@ class FirebaseAuthRepository implements AuthRepository {
       return AuthResult(
         userId: user.uid,
         email: user.email ?? '',
+      );
+    } on AuthException {
+      rethrow;
+    } on PlatformException catch (e) {
+      // Code 16 = SIGN_IN_CANCELLED / reauth failed from Credential Manager.
+      if (e.code == 'sign_in_canceled' ||
+          e.code == 'sign_in_cancelled' ||
+          e.code == '16') {
+        throw const AuthException(
+          'Sign-in was cancelled. Please try again.',
+        );
+      }
+      throw AuthException(
+        'Google sign-in failed: ${e.message ?? e.code}',
       );
     } catch (e) {
       throw AuthException('Google sign-in failed: $e');
@@ -64,10 +94,17 @@ class FirebaseAuthRepository implements AuthRepository {
     final account = await _googleSignIn.attemptLightweightAuthentication();
     if (account == null) return null;
 
-    final authHeaders = await account.authorizationClient.authorizationHeaders(_scopes);
-    if (authHeaders == null) return null;
-    
-    return _AuthenticatedClient(authHeaders);
+    try {
+      final allScopes = [..._authScopes, ..._driveScopes];
+      final authHeaders =
+          await account.authorizationClient.authorizationHeaders(allScopes);
+      if (authHeaders == null) return null;
+      return _AuthenticatedClient(authHeaders);
+    } catch (_) {
+      // Drive authorization failed (e.g. user did not grant drive scope).
+      // Return null so callers fall back gracefully.
+      return null;
+    }
   }
 }
 

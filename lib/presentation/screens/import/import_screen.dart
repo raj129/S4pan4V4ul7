@@ -205,7 +205,7 @@ class _ImportScreenState extends State<ImportScreen> {
                 children: [
                   Expanded(
                     child: Text(
-                      hasSelection ? 'Review import' : 'Import photos',
+                      hasSelection ? 'Review photos to encrypt' : 'Import photos',
                       style: theme.textTheme.headlineSmall,
                     ),
                   ),
@@ -221,7 +221,7 @@ class _ImportScreenState extends State<ImportScreen> {
               const SizedBox(height: 8),
               Text(
                 hasSelection
-                    ? 'Confirm import to return to the gallery immediately while encryption continues in the background.'
+                    ? 'Review your photos below and hit Encrypt to secure them in your vault.'
                     : 'Choose photos to encrypt and add to your vault.',
                 style: theme.textTheme.bodyMedium,
               ),
@@ -323,7 +323,7 @@ class _ImportScreenState extends State<ImportScreen> {
                       Expanded(
                         child: FilledButton(
                           onPressed: _isQueueing ? null : _startImport,
-                          child: const Text('Confirm import'),
+                          child: const Text('Encrypt'),
                         ),
                       ),
                     ],

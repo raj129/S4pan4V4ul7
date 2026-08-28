@@ -17,12 +17,31 @@ class ChatAuthService {
   final UserRepository userRepository;
   final ChatCryptoService cryptoService;
 
-  /// Sign in with Google and ensure the Firestore user profile exists.
-  /// Returns the resolved [ChatUser].
-  Future<ChatUser> signIn() async {
-    final result = await authRepository.signInWithGoogle();
-    final firebaseUser = FirebaseAuth.instance.currentUser;
-    if (firebaseUser == null) throw const AuthException('Firebase user null after sign-in.');
+  /// Ensure a chat user is available.
+  ///
+  /// If Firebase already has a signed-in user, reuse it and avoid an additional
+  /// interactive Google sign-in prompt.
+  Future<ChatUser> ensureSignedIn({required bool allowInteractiveSignIn}) async {
+    var firebaseUser = FirebaseAuth.instance.currentUser;
+    AuthResult? result;
+
+    if (firebaseUser == null) {
+      if (!allowInteractiveSignIn) {
+        throw const AuthException('Chat sign-in required.');
+      }
+      result = await authRepository.signInWithGoogle();
+      firebaseUser = FirebaseAuth.instance.currentUser;
+    }
+    if (firebaseUser == null) {
+      throw const AuthException('Firebase user null after sign-in.');
+    }
+
+    final resolvedEmail = (firebaseUser.email ?? result?.email ?? '')
+        .toLowerCase()
+        .trim();
+    if (resolvedEmail.isEmpty) {
+      throw const AuthException('Google account email is unavailable.');
+    }
 
     // Ensure the ECDH key pair exists on this device.
     final publicKey = await cryptoService.getOrCreatePublicKey();
@@ -31,8 +50,8 @@ class ChatAuthService {
     final now = DateTime.now().toUtc();
     final user = ChatUser(
       uid: firebaseUser.uid,
-      email: (firebaseUser.email ?? result.email).toLowerCase().trim(),
-      displayName: firebaseUser.displayName ?? result.email,
+      email: resolvedEmail,
+      displayName: firebaseUser.displayName ?? resolvedEmail,
       photoUrl: firebaseUser.photoURL,
       publicKey: publicKey,
       isOnline: true,

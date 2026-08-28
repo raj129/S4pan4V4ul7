@@ -1,6 +1,7 @@
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../../application/services/pin_validator.dart';
+import '../../../application/services/restore_flow_service.dart';
 import '../../../application/usecases/create_vault_usecase.dart';
 import '../../../domain/entities/user_mode.dart';
 import '../../../domain/repositories/auth_repository.dart';
@@ -17,14 +18,17 @@ class OnboardingCubit extends Cubit<OnboardingState> {
     required AuthRepository authRepository,
     required CreateVaultUseCase createVaultUseCase,
     required PinValidator pinValidator,
+    RestoreFlowService? restoreFlowService,
   }) : _authRepository = authRepository,
        _createVaultUseCase = createVaultUseCase,
        _pinValidator = pinValidator,
+       _restoreFlowService = restoreFlowService,
        super(const OnboardingInitial());
 
   final AuthRepository _authRepository;
   final CreateVaultUseCase _createVaultUseCase;
   final PinValidator _pinValidator;
+  final RestoreFlowService? _restoreFlowService;
 
   // Stored only during PIN entry; cleared immediately after vault creation.
   // Security: this field is never placed in emitted state.
@@ -48,6 +52,17 @@ class OnboardingCubit extends Cubit<OnboardingState> {
     try {
       final result = await _authRepository.signInWithGoogle();
       emit(OnboardingGoogleSignInSuccess(email: result.email));
+      if (_restoreFlowService != null) {
+        try {
+          final hasBackup = await _restoreFlowService!.hasBackupManifest();
+          if (hasBackup) {
+            await _restoreFlowService!.restoreEncryptedVmk();
+          }
+        } catch (_) {
+          // VMK backup not found or restore failed — seamlessly fall back to new vault setup.
+        }
+      }
+      _advanceToPinEntry(UserMode.googleEnabled);
     } on AuthException catch (e) {
       emit(OnboardingGoogleSignInFailed(message: e.message));
     } catch (_) {

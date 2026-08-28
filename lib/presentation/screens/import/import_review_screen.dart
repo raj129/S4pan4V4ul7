@@ -22,7 +22,7 @@ class ImportReviewScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Review import')),
+      appBar: AppBar(title: const Text('Review photos to encrypt')),
       body: Column(
         children: [
           ListTile(
@@ -75,7 +75,7 @@ class ImportReviewScreen extends StatelessWidget {
                         source: source,
                       );
                     },
-                    child: const Text('Confirm import'),
+                    child: const Text('Encrypt'),
                   ),
                 ),
               ],

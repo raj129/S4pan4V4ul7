@@ -158,6 +158,7 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
       authRepository: _authRepository,
       createVaultUseCase: _createVaultUseCase,
       pinValidator: _pinValidator,
+      restoreFlowService: _restoreFlowService,
     );
     _router = _buildRouter();
     _initShareIntentHandling();
@@ -287,6 +288,9 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
                       importManager: _importManager,
                       photoSyncEnabled: _photoSyncEnabled,
                       vaultSession: _vaultSession,
+                      exportPhotoUseCase: _exportPhotoUseCase,
+                      unlockVaultUseCase: _unlockVaultUseCase,
+                      pinValidator: _pinValidator,
                     );
                   },
                   routes: [
@@ -320,7 +324,10 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
               routes: [
                 GoRoute(
                   path: '/chat',
-                  builder: (context, state) => const ChatApp(),
+                  builder: (context, state) => ChatApp(
+                    authRepository: _authRepository,
+                    userMode: _lastKnownMode,
+                  ),
                 ),
               ],
             ),
@@ -430,7 +437,11 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
       unawaited(_settingsRepository.saveUserMode(state.mode));
       unawaited(_hydrateSessionSettings());
       _sessionUnlocked.value = true;
-      context.go('/gallery', extra: state.mode);
+      final target = _importManager.hasPendingShareFiles ||
+              _importManager.hasPendingImportSelection
+          ? '/import/share-intent'
+          : '/gallery';
+      context.go(target, extra: state.mode);
     }
   }
 

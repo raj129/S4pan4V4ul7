@@ -65,7 +65,7 @@ class ExportPhotoUseCase {
 
       // 5. Save to Downloads
       final downloadsPath = await ExternalPath.getExternalStoragePublicDirectory(
-        ExternalPath.DIRECTORY_DOCUMENTS,
+        ExternalPath.DIRECTORY_DOWNLOAD,
       );
       final exportDir = Directory(p.join(downloadsPath, 'PhotoVault_Exports'));
       if (!await exportDir.exists()) {

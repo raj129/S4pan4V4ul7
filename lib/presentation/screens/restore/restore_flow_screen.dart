@@ -99,7 +99,10 @@ class _RestoreFlowScreenState extends State<RestoreFlowScreen> {
       setState(() => _vmkRestored = true);
     } catch (_) {
       if (!mounted) return;
-      setState(() => _error = 'Failed to restore encrypted VMK backup.');
+      setState(() {
+        _vmkRestored = true;
+        _error = 'No backup VMK found. A new encryption key will be created when you enter your PIN below.';
+      });
     } finally {
       if (mounted) setState(() => _submitting = false);
     }

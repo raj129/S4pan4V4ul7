@@ -4,6 +4,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import '../../../application/services/chat_auth_service.dart';
 import '../../../application/services/presence_service.dart';
 import '../../../domain/entities/chat_user.dart';
+import '../../../domain/repositories/auth_repository.dart';
 
 // ── States ──────────────────────────────────────────────────────────────────
 
@@ -56,11 +57,14 @@ class ChatAuthCubit extends Cubit<ChatAuthState> {
   Future<void> signIn() async {
     emit(const ChatAuthLoading());
     try {
-      final user = await authService.signIn();
+      final user = await authService.ensureSignedIn(
+        allowInteractiveSignIn: true,
+      );
       await presenceService.activate();
       emit(ChatAuthAuthenticated(user));
     } catch (e) {
-      emit(ChatAuthError(e.toString()));
+      final message = e is AuthException ? e.message : e.toString();
+      emit(ChatAuthError(message));
     }
   }
 
@@ -77,7 +81,9 @@ class ChatAuthCubit extends Cubit<ChatAuthState> {
     if (authService.isSignedIn) {
       emit(const ChatAuthLoading());
       try {
-        final user = await authService.signIn();
+        final user = await authService.ensureSignedIn(
+          allowInteractiveSignIn: false,
+        );
         await presenceService.activate();
         emit(ChatAuthAuthenticated(user));
       } catch (_) {
@@ -86,5 +92,9 @@ class ChatAuthCubit extends Cubit<ChatAuthState> {
     } else {
       emit(const ChatAuthUnauthenticated());
     }
+  }
+
+  void markUnauthenticated() {
+    emit(const ChatAuthUnauthenticated());
   }
 }

@@ -5,7 +5,9 @@ import '../../state/chat/chat_auth_cubit.dart';
 
 /// Full-page Google Sign-In screen for the chat module.
 class ChatSignInScreen extends StatelessWidget {
-  const ChatSignInScreen({super.key});
+  const ChatSignInScreen({this.isLocalMode = false, super.key});
+
+  final bool isLocalMode;
 
   @override
   Widget build(BuildContext context) {
@@ -28,7 +30,9 @@ class ChatSignInScreen extends StatelessWidget {
               ),
               const SizedBox(height: 8),
               Text(
-                'End-to-end encrypted 1:1 messaging.\nSign in with your Gmail account to start.',
+                isLocalMode
+                    ? 'Chat needs Google sign-in even when vault is local-only.\nSign in with your Gmail account to continue.'
+                    : 'End-to-end encrypted 1:1 messaging.\nSign in with your Gmail account to start.',
                 style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                       color: Colors.grey[600],
                     ),

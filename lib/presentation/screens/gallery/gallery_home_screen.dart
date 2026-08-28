@@ -2,10 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../application/services/import_manager.dart';
-import '../../../domain/entities/vault_photo.dart';
-import '../../../domain/entities/user_mode.dart';
-import '../../../domain/repositories/photo_repository.dart';
+import '../../../application/services/pin_validator.dart';
 import '../../../application/services/vault_session.dart';
+import '../../../application/usecases/export_photo_usecase.dart';
+import '../../../application/usecases/unlock_vault_usecase.dart';
+import '../../../domain/entities/user_mode.dart';
+import '../../../domain/entities/vault_photo.dart';
+import '../../../domain/repositories/photo_repository.dart';
+import '../../widgets/pin_reauth_dialog.dart';
 import '../import/import_screen.dart';
 
 /// Screen 8: Gallery home — empty state.
@@ -20,6 +24,9 @@ class GalleryHomeScreen extends StatelessWidget {
     required this.importManager,
     required this.photoSyncEnabled,
     this.vaultSession,
+    this.exportPhotoUseCase,
+    this.unlockVaultUseCase,
+    this.pinValidator,
     super.key,
   });
   final UserMode mode;
@@ -27,6 +34,9 @@ class GalleryHomeScreen extends StatelessWidget {
   final ImportManager importManager;
   final bool photoSyncEnabled;
   final VaultSession? vaultSession;
+  final ExportPhotoUseCase? exportPhotoUseCase;
+  final UnlockVaultUseCase? unlockVaultUseCase;
+  final PinValidator? pinValidator;
 
   @override
   Widget build(BuildContext context) {
@@ -56,6 +66,9 @@ class GalleryHomeScreen extends StatelessWidget {
         importManager: importManager,
         photoSyncEnabled: photoSyncEnabled,
         vaultSession: vaultSession,
+        exportPhotoUseCase: exportPhotoUseCase,
+        unlockVaultUseCase: unlockVaultUseCase,
+        pinValidator: pinValidator,
       ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () {
@@ -74,11 +87,17 @@ class _GalleryBody extends StatefulWidget {
     required this.importManager,
     required this.photoSyncEnabled,
     this.vaultSession,
+    this.exportPhotoUseCase,
+    this.unlockVaultUseCase,
+    this.pinValidator,
   });
   final PhotoRepository photoRepository;
   final ImportManager importManager;
   final bool photoSyncEnabled;
   final VaultSession? vaultSession;
+  final ExportPhotoUseCase? exportPhotoUseCase;
+  final UnlockVaultUseCase? unlockVaultUseCase;
+  final PinValidator? pinValidator;
 
   @override
   State<_GalleryBody> createState() => _GalleryBodyState();
@@ -165,6 +184,63 @@ class _GalleryBodyState extends State<_GalleryBody> {
       _selectedIds.clear();
       _isSelectionMode = false;
     });
+  }
+
+  Future<void> _exportSelected() async {
+    if (_selectedIds.isEmpty || widget.exportPhotoUseCase == null) return;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Export ${_selectedIds.length} photo(s)?'),
+        content: const Text(
+          'This will export plaintext photos to your Downloads folder (PhotoVault_Exports). Continue?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Export'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true || !mounted) return;
+
+    if (widget.unlockVaultUseCase != null && widget.pinValidator != null) {
+      final allowed = await requirePinReauth(
+        context: context,
+        unlockVaultUseCase: widget.unlockVaultUseCase!,
+        pinValidator: widget.pinValidator!,
+        actionLabel: 'export selected photos',
+      );
+      if (!allowed || !mounted) return;
+    }
+
+    final selectedPhotos =
+        _photos.where((p) => _selectedIds.contains(p.id)).toList();
+    _exitSelectionMode();
+
+    int successCount = 0;
+    for (final photo in selectedPhotos) {
+      try {
+        await widget.exportPhotoUseCase!.execute(photo);
+        successCount++;
+      } catch (e) {
+        debugPrint('Failed to export photo ${photo.id}: $e');
+      }
+    }
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Exported $successCount photo(s) to Downloads folder'),
+      ),
+    );
   }
 
   Future<void> _deleteSelected() async {
@@ -290,6 +366,12 @@ class _GalleryBodyState extends State<_GalleryBody> {
               onPressed: _exitSelectionMode,
             ),
             actions: [
+              if (widget.exportPhotoUseCase != null)
+                IconButton(
+                  icon: const Icon(Icons.file_download_outlined),
+                  onPressed: _exportSelected,
+                  tooltip: 'Export selected',
+                ),
               IconButton(
                 icon: const Icon(Icons.delete_outline),
                 onPressed: _deleteSelected,
