@@ -4,6 +4,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:intl/intl.dart';
 
 import '../../../domain/entities/chat_user.dart';
+import '../../../core/widgets/main_scaffold_scope.dart';
 import '../../state/chat/thread_list_cubit.dart';
 import 'new_chat_screen.dart';
 import 'thread_screen.dart';
@@ -30,6 +31,10 @@ class _ChatListScreenState extends State<ChatListScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Chats'),
+        leading: IconButton(
+          icon: const Icon(Icons.menu),
+          onPressed: () => openAppNavigationDrawer(context),
+        ),
         actions: [
           IconButton(
             icon: const Icon(Icons.edit_outlined),

@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../../core/widgets/main_scaffold_scope.dart';
+
 class FilesScreen extends StatelessWidget {
   const FilesScreen({super.key});
 
@@ -10,9 +12,7 @@ class FilesScreen extends StatelessWidget {
         title: const Text('Encrypted Files'),
         leading: IconButton(
           icon: const Icon(Icons.menu),
-          onPressed: () {
-            Scaffold.of(context).openDrawer();
-          },
+          onPressed: () => openAppNavigationDrawer(context),
         ),
       ),
       body: Center(

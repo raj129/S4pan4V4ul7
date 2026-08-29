@@ -11,6 +11,7 @@ import '../../../domain/entities/vault_photo.dart';
 import '../../../domain/repositories/photo_repository.dart';
 import '../../widgets/confirm_dialog.dart';
 import '../../widgets/pin_reauth_dialog.dart';
+import '../../../core/widgets/main_scaffold_scope.dart';
 import '../import/import_screen.dart';
 
 /// Screen 8: Gallery home — empty state.
@@ -46,9 +47,7 @@ class GalleryHomeScreen extends StatelessWidget {
         title: const Text('Photos'),
         leading: IconButton(
           icon: const Icon(Icons.menu),
-          onPressed: () {
-            Scaffold.of(context).openDrawer();
-          },
+          onPressed: () => openAppNavigationDrawer(context),
         ),
         actions: [
           if (mode == UserMode.googleEnabled)
