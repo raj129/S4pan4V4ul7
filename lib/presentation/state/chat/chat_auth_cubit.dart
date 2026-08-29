@@ -78,18 +78,14 @@ class ChatAuthCubit extends Cubit<ChatAuthState> {
   }
 
   Future<void> checkSession() async {
-    if (authService.isSignedIn) {
-      emit(const ChatAuthLoading());
-      try {
-        final user = await authService.ensureSignedIn(
-          allowInteractiveSignIn: false,
-        );
-        await presenceService.activate();
-        emit(ChatAuthAuthenticated(user));
-      } catch (_) {
-        emit(const ChatAuthUnauthenticated());
-      }
-    } else {
+    emit(const ChatAuthLoading());
+    try {
+      final user = await authService.ensureSignedIn(
+        allowInteractiveSignIn: false,
+      );
+      await presenceService.activate();
+      emit(ChatAuthAuthenticated(user));
+    } catch (_) {
       emit(const ChatAuthUnauthenticated());
     }
   }

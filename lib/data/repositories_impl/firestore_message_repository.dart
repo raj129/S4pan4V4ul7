@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:uuid/uuid.dart';
 
@@ -8,9 +9,13 @@ import '../../domain/entities/chat_message.dart';
 import '../../domain/repositories/message_repository.dart';
 
 class FirestoreMessageRepository implements MessageRepository {
-  FirestoreMessageRepository({
-    FirebaseFirestore? firestore,
-  }) : _db = firestore ?? FirebaseFirestore.instance;
+  FirestoreMessageRepository({FirebaseFirestore? firestore})
+    : _db =
+          firestore ??
+          FirebaseFirestore.instanceFor(
+            app: Firebase.app(),
+            databaseId: 'default1',
+          );
 
   final FirebaseFirestore _db;
   final _uuid = const Uuid();
@@ -48,8 +53,11 @@ class FirestoreMessageRepository implements MessageRepository {
         .orderBy('sentAt', descending: true)
         .limit(30)
         .snapshots()
-        .map((snap) =>
-            snap.docs.map((d) => ChatMessage.fromFirestore(d.data())).toList());
+        .map(
+          (snap) => snap.docs
+              .map((d) => ChatMessage.fromFirestore(d.data()))
+              .toList(),
+        );
   }
 
   @override
@@ -102,7 +110,7 @@ class FirestoreMessageRepository implements MessageRepository {
 
 class FirebaseMediaRepository implements MediaRepository {
   FirebaseMediaRepository({FirebaseStorage? storage})
-      : _storage = storage ?? FirebaseStorage.instance;
+    : _storage = storage ?? FirebaseStorage.instance;
 
   final FirebaseStorage _storage;
 

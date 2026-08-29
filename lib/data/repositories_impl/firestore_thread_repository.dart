@@ -1,11 +1,17 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_core/firebase_core.dart';
 
 import '../../domain/entities/chat_thread.dart';
 import '../../domain/repositories/thread_repository.dart';
 
 class FirestoreThreadRepository implements ThreadRepository {
   FirestoreThreadRepository({FirebaseFirestore? firestore})
-      : _db = firestore ?? FirebaseFirestore.instance;
+    : _db =
+          firestore ??
+          FirebaseFirestore.instanceFor(
+            app: Firebase.app(),
+            databaseId: 'default1',
+          );
 
   final FirebaseFirestore _db;
 
@@ -45,8 +51,10 @@ class FirestoreThreadRepository implements ThreadRepository {
         .where('participantIds', arrayContains: uid)
         .orderBy('lastMessageAt', descending: true)
         .snapshots()
-        .map((snap) =>
-            snap.docs.map((d) => ChatThread.fromFirestore(d.data())).toList());
+        .map(
+          (snap) =>
+              snap.docs.map((d) => ChatThread.fromFirestore(d.data())).toList(),
+        );
   }
 
   @override

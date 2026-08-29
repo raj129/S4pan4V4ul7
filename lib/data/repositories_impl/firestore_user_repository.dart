@@ -1,15 +1,22 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_core/firebase_core.dart';
 
 import '../../domain/entities/chat_user.dart';
 import '../../domain/repositories/user_repository.dart';
 
 class FirestoreUserRepository implements UserRepository {
   FirestoreUserRepository({FirebaseFirestore? firestore})
-      : _db = firestore ?? FirebaseFirestore.instance;
+    : _db =
+          firestore ??
+          FirebaseFirestore.instanceFor(
+            app: Firebase.app(),
+            databaseId: 'default1',
+          );
 
   final FirebaseFirestore _db;
 
-  CollectionReference<Map<String, dynamic>> get _users => _db.collection('users');
+  CollectionReference<Map<String, dynamic>> get _users =>
+      _db.collection('users');
 
   @override
   Future<void> upsertProfile(ChatUser user) async {
