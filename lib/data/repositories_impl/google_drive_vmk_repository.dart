@@ -1,6 +1,5 @@
 import 'dart:convert';
 import 'package:googleapis/drive/v3.dart' as drive;
-import 'package:http/http.dart' as http;
 import '../../domain/repositories/auth_repository.dart';
 import '../../domain/repositories/vmk_backup_repository.dart';
 
@@ -40,17 +39,11 @@ class GoogleDriveVmkRepository implements VmkBackupRepository {
     
     Map<String, dynamic> data = {};
     if (existingFile != null) {
-      final media = await api.files.get(
-        existingFile.id!,
-        downloadOptions: drive.DownloadOptions.metadata,
-      ) as drive.Media; // Wait, drive.DownloadOptions.fullMedia is needed
-      
-      // Correct way to download
       final drive.Media download = await api.files.get(
         existingFile.id!,
         downloadOptions: drive.DownloadOptions.fullMedia,
       ) as drive.Media;
-      
+
       final content = await utf8.decodeStream(download.stream);
       data = jsonDecode(content) as Map<String, dynamic>;
     }

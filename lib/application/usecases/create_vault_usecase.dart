@@ -157,14 +157,3 @@ class CreateVaultUseCase {
   }
 }
 
-extension _VaultSettingsCopyWith on VaultSettings {
-  VaultSettings copyWith({bool? photoSyncEnabled}) {
-    return VaultSettings(
-      mode: mode,
-      appLockOnOpen: appLockOnOpen,
-      autoLockOnBackground: autoLockOnBackground,
-      photoSyncEnabled: photoSyncEnabled ?? this.photoSyncEnabled,
-      vmkBackupEnabled: vmkBackupEnabled,
-    );
-  }
-}

@@ -68,9 +68,7 @@ class VaultApp extends StatefulWidget {
 }
 
 class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
-  static const _defaultSecureStorage = FlutterSecureStorage(
-    aOptions: AndroidOptions(encryptedSharedPreferences: true),
-  );
+  static const _defaultSecureStorage = FlutterSecureStorage();
   late final _vaultRepository = widget.persistentState
       ? PersistentVaultRepository(FlutterSecureStringKv(_defaultSecureStorage))
       : InMemoryVaultRepository();

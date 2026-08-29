@@ -41,11 +41,6 @@ class FirebaseAuthRepository implements AuthRepository {
 
       final accessToken = authorization.accessToken;
       final idToken = googleAuth.idToken;
-      if (accessToken == null && idToken == null) {
-        throw const AuthException(
-          'Google did not return an authentication token.',
-        );
-      }
 
       final AuthCredential credential = GoogleAuthProvider.credential(
         accessToken: accessToken,

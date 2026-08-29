@@ -9,6 +9,7 @@ import '../../../application/usecases/unlock_vault_usecase.dart';
 import '../../../domain/entities/user_mode.dart';
 import '../../../domain/entities/vault_photo.dart';
 import '../../../domain/repositories/photo_repository.dart';
+import '../../widgets/confirm_dialog.dart';
 import '../../widgets/pin_reauth_dialog.dart';
 import '../import/import_screen.dart';
 
@@ -189,27 +190,15 @@ class _GalleryBodyState extends State<_GalleryBody> {
   Future<void> _exportSelected() async {
     if (_selectedIds.isEmpty || widget.exportPhotoUseCase == null) return;
 
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text('Export ${_selectedIds.length} photo(s)?'),
-        content: const Text(
+    final confirmed = await showConfirmDialog(
+      context,
+      title: 'Export ${_selectedIds.length} photo(s)?',
+      content:
           'This will export plaintext photos to your Downloads folder (PhotoVault_Exports). Continue?',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Export'),
-          ),
-        ],
-      ),
+      confirmLabel: 'Export',
     );
 
-    if (confirmed != true || !mounted) return;
+    if (!confirmed || !mounted) return;
 
     if (widget.unlockVaultUseCase != null && widget.pinValidator != null) {
       final allowed = await requirePinReauth(
@@ -246,25 +235,14 @@ class _GalleryBodyState extends State<_GalleryBody> {
   Future<void> _deleteSelected() async {
     if (_selectedIds.isEmpty) return;
 
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text('Delete ${_selectedIds.length} photos?'),
-        content: const Text('These photos will be moved to Secure Trash.'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Delete'),
-          ),
-        ],
-      ),
+    final confirmed = await showConfirmDialog(
+      context,
+      title: 'Delete ${_selectedIds.length} photos?',
+      content: 'These photos will be moved to Secure Trash.',
+      confirmLabel: 'Delete',
     );
 
-    if (confirmed != true) return;
+    if (!confirmed) return;
 
     final idsToDelete = _selectedIds.toList();
     _exitSelectionMode();
@@ -287,24 +265,13 @@ class _GalleryBodyState extends State<_GalleryBody> {
   }
 
   Future<void> _delete(VaultPhoto photo) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Delete photo?'),
-        content: const Text('This photo will be moved to Secure Trash.'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Delete'),
-          ),
-        ],
-      ),
+    final confirmed = await showConfirmDialog(
+      context,
+      title: 'Delete photo?',
+      content: 'This photo will be moved to Secure Trash.',
+      confirmLabel: 'Delete',
     );
-    if (confirmed != true) return;
+    if (!confirmed) return;
     final expiry = DateTime.now()
         .add(const Duration(days: 30))
         .millisecondsSinceEpoch;
@@ -325,7 +292,6 @@ class _GalleryBodyState extends State<_GalleryBody> {
 
   @override
   Widget build(BuildContext context) {
-    final progress = widget.importManager.progress;
     if (_loading) {
       return const Center(child: CircularProgressIndicator());
     }
@@ -456,7 +422,10 @@ class _GalleryBodyState extends State<_GalleryBody> {
                     if (isSelected)
                       Container(
                         decoration: BoxDecoration(
-                          color: Theme.of(context).colorScheme.primary.withOpacity(0.3),
+                          color: Theme.of(context)
+                              .colorScheme
+                              .primary
+                              .withValues(alpha: 0.3),
                           borderRadius: BorderRadius.circular(8),
                         ),
                       ),

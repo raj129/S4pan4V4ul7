@@ -10,6 +10,7 @@ import '../../../application/services/pin_validator.dart';
 import '../../../application/services/vault_session.dart';
 import '../../../domain/entities/vault_photo.dart';
 import '../../../domain/repositories/photo_repository.dart';
+import '../../widgets/confirm_dialog.dart';
 import '../../widgets/pin_reauth_dialog.dart';
 
 /// Full-screen photo viewer with zoom/pan capability.
@@ -112,7 +113,7 @@ class _GalleryPhotoViewerScreenState extends State<GalleryPhotoViewerScreen> {
     return Scaffold(
       backgroundColor: Colors.black,
       appBar: AppBar(
-        backgroundColor: Colors.black.withOpacity(0.5),
+        backgroundColor: Colors.black.withValues(alpha: 0.5),
         foregroundColor: Colors.white,
         elevation: 0,
         leading: IconButton(
@@ -225,9 +226,9 @@ class _GalleryPhotoViewerScreenState extends State<GalleryPhotoViewerScreen> {
       final x = -localPosition.dx * 1.5;
       final y = -localPosition.dy * 1.5;
       final zoomed = Matrix4.identity()
-        ..translate(x, y)
-        ..scale(2.5);
-      
+        ..translateByDouble(x, y, 0, 1.0)
+        ..scaleByDouble(2.5, 2.5, 1.0, 1.0);
+
       setState(() {
         _transformationController.value = zoomed;
       });
@@ -242,26 +243,14 @@ class _GalleryPhotoViewerScreenState extends State<GalleryPhotoViewerScreen> {
   }
 
   Future<void> _exportPhoto(BuildContext context) async {
-    final approved = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Export decrypted photo?'),
-        content: const Text(
+    final approved = await showConfirmDialog(
+      context,
+      title: 'Export decrypted photo?',
+      content:
           'This will export plaintext outside the vault. Continue only if you trust the destination.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Continue'),
-          ),
-        ],
-      ),
+      confirmLabel: 'Continue',
     );
-    if (approved != true || !context.mounted) return;
+    if (!approved || !context.mounted) return;
 
     final allowed = await requirePinReauth(
       context: context,
@@ -273,7 +262,7 @@ class _GalleryPhotoViewerScreenState extends State<GalleryPhotoViewerScreen> {
 
     try {
       final path = await widget.exportPhotoUseCase.execute(widget.photo);
-      if (!mounted) return;
+      if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('Photo exported to Downloads: ${path.split('/').last}'),
@@ -281,7 +270,7 @@ class _GalleryPhotoViewerScreenState extends State<GalleryPhotoViewerScreen> {
         ),
       );
     } catch (e) {
-      if (!mounted) return;
+      if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Failed to export photo: $e')),
       );
@@ -289,24 +278,13 @@ class _GalleryPhotoViewerScreenState extends State<GalleryPhotoViewerScreen> {
   }
 
   Future<void> _confirmDelete(BuildContext context) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Delete photo?'),
-        content: const Text('This photo will be moved to Secure Trash.'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Delete'),
-          ),
-        ],
-      ),
+    final confirmed = await showConfirmDialog(
+      context,
+      title: 'Delete photo?',
+      content: 'This photo will be moved to Secure Trash.',
+      confirmLabel: 'Delete',
     );
-    if (confirmed != true || !context.mounted) return;
+    if (!confirmed || !context.mounted) return;
     final expiry = DateTime.now()
         .add(const Duration(days: 30))
         .millisecondsSinceEpoch;

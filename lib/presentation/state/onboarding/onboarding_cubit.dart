@@ -54,9 +54,9 @@ class OnboardingCubit extends Cubit<OnboardingState> {
       emit(OnboardingGoogleSignInSuccess(email: result.email));
       if (_restoreFlowService != null) {
         try {
-          final hasBackup = await _restoreFlowService!.hasBackupManifest();
+          final hasBackup = await _restoreFlowService.hasBackupManifest();
           if (hasBackup) {
-            await _restoreFlowService!.restoreEncryptedVmk();
+            await _restoreFlowService.restoreEncryptedVmk();
           }
         } catch (_) {
           // VMK backup not found or restore failed — seamlessly fall back to new vault setup.

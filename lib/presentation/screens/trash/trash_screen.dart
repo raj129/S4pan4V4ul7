@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../../../domain/entities/vault_photo.dart';
 import '../../../domain/repositories/photo_repository.dart';
 import '../../../application/services/import_manager.dart';
+import '../../widgets/confirm_dialog.dart';
 
 class TrashScreen extends StatefulWidget {
   const TrashScreen({
@@ -69,25 +70,14 @@ class _TrashScreenState extends State<TrashScreen> {
   Future<void> _restoreSelected() async {
     if (_selectedIds.isEmpty) return;
 
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text('Restore ${_selectedIds.length} photos?'),
-        content: const Text('These photos will be moved back to the Gallery.'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Restore'),
-          ),
-        ],
-      ),
+    final confirmed = await showConfirmDialog(
+      context,
+      title: 'Restore ${_selectedIds.length} photos?',
+      content: 'These photos will be moved back to the Gallery.',
+      confirmLabel: 'Restore',
     );
 
-    if (confirmed != true) return;
+    if (!confirmed) return;
 
     final idsToRestore = _selectedIds.toList();
     _exitSelectionMode();
@@ -104,25 +94,14 @@ class _TrashScreenState extends State<TrashScreen> {
   Future<void> _permanentlyDeleteSelected() async {
     if (_selectedIds.isEmpty) return;
 
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text('Permanently delete ${_selectedIds.length} photos?'),
-        content: const Text('This action cannot be undone.'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Delete'),
-          ),
-        ],
-      ),
+    final confirmed = await showConfirmDialog(
+      context,
+      title: 'Permanently delete ${_selectedIds.length} photos?',
+      content: 'This action cannot be undone.',
+      confirmLabel: 'Delete',
     );
 
-    if (confirmed != true) return;
+    if (!confirmed) return;
 
     final idsToDelete = _selectedIds.toList();
     _exitSelectionMode();
@@ -137,24 +116,13 @@ class _TrashScreenState extends State<TrashScreen> {
   }
 
   Future<void> _restore(VaultPhoto photo) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Restore photo?'),
-        content: const Text('This photo will be moved back to the Gallery.'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Restore'),
-          ),
-        ],
-      ),
+    final confirmed = await showConfirmDialog(
+      context,
+      title: 'Restore photo?',
+      content: 'This photo will be moved back to the Gallery.',
+      confirmLabel: 'Restore',
     );
-    if (confirmed != true) return;
+    if (!confirmed) return;
 
     await widget.photoRepository.restoreFromTrash(photo.id);
     widget.importManager.notifyGalleryChanged();
@@ -165,24 +133,13 @@ class _TrashScreenState extends State<TrashScreen> {
   }
 
   Future<void> _permanentlyDelete(VaultPhoto photo) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Permanently delete?'),
-        content: const Text('This action cannot be undone.'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Delete'),
-          ),
-        ],
-      ),
+    final confirmed = await showConfirmDialog(
+      context,
+      title: 'Permanently delete?',
+      content: 'This action cannot be undone.',
+      confirmLabel: 'Delete',
     );
-    if (confirmed != true) return;
+    if (!confirmed) return;
     await widget.photoRepository.permanentlyDelete(photo.id);
     _loadTrash();
   }
@@ -222,24 +179,14 @@ class _TrashScreenState extends State<TrashScreen> {
                 if (_trashedPhotos.isNotEmpty)
                   TextButton(
                     onPressed: () async {
-                      final confirmed = await showDialog<bool>(
-                        context: context,
-                        builder: (context) => AlertDialog(
-                          title: const Text('Empty Bin?'),
-                          content: const Text('All photos in the Bin will be permanently deleted.'),
-                          actions: [
-                            TextButton(
-                              onPressed: () => Navigator.of(context).pop(false),
-                              child: const Text('Cancel'),
-                            ),
-                            FilledButton(
-                              onPressed: () => Navigator.of(context).pop(true),
-                              child: const Text('Empty'),
-                            ),
-                          ],
-                        ),
+                      final confirmed = await showConfirmDialog(
+                        context,
+                        title: 'Empty Bin?',
+                        content:
+                            'All photos in the Bin will be permanently deleted.',
+                        confirmLabel: 'Empty',
                       );
-                      if (confirmed == true) {
+                      if (confirmed) {
                         await widget.photoRepository.permanentlyDeletePhotos(
                           _trashedPhotos.map((p) => p.id).toList(),
                         );
@@ -331,7 +278,10 @@ class _TrashScreenState extends State<TrashScreen> {
                           if (isSelected)
                             Container(
                               decoration: BoxDecoration(
-                                color: Theme.of(context).colorScheme.primary.withOpacity(0.3),
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .primary
+                                    .withValues(alpha: 0.3),
                                 borderRadius: BorderRadius.circular(8),
                               ),
                             ),
