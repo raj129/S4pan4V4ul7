@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:photo_vault/presentation/features/calculator/calculator_feature.dart';
+import 'package:photo_vault/features/calculator/calculator.dart';
 import 'package:photo_vault/presentation/features/utility_shell/utility_shell.dart';
 
 void main() {
@@ -19,7 +19,7 @@ void main() {
 
     expect(find.text('Calculator'), findsOneWidget);
     expect(find.text('7'), findsOneWidget);
-    expect(find.text('C'), findsOneWidget);
+    expect(find.text('AC'), findsOneWidget);
     expect(find.text('Private vault entry'), findsNothing);
     expect(
       find.text('Hold 7 and = together to open the passcode screen.'),
