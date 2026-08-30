@@ -65,7 +65,7 @@ dependencies:
   firebase_auth: ^6.6.1
   firebase_crashlytics: ^5.2.6
   cloud_firestore: ^6.7.1
-  firebase_storage: ^13.4.5
+  firebase_storage: ^13.5.0
   google_sign_in: ^7.2.0
   googleapis: ^16.0.0
   googleapis_auth: ^2.3.3
