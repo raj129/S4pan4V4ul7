@@ -32,11 +32,17 @@ class _MainScaffoldState extends State<MainScaffold> {
   void _openDrawer() => _scaffoldKey.currentState?.openDrawer();
 
   void _onDestinationSelected(int index) {
+    if (index == 4) {
+      Navigator.of(context).pop();
+      context.go('/settings');
+      return;
+    }
+
     widget.navigationShell.goBranch(
       index,
       initialLocation: index == widget.navigationShell.currentIndex,
     );
-    Navigator.of(context).pop(); // Close drawer
+    Navigator.of(context).pop();
   }
 
   @override

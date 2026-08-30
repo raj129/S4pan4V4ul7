@@ -3,6 +3,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../../application/services/pin_validator.dart';
 import '../../../application/usecases/unlock_vault_usecase.dart';
+import '../../../core/widgets/base_screen_shell.dart';
 import '../../../domain/entities/user_mode.dart';
 import '../../../domain/repositories/settings_repository.dart';
 import '../../widgets/pin_reauth_dialog.dart';
@@ -63,8 +64,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Settings')),
+    return BaseScreenShell(
+      title: 'Settings',
+      drawerSelectedIndex: 4,
       body: ListView(
         children: [
           const _SectionHeader('Security'),

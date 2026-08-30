@@ -306,7 +306,8 @@ class _CalculatorFeatureState extends State<CalculatorFeature> {
                   onToggleSign: _toggleSign,
                   onTriggerPressStart: _handleTriggerPressStart,
                   onTriggerPressEnd: _handleTriggerPressEnd,
-                  triggerActive: _holdingSeven || _holdingEquals,
+                  sevenHighlighted: _holdingSeven,
+                  equalsHighlighted: _holdingEquals,
                 ),
               ],
             ),
@@ -331,7 +332,8 @@ class _CalculatorKeypad extends StatelessWidget {
     required this.onToggleSign,
     required this.onTriggerPressStart,
     required this.onTriggerPressEnd,
-    required this.triggerActive,
+    required this.sevenHighlighted,
+    required this.equalsHighlighted,
     required this.isCompact,
   });
 
@@ -345,7 +347,8 @@ class _CalculatorKeypad extends StatelessWidget {
   final VoidCallback onToggleSign;
   final ValueChanged<_TriggerKey> onTriggerPressStart;
   final ValueChanged<_TriggerKey> onTriggerPressEnd;
-  final bool triggerActive;
+  final bool sevenHighlighted;
+  final bool equalsHighlighted;
   final bool isCompact;
 
   @override
@@ -405,7 +408,7 @@ class _CalculatorKeypad extends StatelessWidget {
                 triggerKey: _TriggerKey.seven,
                 onHoldStart: () => onTriggerPressStart(_TriggerKey.seven),
                 onHoldEnd: () => onTriggerPressEnd(_TriggerKey.seven),
-                highlighted: triggerActive,
+                highlighted: sevenHighlighted,
               ),
             ),
             const SizedBox(width: 8),
@@ -535,7 +538,7 @@ class _CalculatorKeypad extends StatelessWidget {
                 onTap: onEqualsTap,
                 onHoldStart: () => onTriggerPressStart(_TriggerKey.equals),
                 onHoldEnd: () => onTriggerPressEnd(_TriggerKey.equals),
-                highlighted: triggerActive,
+                highlighted: equalsHighlighted,
                 height: keyHeight,
                 accent: true,
               ),

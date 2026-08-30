@@ -13,7 +13,7 @@ class AppNavigationDrawer extends StatelessWidget {
   });
 
   /// Index of the currently active top-level destination (Photos, Chat,
-  /// Bin, Files).
+  /// Bin, Files, Settings).
   final int selectedIndex;
 
   final ValueChanged<int> onDestinationSelected;
@@ -47,6 +47,11 @@ class AppNavigationDrawer extends StatelessWidget {
           icon: Icon(Icons.folder_open_outlined),
           selectedIcon: Icon(Icons.folder_open),
           label: Text('Files'),
+        ),
+        NavigationDrawerDestination(
+          icon: Icon(Icons.settings_outlined),
+          selectedIcon: Icon(Icons.settings),
+          label: Text('Settings'),
         ),
       ],
     );

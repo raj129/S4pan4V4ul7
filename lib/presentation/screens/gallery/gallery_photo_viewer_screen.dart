@@ -25,6 +25,9 @@ class GalleryPhotoViewerScreen extends StatefulWidget {
     required this.exportPhotoUseCase,
     required this.unlockVaultUseCase,
     required this.pinValidator,
+    this.isTrashPreview = false,
+    this.onRestore,
+    this.onPermanentlyDelete,
     super.key,
   });
 
@@ -34,6 +37,9 @@ class GalleryPhotoViewerScreen extends StatefulWidget {
   final ExportPhotoUseCase exportPhotoUseCase;
   final UnlockVaultUseCase unlockVaultUseCase;
   final PinValidator pinValidator;
+  final bool isTrashPreview;
+  final Future<void> Function()? onRestore;
+  final Future<void> Function()? onPermanentlyDelete;
 
   @override
   State<GalleryPhotoViewerScreen> createState() =>
@@ -121,21 +127,34 @@ class _GalleryPhotoViewerScreenState extends State<GalleryPhotoViewerScreen> {
           onPressed: () => context.pop(),
         ),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.file_download_outlined),
-            onPressed: () => _exportPhoto(context),
-            tooltip: 'Export to Downloads',
-          ),
-          IconButton(
-            icon: const Icon(Icons.info_outlined),
-            onPressed: () => _showPhotoInfo(context),
-            tooltip: 'Photo info',
-          ),
-          IconButton(
-            icon: const Icon(Icons.delete_outline),
-            onPressed: () => _confirmDelete(context),
-            tooltip: 'Delete',
-          ),
+          if (widget.isTrashPreview) ...[
+            IconButton(
+              icon: const Icon(Icons.restore_outlined),
+              onPressed: () => _restoreFromTrash(context),
+              tooltip: 'Restore',
+            ),
+            IconButton(
+              icon: const Icon(Icons.delete_forever_outlined),
+              onPressed: () => _permanentlyDeleteFromTrash(context),
+              tooltip: 'Delete permanently',
+            ),
+          ] else ...[
+            IconButton(
+              icon: const Icon(Icons.file_download_outlined),
+              onPressed: () => _exportPhoto(context),
+              tooltip: 'Export to Downloads',
+            ),
+            IconButton(
+              icon: const Icon(Icons.info_outlined),
+              onPressed: () => _showPhotoInfo(context),
+              tooltip: 'Photo info',
+            ),
+            IconButton(
+              icon: const Icon(Icons.delete_outline),
+              onPressed: () => _confirmDelete(context),
+              tooltip: 'Delete',
+            ),
+          ],
         ],
       ),
       extendBodyBehindAppBar: true,
@@ -162,7 +181,9 @@ class _GalleryPhotoViewerScreenState extends State<GalleryPhotoViewerScreen> {
             Text(
               _error ?? 'Failed to load photo',
               textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: Colors.white),
+              style: Theme.of(
+                context,
+              ).textTheme.bodyMedium?.copyWith(color: Colors.white),
             ),
           ],
         ),
@@ -170,7 +191,9 @@ class _GalleryPhotoViewerScreenState extends State<GalleryPhotoViewerScreen> {
     }
 
     if (_photoBytes == null) {
-      return const Center(child: Text('No photo data', style: TextStyle(color: Colors.white)));
+      return const Center(
+        child: Text('No photo data', style: TextStyle(color: Colors.white)),
+      );
     }
 
     return LayoutBuilder(
@@ -271,9 +294,9 @@ class _GalleryPhotoViewerScreenState extends State<GalleryPhotoViewerScreen> {
       );
     } catch (e) {
       if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to export photo: $e')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Failed to export photo: $e')));
     }
   }
 
@@ -295,6 +318,30 @@ class _GalleryPhotoViewerScreenState extends State<GalleryPhotoViewerScreen> {
     widget.importManager.notifyGalleryChanged();
     if (!context.mounted) return;
     context.pop();
+  }
+
+  Future<void> _restoreFromTrash(BuildContext context) async {
+    if (widget.onRestore == null) return;
+    final confirmed = await showConfirmDialog(
+      context,
+      title: 'Restore photo?',
+      content: 'This photo will be moved back to the gallery.',
+      confirmLabel: 'Restore',
+    );
+    if (!confirmed || !context.mounted) return;
+    await widget.onRestore!();
+  }
+
+  Future<void> _permanentlyDeleteFromTrash(BuildContext context) async {
+    if (widget.onPermanentlyDelete == null) return;
+    final confirmed = await showConfirmDialog(
+      context,
+      title: 'Delete permanently?',
+      content: 'This action cannot be undone.',
+      confirmLabel: 'Delete',
+    );
+    if (!confirmed || !context.mounted) return;
+    await widget.onPermanentlyDelete!();
   }
 }
 

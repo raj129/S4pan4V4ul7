@@ -215,10 +215,8 @@ GoRoute _galleryRoute(AppDependencies deps, AppSessionState session) {
 GoRoute _chatRoute(AppDependencies deps, AppSessionState session) {
   return GoRoute(
     path: '/chat',
-    builder: (context, state) => ChatApp(
-      authRepository: deps.authRepository,
-      userMode: session.mode,
-    ),
+    builder: (context, state) =>
+        ChatApp(authRepository: deps.authRepository, userMode: session.mode),
   );
 }
 
@@ -229,6 +227,40 @@ GoRoute _trashRoute(AppDependencies deps) {
       photoRepository: deps.photoRepository,
       importManager: deps.importManager,
     ),
+    routes: [
+      GoRoute(
+        path: 'photo',
+        builder: (context, state) {
+          final photo = state.extra as VaultPhoto?;
+          if (photo == null) {
+            return Scaffold(
+              appBar: AppBar(title: const Text('Error')),
+              body: const Center(child: Text('No photo provided')),
+            );
+          }
+
+          return GalleryPhotoViewerScreen(
+            photo: photo,
+            importManager: deps.importManager,
+            photoRepository: deps.photoRepository,
+            exportPhotoUseCase: deps.exportPhotoUseCase,
+            unlockVaultUseCase: deps.unlockVaultUseCase,
+            pinValidator: deps.pinValidator,
+            isTrashPreview: true,
+            onRestore: () async {
+              await deps.photoRepository.restoreFromTrash(photo.id);
+              deps.importManager.notifyGalleryChanged();
+              if (context.mounted) context.pop();
+            },
+            onPermanentlyDelete: () async {
+              await deps.photoRepository.permanentlyDelete(photo.id);
+              deps.importManager.notifyGalleryChanged();
+              if (context.mounted) context.pop();
+            },
+          );
+        },
+      ),
+    ],
   );
 }
 

@@ -117,9 +117,8 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
   void _lockSession() {
     _deps.vaultSession.lock();
     _session.lock();
-    final location = _router.routerDelegate.currentConfiguration.uri.toString();
-    final encoded = Uri.encodeComponent(location.isEmpty ? '/gallery' : location);
-    _router.go('/lock?returnTo=$encoded');
+    if (!mounted) return;
+    _router.go('/');
   }
 
   @override

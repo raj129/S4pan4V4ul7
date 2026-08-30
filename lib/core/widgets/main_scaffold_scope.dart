@@ -40,5 +40,9 @@ void openAppNavigationDrawer(BuildContext context) {
     scope.openDrawer();
     return;
   }
-  Scaffold.of(context).openDrawer();
+
+  final scaffold = Scaffold.maybeOf(context);
+  if (scaffold != null) {
+    scaffold.openDrawer();
+  }
 }

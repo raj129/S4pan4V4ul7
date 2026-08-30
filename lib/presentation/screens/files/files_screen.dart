@@ -1,20 +1,15 @@
 import 'package:flutter/material.dart';
 
-import '../../../core/widgets/main_scaffold_scope.dart';
+import '../../../core/widgets/base_screen_shell.dart';
 
 class FilesScreen extends StatelessWidget {
   const FilesScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Encrypted Files'),
-        leading: IconButton(
-          icon: const Icon(Icons.menu),
-          onPressed: () => openAppNavigationDrawer(context),
-        ),
-      ),
+    return BaseScreenShell(
+      title: 'Encrypted Files',
+      drawerSelectedIndex: 3,
       body: Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,

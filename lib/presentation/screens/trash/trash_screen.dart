@@ -1,6 +1,8 @@
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
+
 import '../../../application/services/import_manager.dart';
 import '../../../domain/entities/vault_photo.dart';
 import '../../../domain/repositories/photo_repository.dart';
@@ -53,7 +55,9 @@ class _TrashScreenState extends State<TrashScreen> {
 
   void _showSnack(String message) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 
   Future<void> _restoreSelected() async {
@@ -217,7 +221,10 @@ class _TrashBody extends StatelessWidget {
   Widget build(BuildContext context) {
     if (controller.isLoading) return const LoadingView();
     if (controller.photos.isEmpty) {
-      return const EmptyView(icon: Icons.delete_outline, title: 'Trash is empty');
+      return const EmptyView(
+        icon: Icons.delete_outline,
+        title: 'Trash is empty',
+      );
     }
     return GridView.builder(
       padding: const EdgeInsets.all(8),
@@ -235,10 +242,16 @@ class _TrashBody extends StatelessWidget {
           isSelectionMode: controller.isSelectionMode,
           loadThumbnail: () => controller.loadThumbnail(photo),
           onTap: () {
-            if (controller.isSelectionMode) controller.toggleSelection(photo.id);
+            if (controller.isSelectionMode) {
+              controller.toggleSelection(photo.id);
+              return;
+            }
+            context.push('/trash/photo', extra: photo);
           },
           onLongPress: () {
-            if (!controller.isSelectionMode) controller.toggleSelection(photo.id);
+            if (!controller.isSelectionMode) {
+              controller.toggleSelection(photo.id);
+            }
           },
           onRestore: () => onRestore(photo),
           onPermanentlyDelete: () => onPermanentlyDelete(photo),
@@ -294,7 +307,9 @@ class _TrashTile extends StatelessWidget {
                 if (snapshot.connectionState != ConnectionState.done ||
                     snapshot.data == null) {
                   return Container(
-                    color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                    color: Theme.of(
+                      context,
+                    ).colorScheme.surfaceContainerHighest,
                   );
                 }
                 return Opacity(
@@ -307,7 +322,9 @@ class _TrashTile extends StatelessWidget {
           if (isSelected)
             Container(
               decoration: BoxDecoration(
-                color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.3),
+                color: Theme.of(
+                  context,
+                ).colorScheme.primary.withValues(alpha: 0.3),
                 borderRadius: BorderRadius.circular(8),
               ),
             ),
@@ -327,7 +344,10 @@ class _TrashTile extends StatelessWidget {
                   color: Colors.black54,
                   borderRadius: BorderRadius.circular(4),
                 ),
-                child: Text(daysLeft, style: const TextStyle(color: Colors.white, fontSize: 10)),
+                child: Text(
+                  daysLeft,
+                  style: const TextStyle(color: Colors.white, fontSize: 10),
+                ),
               ),
             ),
           if (!isSelectionMode)
@@ -339,7 +359,10 @@ class _TrashTile extends StatelessWidget {
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   _RoundIconButton(icon: Icons.restore, onPressed: onRestore),
-                  _RoundIconButton(icon: Icons.delete_forever, onPressed: onPermanentlyDelete),
+                  _RoundIconButton(
+                    icon: Icons.delete_forever,
+                    onPressed: onPermanentlyDelete,
+                  ),
                 ],
               ),
             ),
