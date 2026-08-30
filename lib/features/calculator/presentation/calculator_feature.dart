@@ -143,17 +143,19 @@ class _CalculatorFeatureState extends State<CalculatorFeature> {
               ],
             );
 
-            // Portrait mode: stick to bottom with spacer above
+            // Portrait mode: stick to bottom. Reuse the previously-verified
+            // ConstrainedBox(minHeight) + Column pattern (safe inside a
+            // SingleChildScrollView because it doesn't rely on
+            // Spacer/Expanded, which need bounded constraints), and align
+            // content to the end so it sits at the bottom of the viewport.
             if (layoutMode == CalculatorLayoutMode.portraitStickBottom) {
               return SingleChildScrollView(
                 padding: contentPadding,
                 child: ConstrainedBox(
                   constraints: BoxConstraints(minHeight: constraints.maxHeight),
                   child: Column(
-                    children: <Widget>[
-                      Spacer(),
-                      calculatorContent,
-                    ],
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: <Widget>[calculatorContent],
                   ),
                 ),
               );
