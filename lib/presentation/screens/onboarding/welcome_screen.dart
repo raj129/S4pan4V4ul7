@@ -8,8 +8,9 @@ import 'mode_info_sheet.dart';
 
 /// Screen 1: Welcome screen.
 ///
-/// First thing the user sees. Presents the app value proposition and lets
-/// the user choose local-only or Google-enabled mode with a single tap.
+/// First thing the user sees when the user sets up the private vault.
+/// Presents the vault value proposition and lets the user choose local-only
+/// or Google-enabled mode with a single tap.
 class WelcomeScreen extends StatelessWidget {
   const WelcomeScreen({super.key});
 
@@ -31,7 +32,7 @@ class WelcomeScreen extends StatelessWidget {
                 const _AppLogo(),
                 const SizedBox(height: 24),
                 Text(
-                  'Photo Vault',
+                  'Set up your private vault',
                   textAlign: TextAlign.center,
                   style: Theme.of(context).textTheme.headlineLarge?.copyWith(
                     fontWeight: FontWeight.bold,
@@ -39,7 +40,7 @@ class WelcomeScreen extends StatelessWidget {
                 ),
                 const SizedBox(height: 12),
                 Text(
-                  'Securely store encrypted photos on this device.',
+                  'Create a passcode-protected photo vault behind the calculator.',
                   textAlign: TextAlign.center,
                   style: Theme.of(context).textTheme.bodyLarge?.copyWith(
                     color: Theme.of(context).colorScheme.onSurfaceVariant,

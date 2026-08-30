@@ -9,12 +9,16 @@ class LockScreen extends StatefulWidget {
     required this.unlockVaultUseCase,
     required this.pinValidator,
     required this.onUnlocked,
+    this.title = 'Unlock Vault',
+    this.subtitle = 'This PIN is separate from your device PIN.',
     super.key,
   });
 
   final UnlockVaultUseCase unlockVaultUseCase;
   final PinValidator pinValidator;
   final VoidCallback onUnlocked;
+  final String title;
+  final String subtitle;
   @override
   State<LockScreen> createState() => _LockScreenState();
 }
@@ -115,7 +119,7 @@ class _LockScreenState extends State<LockScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Unlock Vault')),
+      appBar: AppBar(title: Text(widget.title)),
       body: Padding(
         padding: const EdgeInsets.all(20),
         child: Column(
@@ -128,7 +132,7 @@ class _LockScreenState extends State<LockScreen> {
             ),
             const SizedBox(height: 8),
             Text(
-              'This PIN is separate from your device PIN.',
+              widget.subtitle,
               style: Theme.of(context).textTheme.bodyMedium,
               textAlign: TextAlign.center,
             ),

@@ -52,13 +52,6 @@ class GalleryHomeScreen extends StatelessWidget {
         actions: [
           if (mode == UserMode.googleEnabled)
             const _BackupStatusBadge(synced: false),
-          IconButton(
-            icon: const Icon(Icons.settings_outlined),
-            tooltip: 'Settings',
-            onPressed: () {
-              context.push('/settings');
-            },
-          ),
         ],
       ),
       body: _GalleryBody(

@@ -21,6 +21,20 @@ class PersistentSettingsRepository implements SettingsRepository {
   }
 
   @override
+  Future<bool> isCalculatorOnboardingCompleted() async {
+    final raw = await _kv.read(StorageKeys.calculatorOnboardingCompleted);
+    return raw == 'true';
+  }
+
+  @override
+  Future<void> setCalculatorOnboardingCompleted(bool completed) {
+    return _kv.write(
+      StorageKeys.calculatorOnboardingCompleted,
+      completed.toString(),
+    );
+  }
+
+  @override
   Future<bool> isPhotoSyncEnabled() async {
     final raw = await _kv.read(StorageKeys.photoSyncEnabled);
     return raw == 'true';

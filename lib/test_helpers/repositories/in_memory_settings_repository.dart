@@ -3,6 +3,7 @@ import '../../domain/repositories/settings_repository.dart';
 
 class InMemorySettingsRepository implements SettingsRepository {
   UserMode? _selectedMode;
+  bool _calculatorOnboardingCompleted = false;
   bool _photoSyncEnabled = false;
   bool _externalStorageMirrorEnabled = true;
   bool _driveEncryptedBackupEnabled = false;
@@ -13,6 +14,15 @@ class InMemorySettingsRepository implements SettingsRepository {
   @override
   Future<void> saveUserMode(UserMode mode) async {
     _selectedMode = mode;
+  }
+
+  @override
+  Future<bool> isCalculatorOnboardingCompleted() async =>
+      _calculatorOnboardingCompleted;
+
+  @override
+  Future<void> setCalculatorOnboardingCompleted(bool completed) async {
+    _calculatorOnboardingCompleted = completed;
   }
 
   @override

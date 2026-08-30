@@ -1,17 +1,30 @@
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:photo_vault/presentation/app/vault_app.dart';
+import 'package:photo_vault/presentation/features/calculator/calculator_feature.dart';
+import 'package:photo_vault/presentation/features/utility_shell/utility_shell.dart';
 
 void main() {
-  testWidgets('Welcome screen renders correct CTAs', (
+  testWidgets('Calculator shell renders without visible vault hints', (
     WidgetTester tester,
   ) async {
-    await tester.pumpWidget(const VaultApp(persistentState: false));
-    // Allow the router redirect to settle.
-    await tester.pumpAndSettle();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: UtilityShell(
+          title: 'Calculator',
+          child: CalculatorFeature(onVaultTriggerRequested: () {}),
+        ),
+      ),
+    );
 
-    expect(find.text('Continue locally'), findsOneWidget);
-    expect(find.text('Sign in with Google'), findsOneWidget);
-    expect(find.text("What's the difference?"), findsOneWidget);
+    expect(find.text('Calculator'), findsOneWidget);
+    expect(find.text('7'), findsOneWidget);
+    expect(find.text('C'), findsOneWidget);
+    expect(find.text('Private vault entry'), findsNothing);
+    expect(
+      find.text('Hold 7 and = together to open the passcode screen.'),
+      findsNothing,
+    );
+    expect(find.byIcon(Icons.settings_outlined), findsNothing);
   });
 }

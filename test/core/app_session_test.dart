@@ -8,6 +8,7 @@ void main() {
       final session = AppSessionState();
       expect(session.isUnlocked, isFalse);
       expect(session.mode, UserMode.localOnly);
+      expect(session.calculatorOnboardingCompleted, isFalse);
       expect(session.photoSyncEnabled, isFalse);
     });
 
@@ -55,5 +56,21 @@ void main() {
       expect(session.mode, UserMode.googleEnabled);
       expect(notifications, 1);
     });
+
+    test(
+      'calculatorOnboardingCompleted setter only notifies when the value changes',
+      () {
+        final session = AppSessionState();
+        var notifications = 0;
+        session.addListener(() => notifications++);
+
+        session.calculatorOnboardingCompleted = false;
+        expect(notifications, 0);
+
+        session.calculatorOnboardingCompleted = true;
+        expect(session.calculatorOnboardingCompleted, isTrue);
+        expect(notifications, 1);
+      },
+    );
   });
 }

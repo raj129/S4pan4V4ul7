@@ -60,6 +60,8 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
 
   Future<void> _hydrateSessionSettings() async {
     final mode = await _deps.settingsRepository.getUserMode();
+    final calculatorOnboardingCompleted =
+        await _deps.settingsRepository.isCalculatorOnboardingCompleted();
     final photoSyncEnabled = await _deps.settingsRepository.isPhotoSyncEnabled();
     final externalMirrorEnabled =
         await _deps.settingsRepository.isExternalStorageMirrorEnabled();
@@ -67,6 +69,7 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
         await _deps.settingsRepository.isDriveEncryptedBackupEnabled();
     if (!mounted) return;
     if (mode != null) _session.mode = mode;
+    _session.calculatorOnboardingCompleted = calculatorOnboardingCompleted;
     _session.photoSyncEnabled = photoSyncEnabled;
     _deps.importManager.configureStorage(
       useExternalStorageMirror: externalMirrorEnabled,
@@ -92,7 +95,7 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
       files: mapped,
       source: 'share-intent',
     );
-    _router.go('/import/share-intent');
+    _router.go('/lock?returnTo=%2Fimport%2Fshare-intent');
     ReceiveSharingIntent.instance.reset();
   }
 

@@ -80,7 +80,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
             value: _autoLockOnBackground,
             onChanged: (v) => setState(() => _autoLockOnBackground = v),
           ),
-          const Divider(height: 1),
           const _SectionHeader('Backup & Sync'),
           SwitchListTile(
             title: const Text('VMK backup'),

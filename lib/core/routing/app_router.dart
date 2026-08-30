@@ -9,6 +9,8 @@ import '../../domain/entities/vault_photo.dart';
 import '../../domain/entities/vault_status.dart';
 import '../../presentation/app/chat_app.dart';
 import '../../presentation/app/main_scaffold.dart';
+import '../../presentation/features/calculator/calculator_feature.dart';
+import '../../presentation/features/utility_shell/utility_shell.dart';
 import '../../presentation/screens/files/files_screen.dart';
 import '../../presentation/screens/gallery/gallery_home_screen.dart';
 import '../../presentation/screens/gallery/gallery_photo_viewer_screen.dart';
@@ -44,7 +46,17 @@ GoRouter buildAppRouter({
     refreshListenable: session,
     redirect: (context, state) => _redirect(deps, session, state),
     routes: [
-      GoRoute(path: '/', builder: (_, _) => const SizedBox.shrink()),
+      GoRoute(
+        path: '/',
+        builder: (context, state) => UtilityShell(
+          title: 'Calculator',
+          child: CalculatorFeature(
+            onVaultTriggerRequested: () {
+              context.push('/lock?returnTo=%2Fgallery');
+            },
+          ),
+        ),
+      ),
       GoRoute(
         path: '/onboarding',
         builder: (context, state) => BlocProvider.value(
@@ -101,19 +113,20 @@ Future<String?> _redirect(
   final isLockRoute = loc == '/lock';
   final isOnboarding = loc.startsWith('/onboarding');
   final isRestoreRoute = loc.startsWith('/restore');
+  final isCalculatorRoot = loc == '/';
 
   if (!isReady) {
-    if (isRestoreRoute || isOnboarding) return null;
+    if (isCalculatorRoot || isRestoreRoute || isOnboarding) return null;
     return '/onboarding';
   }
 
   if (!session.isUnlocked) {
-    if (isLockRoute) return null;
+    if (isCalculatorRoot || isLockRoute) return null;
     final encoded = Uri.encodeComponent(loc == '/' ? '/gallery' : loc);
     return '/lock?returnTo=$encoded';
   }
 
-  if (loc == '/' || isLockRoute || isOnboarding) {
+  if (isLockRoute || isOnboarding) {
     return '/gallery';
   }
 
@@ -129,7 +142,8 @@ void _onOnboardingStateChanged(
   if (state is! OnboardingVaultCreated) return;
   session.mode = state.mode;
   unawaited(deps.settingsRepository.saveUserMode(state.mode));
-  session.unlock();
+  unawaited(deps.settingsRepository.setCalculatorOnboardingCompleted(true));
+  session.calculatorOnboardingCompleted = true;
   final target =
       deps.importManager.hasPendingShareFiles ||
           deps.importManager.hasPendingImportSelection
@@ -255,6 +269,8 @@ GoRoute _lockRoute(AppDependencies deps, AppSessionState session) {
       return LockScreen(
         unlockVaultUseCase: deps.unlockVaultUseCase,
         pinValidator: deps.pinValidator,
+        title: 'Open private vault',
+        subtitle: 'Enter your vault passcode to leave calculator mode.',
         onUnlocked: () {
           session.unlock();
           unawaited(deps.importManager.reconcileVaultFiles());

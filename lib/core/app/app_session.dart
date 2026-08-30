@@ -16,16 +16,24 @@ class AppSessionState extends ChangeNotifier {
       : _mode = initialMode;
 
   UserMode _mode;
+  bool _calculatorOnboardingCompleted = false;
   bool _photoSyncEnabled = false;
   bool _unlocked = false;
 
   UserMode get mode => _mode;
+  bool get calculatorOnboardingCompleted => _calculatorOnboardingCompleted;
   bool get photoSyncEnabled => _photoSyncEnabled;
   bool get isUnlocked => _unlocked;
 
   set mode(UserMode value) {
     if (_mode == value) return;
     _mode = value;
+    notifyListeners();
+  }
+
+  set calculatorOnboardingCompleted(bool value) {
+    if (_calculatorOnboardingCompleted == value) return;
+    _calculatorOnboardingCompleted = value;
     notifyListeners();
   }
 
