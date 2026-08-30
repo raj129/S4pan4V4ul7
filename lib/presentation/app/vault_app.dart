@@ -135,7 +135,7 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
   @override
   Widget build(BuildContext context) {
     return MaterialApp.router(
-      title: 'Photo Vault',
+      title: 'Calculator',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF4A6CF7)),

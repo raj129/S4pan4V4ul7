@@ -55,9 +55,10 @@ List<List<CalcKey>> basicKeypadRows() {
         style: CalcKeyStyle.destructive,
       ),
       const CalcKey(
-        id: 'backspace',
-        label: '⌫',
-        action: CalcAction.backspace,
+        id: 'percent',
+        label: '%',
+        action: CalcAction.input,
+        payload: '%',
         style: CalcKeyStyle.function,
       ),
       const CalcKey(
@@ -112,18 +113,17 @@ List<List<CalcKey>> basicKeypadRows() {
     ],
     <CalcKey>[
       const CalcKey(
-        id: 'percent',
-        label: '%',
-        action: CalcAction.input,
-        payload: '%',
-        style: CalcKeyStyle.function,
-      ),
-      _digit('0'),
-      const CalcKey(
         id: 'decimal',
         label: '.',
         action: CalcAction.input,
         payload: '.',
+      ),
+      _digit('0'),
+      const CalcKey(
+        id: 'backspace',
+        label: '⌫',
+        action: CalcAction.backspace,
+        style: CalcKeyStyle.function,
       ),
       const CalcKey(
         id: kEqualsKeyId,
