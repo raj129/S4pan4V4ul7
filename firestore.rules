@@ -1,0 +1,145 @@
+rules_version = '2';
+
+// Security rules for the encrypted chat.
+//
+// Threat model: message bodies are already end-to-end encrypted, so these rules
+// are about *access* and *integrity* rather than confidentiality of content —
+// they stop an unrelated signed-in user from reading a conversation's metadata,
+// tampering with someone else's messages, or harvesting the PIN-wrapped
+// identity keys.
+//
+// Note the deliberate asymmetry: public user profiles are readable by any
+// signed-in user (contact matching and key exchange need that), while
+// users/{uid}/private/** is readable only by its owner.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isSelf(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    // Thread membership without a get().
+    //
+    // Thread IDs are the deterministic sorted "<uidA>_<uidB>" form built by
+    // ChatThread.buildId, so membership is derivable from the path alone.
+    // A get() would be more obviously correct, but Firestore caps document
+    // access calls at 20 per batched write — and markRead() batches up to 400
+    // message updates, so a get()-based rule would reject every batch.
+    // Firebase UIDs are alphanumeric and never contain '_', which is the same
+    // assumption buildId already relies on.
+    function isThreadParticipant(threadId) {
+      return isSignedIn() &&
+             threadId.split('_').hasAny([request.auth.uid]);
+    }
+
+    // Fields a non-sender may touch on someone else's message: their own
+    // reaction, their own read receipt, and hiding it for themselves.
+    function onlyRecipientFieldsChanged() {
+      return request.resource.data.diff(resource.data)
+             .affectedKeys()
+             .hasOnly(['reactions', 'readBy', 'deletedFor']);
+    }
+
+    // ── Users ────────────────────────────────────────────────────────────────
+
+    match /users/{uid} {
+      // Any signed-in user may read profiles: required to look someone up by
+      // email, to match device contacts, and to fetch a peer's ECDH public key.
+      // Only non-sensitive identity fields live here.
+      allow read: if isSignedIn();
+
+      allow create, update: if isSelf(uid)
+                            && request.resource.data.uid == uid;
+
+      // Profiles are never deleted from the client; account deletion would
+      // orphan threads that still reference this uid.
+      allow delete: if false;
+
+      // Wrapped identity key and salt. A PIN is brute-forceable given this
+      // blob, so it must never be readable by anyone else — this is the single
+      // most important rule in the file.
+      match /private/{document=**} {
+        allow read, write: if isSelf(uid);
+      }
+    }
+
+    // ── Presence ─────────────────────────────────────────────────────────────
+
+    // Presence lives outside the user document so that ChatUser stays pure
+    // identity. Readable by any signed-in user (the online dot), writable only
+    // by its owner.
+    match /presence/{uid} {
+      allow read: if isSignedIn();
+      allow write: if isSelf(uid);
+    }
+
+    // ── Threads ──────────────────────────────────────────────────────────────
+
+    match /threads/{threadId} {
+      allow read: if isSignedIn()
+                  && request.auth.uid in resource.data.participantIds;
+
+      // On create the thread does not exist yet, so validate the incoming data:
+      // the creator must be a participant, and the ID must match the
+      // deterministic sorted-uid form so threads cannot be squatted.
+      allow create: if isSignedIn()
+                    && request.auth.uid in request.resource.data.participantIds
+                    && request.resource.data.participantIds.size() == 2
+                    && (
+                      threadId == request.resource.data.participantIds[0] + '_' +
+                                  request.resource.data.participantIds[1]
+                      || threadId == request.resource.data.participantIds[1] + '_' +
+                                     request.resource.data.participantIds[0]
+                    );
+
+      // Participants may update lastMessage / unreadCounts, but may not
+      // rewrite the participant list to add or remove people.
+      allow update: if isSignedIn()
+                    && request.auth.uid in resource.data.participantIds
+                    && request.resource.data.participantIds ==
+                       resource.data.participantIds;
+
+      allow delete: if isSignedIn()
+                    && request.auth.uid in resource.data.participantIds;
+
+      // ── Messages ───────────────────────────────────────────────────────────
+
+      match /messages/{messageId} {
+        allow read: if isThreadParticipant(threadId);
+
+        allow create: if isThreadParticipant(threadId)
+                      && request.resource.data.senderId == request.auth.uid
+                      && request.resource.data.threadId == threadId;
+
+        // The sender may edit or tombstone their own message. Everyone else in
+        // the thread is limited to reactions, read receipts and delete-for-me,
+        // so a recipient cannot rewrite the ciphertext or forge a sender.
+        allow update: if isThreadParticipant(threadId)
+                      && (
+                        resource.data.senderId == request.auth.uid
+                        || onlyRecipientFieldsChanged()
+                      )
+                      && request.resource.data.senderId == resource.data.senderId;
+
+        // Hard delete is used when clearing a whole thread. Individual
+        // delete-for-everyone writes a tombstone via update instead.
+        allow delete: if isThreadParticipant(threadId);
+      }
+
+      // ── Typing indicator ───────────────────────────────────────────────────
+
+      match /meta/{docId} {
+        allow read, write: if isThreadParticipant(threadId);
+      }
+    }
+
+    // Anything not matched above is denied.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

@@ -1,0 +1,43 @@
+rules_version = '2';
+
+// Storage rules for encrypted chat attachments.
+//
+// Blobs are AES-GCM ciphertext produced with a thread key that never leaves the
+// participants' devices, so these rules protect against traffic analysis,
+// tampering and quota abuse rather than content disclosure.
+//
+// Storage rules cannot query Firestore, so thread membership is enforced
+// structurally: thread IDs are the deterministic "<uidA>_<uidB>" form, and the
+// caller must be one of the two halves.
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // True when the caller's uid is one of the two sorted uids in the thread ID.
+    function isThreadParticipant(threadId) {
+      return isSignedIn()
+             && threadId.split('_').hasAny([request.auth.uid]);
+    }
+
+    match /chat_media/{threadId}/{messageId}/{filename} {
+      allow read: if isThreadParticipant(threadId);
+
+      // 64 MB ceiling matches the download cap in FirebaseMediaRepository, and
+      // the content type is fixed because every upload is an encrypted blob —
+      // anything else means the client is not the app.
+      allow create, update: if isThreadParticipant(threadId)
+                            && request.resource.size < 64 * 1024 * 1024
+                            && request.resource.contentType ==
+                               'application/octet-stream';
+
+      allow delete: if isThreadParticipant(threadId);
+    }
+
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}
