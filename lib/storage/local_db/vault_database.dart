@@ -228,6 +228,68 @@ class SecurityEvents extends Table {
   Set<Column> get primaryKey => {id};
 }
 
+/// Local cache of chat messages, so a thread opens instantly and stays
+/// readable offline.
+///
+/// Stores the **ciphertext**, never the plaintext. This file is an ordinary
+/// SQLite database with no encryption of its own, so caching decrypted bodies
+/// would hand every past conversation to anyone who can read app storage —
+/// defeating the end-to-end encryption. Decryption happens on read, using the
+/// in-memory thread key, exactly as it does for messages fetched from
+/// Firestore.
+@DataClassName('CachedChatMessage')
+class ChatMessages extends Table {
+  TextColumn get messageId => text()();
+  TextColumn get threadId => text()();
+  TextColumn get senderId => text()();
+  TextColumn get encryptedText => text()();
+  IntColumn get sentAtMs => integer()();
+
+  /// Verbatim `toFirestore()` JSON, so cached rows survive the addition of new
+  /// message fields without a schema migration.
+  TextColumn get payloadJson => text()();
+
+  @override
+  Set<Column> get primaryKey => {messageId};
+}
+
+/// Queued outgoing messages that have not reached Firestore yet.
+///
+/// Persisted rather than held in memory so a send survives the app being
+/// killed while offline. The payload is already ciphertext — encryption happens
+/// before queueing, so a queued message is no more readable on disk than a
+/// cached one.
+@DataClassName('OutboxEntry')
+class OutboxMessages extends Table {
+  TextColumn get messageId => text()();
+  TextColumn get threadId => text()();
+  TextColumn get senderId => text()();
+  TextColumn get encryptedText => text()();
+
+  /// Recipient, so the unread counter can still be bumped on delivery.
+  TextColumn get recipientUid => text()();
+
+  /// Plaintext-free preview already encrypted for the thread list, or a
+  /// media placeholder like "📷 Photo".
+  TextColumn get preview => text()();
+
+  /// `MessageType.name`, null for plain text.
+  TextColumn get mediaType => text().nullable()();
+
+  /// Storage path if the upload already succeeded, otherwise null.
+  TextColumn get mediaRef => text().nullable()();
+
+  /// `MessageReply.toFirestore()` JSON, if this is a reply.
+  TextColumn get replyJson => text().nullable()();
+
+  IntColumn get queuedAtMs => integer()();
+  IntColumn get attempts => integer().withDefault(const Constant(0))();
+  TextColumn get lastError => text().nullable()();
+
+  @override
+  Set<Column> get primaryKey => {messageId};
+}
+
 // ============================================================================
 // DATABASE CLASS
 // ============================================================================
@@ -248,13 +310,31 @@ class SecurityEvents extends Table {
     TrashItems,
     AppSettings,
     SecurityEvents,
+    ChatMessages,
+    OutboxMessages,
   ],
 )
 class VaultDatabase extends _$VaultDatabase {
   VaultDatabase() : super(_openConnection());
 
   @override
-  int get schemaVersion => 1;
+  int get schemaVersion => 3;
+
+  @override
+  MigrationStrategy get migration => MigrationStrategy(
+    onCreate: (m) => m.createAll(),
+    onUpgrade: (m, from, to) async {
+      // v2 introduced the offline chat message cache. It holds only
+      // ciphertext, so a failed migration can safely recreate it empty.
+      if (from < 2) {
+        await m.createTable(chatMessages);
+      }
+      // v3 introduced the offline send outbox.
+      if (from < 3) {
+        await m.createTable(outboxMessages);
+      }
+    },
+  );
 
   // =========================================================================
   // PHOTO QUERIES
@@ -544,6 +624,108 @@ class VaultDatabase extends _$VaultDatabase {
     );
   }
 
+  // =========================================================================
+  // CHAT MESSAGE CACHE
+  // =========================================================================
+
+  /// Newest-first page of cached messages for a thread.
+  Future<List<CachedChatMessage>> getCachedMessages(
+    String threadId, {
+    int limit = 50,
+    int? beforeSentAtMs,
+  }) async {
+    final query = select(chatMessages)
+      ..where(
+        (m) => beforeSentAtMs == null
+            ? m.threadId.equals(threadId)
+            : m.threadId.equals(threadId) &
+                  m.sentAtMs.isSmallerThanValue(beforeSentAtMs),
+      )
+      ..orderBy([
+        (m) => OrderingTerm(expression: m.sentAtMs, mode: OrderingMode.desc),
+      ])
+      ..limit(limit);
+    return query.get();
+  }
+
+  /// Insert or refresh cached messages.
+  Future<void> upsertCachedMessages(List<CachedChatMessage> rows) async {
+    if (rows.isEmpty) return;
+    await batch((b) => b.insertAllOnConflictUpdate(chatMessages, rows));
+  }
+
+  /// Drop a single cached message, used when it is deleted for everyone.
+  Future<void> deleteCachedMessage(String messageId) async {
+    await (delete(
+      chatMessages,
+    )..where((m) => m.messageId.equals(messageId))).go();
+  }
+
+  /// Drop an entire thread's cache.
+  Future<void> deleteCachedThread(String threadId) async {
+    await (delete(
+      chatMessages,
+    )..where((m) => m.threadId.equals(threadId))).go();
+  }
+
+  /// Every cached message in a thread, oldest-last, for in-chat search.
+  Future<List<CachedChatMessage>> getAllCachedMessages(String threadId) async {
+    return (select(chatMessages)
+          ..where((m) => m.threadId.equals(threadId))
+          ..orderBy([
+            (m) => OrderingTerm(
+              expression: m.sentAtMs,
+              mode: OrderingMode.desc,
+            ),
+          ]))
+        .get();
+  }
+
+  // =========================================================================
+  // OUTBOX QUERIES
+  // =========================================================================
+
+  /// Queue a message for delivery, oldest first on read.
+  Future<void> enqueueOutbox(OutboxMessagesCompanion entry) async {
+    await into(outboxMessages).insertOnConflictUpdate(entry);
+  }
+
+  Future<List<OutboxEntry>> getOutboxEntries() {
+    return (select(outboxMessages)..orderBy([
+          (o) => OrderingTerm(expression: o.queuedAtMs),
+        ]))
+        .get();
+  }
+
+  Future<List<OutboxEntry>> getOutboxForThread(String threadId) {
+    return (select(outboxMessages)
+          ..where((o) => o.threadId.equals(threadId))
+          ..orderBy([(o) => OrderingTerm(expression: o.queuedAtMs)]))
+        .get();
+  }
+
+  Future<void> deleteOutboxEntry(String messageId) async {
+    await (delete(
+      outboxMessages,
+    )..where((o) => o.messageId.equals(messageId))).go();
+  }
+
+  /// Record a failed attempt so the UI can show the message as unsent.
+  Future<void> markOutboxFailure(String messageId, String error) async {
+    final row = await (select(
+      outboxMessages,
+    )..where((o) => o.messageId.equals(messageId))).getSingleOrNull();
+    if (row == null) return;
+    await (update(outboxMessages)
+          ..where((o) => o.messageId.equals(messageId)))
+        .write(
+          OutboxMessagesCompanion(
+            attempts: Value(row.attempts + 1),
+            lastError: Value(error),
+          ),
+        );
+  }
+
   /// Clear all tables (for testing or reset vault).
   Future<void> clearAllTables() async {
     await delete(photos).go();
@@ -560,6 +742,7 @@ class VaultDatabase extends _$VaultDatabase {
     await delete(trashItems).go();
     await delete(appSettings).go();
     await delete(securityEvents).go();
+    await delete(chatMessages).go();
   }
 
   static String _jsonEncode(Map<String, dynamic> data) => data.toString();

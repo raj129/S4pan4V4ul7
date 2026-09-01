@@ -89,7 +89,7 @@ class ChangePinUseCase {
       );
 
       // 4. Update session just in case
-      _vaultSession.unlock(vaultId: vaultId, vmkBytes: vmk);
+      _vaultSession.unlock(vaultId: vaultId, vmkBytes: vmk, pin: newPin);
 
     } catch (e) {
       if (e is ChangePinException) rethrow;

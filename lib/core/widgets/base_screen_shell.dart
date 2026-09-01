@@ -43,10 +43,10 @@ class BaseScreenShell extends StatelessWidget {
                 Navigator.of(context).pop();
                 switch (index) {
                   case 0:
-                    context.go('/gallery');
+                    context.go('/chat');
                     break;
                   case 1:
-                    context.go('/chat');
+                    context.go('/gallery');
                     break;
                   case 2:
                     context.go('/trash');

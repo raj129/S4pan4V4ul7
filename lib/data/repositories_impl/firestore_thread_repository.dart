@@ -18,9 +18,6 @@ class FirestoreThreadRepository implements ThreadRepository {
   CollectionReference<Map<String, dynamic>> get _threads =>
       _db.collection('threads');
 
-  DocumentReference<Map<String, dynamic>> _typingDoc(String threadId) =>
-      _threads.doc(threadId).collection('meta').doc('typing');
-
   @override
   Future<ChatThread> createOrGetThread({
     required String myUid,
@@ -99,25 +96,5 @@ class FirestoreThreadRepository implements ThreadRepository {
     // Firestore does not recursively delete subcollections from the client.
     // The messages subcollection must be cleared separately via MessageRepository.
     await _threads.doc(threadId).delete();
-  }
-
-  @override
-  Future<void> setTyping({
-    required String threadId,
-    required String uid,
-    required bool isTyping,
-  }) async {
-    await _typingDoc(threadId).set({uid: isTyping}, SetOptions(merge: true));
-  }
-
-  @override
-  Stream<bool> watchTyping({
-    required String threadId,
-    required String otherUid,
-  }) {
-    return _typingDoc(threadId).snapshots().map((snap) {
-      if (!snap.exists || snap.data() == null) return false;
-      return (snap.data()![otherUid] as bool?) ?? false;
-    });
   }
 }

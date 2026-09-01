@@ -1,59 +1,37 @@
-import 'dart:async';
-
 import 'package:firebase_auth/firebase_auth.dart';
 
-import '../../domain/repositories/user_repository.dart';
+import '../../domain/repositories/presence_repository.dart';
 
 /// Manages online/offline presence for the local user.
 ///
 /// Call [activate] once the user is signed in.
 /// Call [deactivate] on sign-out or app background.
+///
+/// This is lifecycle only. The heartbeat — and whether one is needed at all —
+/// belongs to the [PresenceRepository] implementation, since a Realtime
+/// Database version would use `onDisconnect()` and have no timer.
 class PresenceService {
-  PresenceService({required this.userRepository});
+  PresenceService({required this.presenceRepository});
 
-  final UserRepository userRepository;
-
-  Timer? _heartbeatTimer;
-  static const _heartbeatInterval = Duration(minutes: 2);
+  final PresenceRepository presenceRepository;
 
   String? get _uid => FirebaseAuth.instance.currentUser?.uid;
 
-  /// Mark user online and start a periodic heartbeat.
+  /// Mark the signed-in user online.
   Future<void> activate() async {
     final uid = _uid;
     if (uid == null) return;
-    await userRepository.updatePresence(
-      uid: uid,
-      isOnline: true,
-      lastSeen: DateTime.now().toUtc(),
-    );
-    _heartbeatTimer?.cancel();
-    _heartbeatTimer = Timer.periodic(_heartbeatInterval, (_) => _heartbeat());
+    await presenceRepository.setOnline(uid);
   }
 
-  /// Mark user offline and stop heartbeat.
+  /// Mark the signed-in user offline.
   Future<void> deactivate() async {
-    _heartbeatTimer?.cancel();
     final uid = _uid;
     if (uid == null) return;
-    await userRepository.updatePresence(
-      uid: uid,
-      isOnline: false,
-      lastSeen: DateTime.now().toUtc(),
-    );
-  }
-
-  Future<void> _heartbeat() async {
-    final uid = _uid;
-    if (uid == null) return;
-    await userRepository.updatePresence(
-      uid: uid,
-      isOnline: true,
-      lastSeen: DateTime.now().toUtc(),
-    );
+    await presenceRepository.setOffline(uid);
   }
 
   void dispose() {
-    _heartbeatTimer?.cancel();
+    presenceRepository.dispose();
   }
 }

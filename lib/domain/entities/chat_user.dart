@@ -1,5 +1,10 @@
 import 'package:equatable/equatable.dart';
 
+/// A chat participant's public identity.
+///
+/// Deliberately excludes online state: presence is served by
+/// `PresenceRepository` instead, so that moving it to another backing store
+/// never ripples through this entity or its consumers.
 class ChatUser extends Equatable {
   const ChatUser({
     required this.uid,
@@ -7,8 +12,6 @@ class ChatUser extends Equatable {
     required this.displayName,
     this.photoUrl,
     required this.publicKey,
-    required this.isOnline,
-    required this.lastSeen,
     required this.createdAt,
   });
 
@@ -20,8 +23,6 @@ class ChatUser extends Equatable {
   /// Base64-encoded ECDH public key used for key exchange.
   final String publicKey;
 
-  final bool isOnline;
-  final DateTime lastSeen;
   final DateTime createdAt;
 
   String get initials {
@@ -35,8 +36,6 @@ class ChatUser extends Equatable {
     String? displayName,
     String? photoUrl,
     String? publicKey,
-    bool? isOnline,
-    DateTime? lastSeen,
   }) {
     return ChatUser(
       uid: uid,
@@ -44,8 +43,6 @@ class ChatUser extends Equatable {
       displayName: displayName ?? this.displayName,
       photoUrl: photoUrl ?? this.photoUrl,
       publicKey: publicKey ?? this.publicKey,
-      isOnline: isOnline ?? this.isOnline,
-      lastSeen: lastSeen ?? this.lastSeen,
       createdAt: createdAt,
     );
   }
@@ -56,8 +53,6 @@ class ChatUser extends Equatable {
         'displayName': displayName,
         'photoUrl': photoUrl,
         'publicKey': publicKey,
-        'isOnline': isOnline,
-        'lastSeen': lastSeen.toUtc().millisecondsSinceEpoch,
         'createdAt': createdAt.toUtc().millisecondsSinceEpoch,
       };
 
@@ -67,11 +62,6 @@ class ChatUser extends Equatable {
         displayName: data['displayName'] as String? ?? data['email'] as String,
         photoUrl: data['photoUrl'] as String?,
         publicKey: data['publicKey'] as String? ?? '',
-        isOnline: data['isOnline'] as bool? ?? false,
-        lastSeen: DateTime.fromMillisecondsSinceEpoch(
-          (data['lastSeen'] as int?) ?? 0,
-          isUtc: true,
-        ),
         createdAt: DateTime.fromMillisecondsSinceEpoch(
           (data['createdAt'] as int?) ?? 0,
           isUtc: true,
@@ -79,6 +69,5 @@ class ChatUser extends Equatable {
       );
 
   @override
-  List<Object?> get props =>
-      [uid, email, displayName, photoUrl, publicKey, isOnline, lastSeen];
+  List<Object?> get props => [uid, email, displayName, photoUrl, publicKey];
 }

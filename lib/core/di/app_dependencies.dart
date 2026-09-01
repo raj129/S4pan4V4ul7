@@ -1,6 +1,7 @@
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../../application/services/import_manager.dart';
+import '../../application/services/chat_vault_bridge.dart';
 import '../../application/services/restore_flow_service.dart';
 import '../../application/services/pin_validator.dart';
 import '../../application/services/vault_session.dart';
@@ -31,6 +32,7 @@ import '../../domain/repositories/secure_storage_repository.dart';
 import '../../domain/repositories/settings_repository.dart';
 import '../../domain/repositories/vault_repository.dart';
 import '../../domain/repositories/vmk_backup_repository.dart';
+import 'chat_dependencies.dart';
 
 /// Single composition root for the vault side of the app.
 ///
@@ -162,6 +164,37 @@ class AppDependencies {
   final ExportPhotoUseCase exportPhotoUseCase;
   final ImportManager importManager;
 
+  /// Bridge for moving media between the vault and chat.
+  ///
+  /// Lives on [AppDependencies] rather than [ChatDependencies] because it needs
+  /// the vault's repositories, which chat must not depend on directly.
+  late final ChatVaultBridge chatVaultBridge = ChatVaultBridge(
+    photoRepository: photoRepository,
+    exportPhoto: exportPhotoUseCase,
+    importManager: importManager,
+  );
+
+  /// Chat feature dependencies.
+  ///
+  /// Lazy because every member reaches for Firebase, which is unavailable in
+  /// the in-memory test configuration.
+  late final ChatDependencies chat = ChatDependencies(
+    authRepository: authRepository,
+    vaultSession: vaultSession,
+    database: switch (photoRepository) {
+      final PersistentPhotoRepositoryImpl repository => repository.database,
+      _ => null,
+    },
+  );
+
+  bool _chatInitialised = false;
+
+  /// Touches [chat] and records that it now needs disposing.
+  ChatDependencies get chatDependencies {
+    _chatInitialised = true;
+    return chat;
+  }
+
   /// Runs one-time async setup (e.g. opening the local database) that can't
   /// happen in the synchronous factory constructor.
   Future<void> initialize() async {
@@ -173,6 +206,7 @@ class AppDependencies {
   /// Releases resources held by dependencies that need explicit teardown.
   Future<void> dispose() async {
     vaultSession.lock();
+    if (_chatInitialised) chat.dispose();
     if (photoRepository case final PersistentPhotoRepositoryImpl repository) {
       await repository.close();
     }

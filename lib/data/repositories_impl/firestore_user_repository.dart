@@ -2,6 +2,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_core/firebase_core.dart';
 
 import '../../domain/entities/chat_user.dart';
+import '../../domain/entities/wrapped_identity_key.dart';
 import '../../domain/repositories/user_repository.dart';
 
 class FirestoreUserRepository implements UserRepository {
@@ -15,8 +16,15 @@ class FirestoreUserRepository implements UserRepository {
 
   final FirebaseFirestore _db;
 
+  /// Firestore caps `whereIn` at 30 values per query.
+  static const _whereInLimit = 30;
+
   CollectionReference<Map<String, dynamic>> get _users =>
       _db.collection('users');
+
+  /// Owner-only document holding the wrapped identity key.
+  DocumentReference<Map<String, dynamic>> _privateKeys(String uid) =>
+      _users.doc(uid).collection('private').doc('keys');
 
   @override
   Future<void> upsertProfile(ChatUser user) async {
@@ -49,22 +57,45 @@ class FirestoreUserRepository implements UserRepository {
   }
 
   @override
-  Future<void> updatePresence({
-    required String uid,
-    required bool isOnline,
-    required DateTime lastSeen,
-  }) async {
-    await _users.doc(uid).update({
-      'isOnline': isOnline,
-      'lastSeen': lastSeen.toUtc().millisecondsSinceEpoch,
-    });
-  }
-
-  @override
   Future<void> updatePublicKey({
     required String uid,
     required String publicKeyBase64,
   }) async {
     await _users.doc(uid).update({'publicKey': publicKeyBase64});
+  }
+
+  @override
+  Future<List<ChatUser>> getUsersByEmails(List<String> emails) async {
+    final normalised = emails
+        .map((e) => e.trim().toLowerCase())
+        .where((e) => e.isNotEmpty)
+        .toSet()
+        .toList();
+    if (normalised.isEmpty) return const [];
+
+    final found = <String, ChatUser>{};
+    for (var i = 0; i < normalised.length; i += _whereInLimit) {
+      final chunk = normalised.skip(i).take(_whereInLimit).toList();
+      final query = await _users.where('email', whereIn: chunk).get();
+      for (final doc in query.docs) {
+        final user = ChatUser.fromFirestore(doc.data());
+        found[user.uid] = user;
+      }
+    }
+    return found.values.toList();
+  }
+
+  @override
+  Future<WrappedIdentityKey?> getWrappedIdentityKey(String uid) async {
+    final doc = await _privateKeys(uid).get();
+    return WrappedIdentityKey.fromFirestore(doc.data());
+  }
+
+  @override
+  Future<void> saveWrappedIdentityKey({
+    required String uid,
+    required WrappedIdentityKey wrapped,
+  }) async {
+    await _privateKeys(uid).set(wrapped.toFirestore(), SetOptions(merge: true));
   }
 }

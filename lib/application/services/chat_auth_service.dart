@@ -3,19 +3,36 @@ import 'package:firebase_auth/firebase_auth.dart';
 import '../../crypto/services/chat_crypto_service.dart';
 import '../../domain/entities/chat_user.dart';
 import '../../domain/repositories/auth_repository.dart';
+import '../../domain/repositories/presence_repository.dart';
 import '../../domain/repositories/user_repository.dart';
+import 'chat_identity_service.dart';
 
 /// Orchestrates Google Sign-In → Firestore profile upsert → ECDH key init.
 class ChatAuthService {
   ChatAuthService({
     required this.authRepository,
     required this.userRepository,
+    required this.presenceRepository,
     required this.cryptoService,
+    required this.identityService,
+    required this.readPin,
   });
 
   final AuthRepository authRepository;
   final UserRepository userRepository;
+  final PresenceRepository presenceRepository;
   final ChatCryptoService cryptoService;
+  final ChatIdentityService identityService;
+
+  /// Supplies the current vault PIN, or null when the vault is locked.
+  ///
+  /// A callback rather than a value because sign-in can happen at any point in
+  /// the session, and the PIN must never be captured for longer than the call.
+  final String? Function() readPin;
+
+  /// Result of the most recent identity reconciliation, so the UI can warn
+  /// when history could not be unlocked.
+  IdentitySyncResult? lastIdentitySync;
 
   /// Ensure a chat user is available.
   ///
@@ -43,7 +60,14 @@ class ChatAuthService {
       throw const AuthException('Google account email is unavailable.');
     }
 
-    // Ensure the ECDH key pair exists on this device.
+    // Reconcile this device's identity key with the wrapped backup in
+    // Firestore. On a reinstall or a second device this is what makes existing
+    // history readable again, so it must happen before any thread is opened.
+    lastIdentitySync = await identityService.sync(
+      uid: firebaseUser.uid,
+      pin: readPin(),
+    );
+
     final publicKey = await cryptoService.getOrCreatePublicKey();
 
     // Upsert the Firestore profile (merge so existing data is preserved).
@@ -54,29 +78,19 @@ class ChatAuthService {
       displayName: firebaseUser.displayName ?? resolvedEmail,
       photoUrl: firebaseUser.photoURL,
       publicKey: publicKey,
-      isOnline: true,
-      lastSeen: now,
       createdAt: now,
     );
     await userRepository.upsertProfile(user);
 
-    // Bring presence online.
-    await userRepository.updatePresence(
-      uid: user.uid,
-      isOnline: true,
-      lastSeen: now,
-    );
+    // Bring presence online. PresenceService owns the lifecycle from here.
+    await presenceRepository.setOnline(user.uid);
 
     return user;
   }
 
   /// Mark user offline and sign out.
   Future<void> signOut(String uid) async {
-    await userRepository.updatePresence(
-      uid: uid,
-      isOnline: false,
-      lastSeen: DateTime.now().toUtc(),
-    );
+    await presenceRepository.setOffline(uid);
     await authRepository.signOut();
   }
 
@@ -85,4 +99,23 @@ class ChatAuthService {
 
   /// Returns true if a Firebase session is active.
   bool get isSignedIn => FirebaseAuth.instance.currentUser != null;
+
+  /// Retries the identity restore with an explicitly supplied PIN.
+  ///
+  /// Used when [ensureSignedIn] reported [IdentitySyncResult.pinRequired] or
+  /// [IdentitySyncResult.wrongPin] and the user has now entered their PIN.
+  Future<IdentitySyncResult> retryIdentitySync(String pin) async {
+    final uid = currentUid;
+    if (uid == null) return IdentitySyncResult.pinRequired;
+    final result = await identityService.sync(uid: uid, pin: pin);
+    lastIdentitySync = result;
+    if (result == IdentitySyncResult.restored) {
+      // The restored identity key replaces the one published at sign-in.
+      await userRepository.updatePublicKey(
+        uid: uid,
+        publicKeyBase64: await cryptoService.getOrCreatePublicKey(),
+      );
+    }
+    return result;
+  }
 }

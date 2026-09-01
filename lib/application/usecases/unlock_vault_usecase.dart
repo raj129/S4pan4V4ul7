@@ -67,7 +67,7 @@ class UnlockVaultUseCase {
       final aad = utf8.encode('$vaultId:vmk:v1');
       vmk = await _cryptoService.unwrapKey(wrapped, derivedKey, aad: aad);
       if (vmk.isEmpty) return false;
-      _vaultSession.unlock(vaultId: vaultId, vmkBytes: vmk);
+      _vaultSession.unlock(vaultId: vaultId, vmkBytes: vmk, pin: pin);
       return true;
     } catch (_) {
       return false;

@@ -3,9 +3,17 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:intl/intl.dart';
 
+import '../../../application/services/chat_notification_service.dart';
+import '../../../application/services/chat_vault_bridge.dart';
 import '../../../domain/entities/chat_user.dart';
 import '../../../core/widgets/main_scaffold_scope.dart';
+import '../../state/chat/active_thread_cubit.dart';
+import '../../state/chat/chat_auth_cubit.dart';
+import '../../state/chat/contact_discovery_cubit.dart';
 import '../../state/chat/thread_list_cubit.dart';
+import '../../state/chat/user_lookup_cubit.dart';
+import '../../widgets/chat/chat_media_preview.dart';
+import '../../widgets/chat/history_locked_banner.dart';
 import 'new_chat_screen.dart';
 import 'thread_screen.dart';
 
@@ -43,7 +51,25 @@ class _ChatListScreenState extends State<ChatListScreen> {
           ),
         ],
       ),
-      body: BlocBuilder<ThreadListCubit, ThreadListState>(
+      body: Column(
+        children: [
+          BlocBuilder<ChatAuthCubit, ChatAuthState>(
+            builder: (context, authState) {
+              if (authState is ChatAuthAuthenticated &&
+                  authState.historyLocked) {
+                return HistoryLockedBanner(result: authState.identitySync!);
+              }
+              return const SizedBox.shrink();
+            },
+          ),
+          Expanded(child: _buildThreadList(context)),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildThreadList(BuildContext context) {
+    return BlocBuilder<ThreadListCubit, ThreadListState>(
         builder: (context, state) {
           if (state is ThreadListLoading) {
             return const Center(child: CircularProgressIndicator());
@@ -96,7 +122,10 @@ class _ChatListScreenState extends State<ChatListScreen> {
                       horizontal: 16,
                       vertical: 4,
                     ),
-                    leading: _Avatar(user: item.otherUser),
+                    leading: _Avatar(
+                      user: item.otherUser,
+                      isOnline: state.isOnline(item.otherUser.uid),
+                    ),
                     title: Row(
                       children: [
                         Expanded(
@@ -128,7 +157,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
                             ),
                           ),
                         ),
-                        if (item.otherUser.isOnline)
+                        if (state.isOnline(item.otherUser.uid))
                           Container(
                             width: 8,
                             height: 8,
@@ -155,14 +184,11 @@ class _ChatListScreenState extends State<ChatListScreen> {
                           ),
                       ],
                     ),
-                    onTap: () {
-                      Navigator.of(context).push(MaterialPageRoute(
-                        builder: (_) => ThreadScreen(
-                          thread: item.thread,
-                          otherUser: item.otherUser,
-                        ),
-                      ));
-                    },
+                    onTap: () => openThreadScreen(
+                      context,
+                      thread: item.thread,
+                      otherUser: item.otherUser,
+                    ),
                   ),
                 );
               },
@@ -170,13 +196,37 @@ class _ChatListScreenState extends State<ChatListScreen> {
           }
           return const SizedBox.shrink();
         },
-      ),
     );
   }
 
   void _openNewChat(BuildContext context) {
+    // Carry the chat providers across the root navigator boundary.
+    final userLookup = context.read<UserLookupCubit>();
+    final contactDiscovery = context.read<ContactDiscoveryCubit>();
+    final activeThread = context.read<ActiveThreadCubit>();
+    final mediaLoader = context.read<ChatMediaLoader>();
+    final vaultBridge = context.read<ChatVaultBridge>();
+    final notifications = context.read<ChatNotificationService>();
     Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => const NewChatScreen()),
+      MaterialPageRoute(
+        builder: (_) => MultiRepositoryProvider(
+          providers: [
+            RepositoryProvider<ChatMediaLoader>.value(value: mediaLoader),
+            RepositoryProvider<ChatVaultBridge>.value(value: vaultBridge),
+            RepositoryProvider<ChatNotificationService>.value(
+              value: notifications,
+            ),
+          ],
+          child: MultiBlocProvider(
+            providers: [
+              BlocProvider.value(value: userLookup),
+              BlocProvider.value(value: contactDiscovery),
+              BlocProvider.value(value: activeThread),
+            ],
+            child: const NewChatScreen(),
+          ),
+        ),
+      ),
     );
   }
 
@@ -215,8 +265,9 @@ class _ChatListScreenState extends State<ChatListScreen> {
 }
 
 class _Avatar extends StatelessWidget {
-  const _Avatar({required this.user});
+  const _Avatar({required this.user, required this.isOnline});
   final ChatUser user;
+  final bool isOnline;
 
   @override
   Widget build(BuildContext context) {
@@ -234,7 +285,7 @@ class _Avatar extends StatelessWidget {
                       color: Theme.of(context).colorScheme.onPrimaryContainer))
               : null,
         ),
-        if (user.isOnline)
+        if (isOnline)
           Positioned(
             bottom: 0,
             right: 0,

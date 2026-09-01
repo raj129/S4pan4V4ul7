@@ -11,11 +11,19 @@ class ChangePinScreen extends StatefulWidget {
   const ChangePinScreen({
     required this.changePinUseCase,
     required this.pinValidator,
+    this.onPinChanged,
     super.key,
   });
 
   final ChangePinUseCase changePinUseCase;
   final PinValidator pinValidator;
+
+  /// Invoked with the new PIN after a successful change.
+  ///
+  /// Used to re-wrap the chat identity key under the new PIN. Without this the
+  /// key would still be wrapped under the old PIN, and restoring chat history
+  /// on another device would fail.
+  final Future<void> Function(String newPin)? onPinChanged;
 
   @override
   State<ChangePinScreen> createState() => _ChangePinScreenState();
@@ -95,9 +103,24 @@ class _ChangePinScreenState extends State<ChangePinScreen> {
         oldPin: _oldPin,
         newPin: _newPin,
       );
+      // Re-wrap the chat identity key so history stays recoverable. A failure
+      // here must not read as a failed PIN change — the PIN itself did change.
+      var chatKeyWarning = false;
+      try {
+        await widget.onPinChanged?.call(_newPin);
+      } catch (_) {
+        chatKeyWarning = true;
+      }
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('PIN changed successfully.')),
+        SnackBar(
+          content: Text(
+            chatKeyWarning
+                ? 'PIN changed, but the chat key backup could not be updated. '
+                      'Reopen Chat while online to retry.'
+                : 'PIN changed successfully.',
+          ),
+        ),
       );
       context.pop();
     } catch (e) {
@@ -157,6 +180,29 @@ class _ChangePinScreenState extends State<ChangePinScreen> {
             ),
             const SizedBox(height: 32),
             _PinDotRow(filledCount: _digits.length, total: _pinLength),
+            if (_step != ChangePinStep.verifyOld) ...[
+              const SizedBox(height: 24),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(
+                    Icons.info_outline,
+                    size: 18,
+                    color: Theme.of(context).colorScheme.outline,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Your PIN also unlocks your chat history on a new device. '
+                      'If you forget it, past messages cannot be recovered.',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: Theme.of(context).colorScheme.outline,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
             if (_error != null) ...[
               const SizedBox(height: 24),
               Text(

@@ -5,7 +5,7 @@ import '../../application/services/import_manager.dart';
 import '../../core/widgets/app_navigation_drawer.dart';
 import '../../core/widgets/main_scaffold_scope.dart';
 
-/// Hosts the four top-level tabs (Photos, Chat, Bin, Files) behind a single
+/// Hosts the four top-level tabs (Chat, Photos, Bin, Files) behind a single
 /// shared [Scaffold] + drawer.
 ///
 /// Publishes a [MainScaffoldScope] so any descendant screen — including

@@ -1,33 +1,33 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
-import '../../application/services/chat_auth_service.dart';
-import '../../application/services/presence_service.dart';
-import '../../crypto/services/chat_crypto_service.dart';
-import '../../data/repositories_impl/firestore_message_repository.dart';
-import '../../data/repositories_impl/firestore_thread_repository.dart';
-import '../../data/repositories_impl/firestore_user_repository.dart';
+import '../../core/di/chat_dependencies.dart';
+import '../../application/services/chat_notification_service.dart';
+import '../../application/services/chat_vault_bridge.dart';
 import '../../domain/entities/user_mode.dart';
-import '../../domain/repositories/auth_repository.dart';
 import '../screens/chat_screens/chat_list_screen.dart';
 import '../screens/chat_screens/chat_sign_in_screen.dart';
+import '../widgets/chat/chat_media_preview.dart';
 import '../state/chat/chat_auth_cubit.dart';
+import '../state/chat/contact_discovery_cubit.dart';
 import '../state/chat/thread_list_cubit.dart';
 import '../state/chat/user_lookup_cubit.dart';
 import '../state/chat/active_thread_cubit.dart';
 
 /// Stand-alone chat app widget. Can be used as a tab inside the existing
 /// vault app or as the root of its own entry-point.
-///
-/// Dependency wiring lives here so that screens stay free of DI details.
 class ChatApp extends StatefulWidget {
   const ChatApp({
-    required this.authRepository,
+    required this.dependencies,
+    required this.vaultBridge,
     required this.userMode,
     super.key,
   });
 
-  final AuthRepository authRepository;
+  final ChatDependencies dependencies;
+
+  /// Bridge to the photo vault, for attaching and saving media.
+  final ChatVaultBridge vaultBridge;
   final UserMode userMode;
 
   @override
@@ -35,23 +35,11 @@ class ChatApp extends StatefulWidget {
 }
 
 class _ChatAppState extends State<ChatApp> with WidgetsBindingObserver {
-  late final _userRepository = FirestoreUserRepository();
-  late final _threadRepository = FirestoreThreadRepository();
-  late final _messageRepository = FirestoreMessageRepository();
-  late final _mediaRepository = FirebaseMediaRepository();
-  late final _cryptoService = ChatCryptoService();
-  late final _authRepository = widget.authRepository;
-
-  late final _presenceService = PresenceService(userRepository: _userRepository);
-  late final _chatAuthService = ChatAuthService(
-    authRepository: _authRepository,
-    userRepository: _userRepository,
-    cryptoService: _cryptoService,
-  );
+  ChatDependencies get _deps => widget.dependencies;
 
   late final _chatAuthCubit = ChatAuthCubit(
-    authService: _chatAuthService,
-    presenceService: _presenceService,
+    authService: _deps.authService,
+    presenceService: _deps.presenceService,
   );
   bool _didShowLocalModePrompt = false;
 
@@ -71,16 +59,15 @@ class _ChatAppState extends State<ChatApp> with WidgetsBindingObserver {
     if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.hidden ||
         state == AppLifecycleState.inactive) {
-      _presenceService.deactivate();
+      _deps.presenceService.deactivate();
     } else if (state == AppLifecycleState.resumed) {
-      _presenceService.activate();
+      _deps.presenceService.activate();
     }
   }
 
   @override
   void dispose() {
     _chatAuthCubit.close();
-    _presenceService.dispose();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -90,7 +77,15 @@ class _ChatAppState extends State<ChatApp> with WidgetsBindingObserver {
     return BlocProvider.value(
       value: _chatAuthCubit,
       child: BlocListener<ChatAuthCubit, ChatAuthState>(
+        listenWhen: (prev, next) => prev.runtimeType != next.runtimeType,
         listener: (context, authState) {
+          // Notifications follow the signed-in session, not the widget tree, so
+          // they keep working while the user is on another tab.
+          if (authState is ChatAuthAuthenticated) {
+            _deps.notificationService.start(authState.user.uid);
+          } else {
+            _deps.notificationService.stop();
+          }
           if (widget.userMode != UserMode.localOnly) return;
           if (authState is ChatAuthAuthenticated) {
             _didShowLocalModePrompt = false;
@@ -138,36 +133,61 @@ class _ChatAppState extends State<ChatApp> with WidgetsBindingObserver {
 
             final currentUser = authState.user;
 
-            return MultiBlocProvider(
+            return MultiRepositoryProvider(
               providers: [
-                BlocProvider(
-                  create: (_) => ThreadListCubit(
-                    threadRepository: _threadRepository,
-                    userRepository: _userRepository,
-                    messageRepository: _messageRepository,
-                    mediaRepository: _mediaRepository,
-                    myUid: currentUser.uid,
-                  ),
+                RepositoryProvider<ChatMediaLoader>.value(
+                  value: _deps.mediaLoader,
                 ),
-                BlocProvider(
-                  create: (_) => UserLookupCubit(
-                    userRepository: _userRepository,
-                    threadRepository: _threadRepository,
-                    myUid: currentUser.uid,
-                  ),
+                RepositoryProvider<ChatVaultBridge>.value(
+                  value: widget.vaultBridge,
                 ),
-                BlocProvider(
-                  create: (_) => ActiveThreadCubit(
-                    messageRepository: _messageRepository,
-                    threadRepository: _threadRepository,
-                    userRepository: _userRepository,
-                    mediaRepository: _mediaRepository,
-                    cryptoService: _cryptoService,
-                    myUid: currentUser.uid,
-                  ),
+                RepositoryProvider<ChatNotificationService>.value(
+                  value: _deps.notificationService,
                 ),
               ],
-              child: ChatListScreen(myUid: currentUser.uid),
+              child: MultiBlocProvider(
+                providers: [
+                  BlocProvider(
+                    create: (_) => ThreadListCubit(
+                      threadRepository: _deps.threadRepository,
+                      userRepository: _deps.userRepository,
+                      messageRepository: _deps.messageRepository,
+                      mediaRepository: _deps.mediaRepository,
+                      presenceRepository: _deps.presenceRepository,
+                      messageCache: _deps.messageCache,
+                      myUid: currentUser.uid,
+                    ),
+                  ),
+                  BlocProvider(
+                    create: (_) => UserLookupCubit(
+                      userRepository: _deps.userRepository,
+                      threadRepository: _deps.threadRepository,
+                      myUid: currentUser.uid,
+                    ),
+                  ),
+                  BlocProvider(
+                    create: (_) => ContactDiscoveryCubit(
+                      service: _deps.contactDiscoveryService,
+                      myUid: currentUser.uid,
+                    ),
+                  ),
+                  BlocProvider(
+                    create: (_) => ActiveThreadCubit(
+                      messageRepository: _deps.messageRepository,
+                      threadRepository: _deps.threadRepository,
+                      userRepository: _deps.userRepository,
+                      typingRepository: _deps.typingRepository,
+                      presenceRepository: _deps.presenceRepository,
+                      mediaRepository: _deps.mediaRepository,
+                      messageCache: _deps.messageCache,
+                      outbox: _deps.outbox,
+                      cryptoService: _deps.cryptoService,
+                      myUid: currentUser.uid,
+                    ),
+                  ),
+                ],
+                child: ChatListScreen(myUid: currentUser.uid),
+              ),
             );
           },
         ),

@@ -36,17 +36,4 @@ abstract class ThreadRepository {
 
   /// Delete the entire thread and all its messages.
   Future<void> deleteThread(String threadId);
-
-  /// Update the typing state for a user in a thread.
-  Future<void> setTyping({
-    required String threadId,
-    required String uid,
-    required bool isTyping,
-  });
-
-  /// Stream the typing state of the other user in a thread.
-  Stream<bool> watchTyping({
-    required String threadId,
-    required String otherUid,
-  });
 }

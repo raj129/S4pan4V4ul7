@@ -12,7 +12,7 @@ class AppNavigationDrawer extends StatelessWidget {
     required this.onDestinationSelected,
   });
 
-  /// Index of the currently active top-level destination (Photos, Chat,
+  /// Index of the currently active top-level destination (Chat, Photos,
   /// Bin, Files, Settings).
   final int selectedIndex;
 
@@ -29,14 +29,14 @@ class AppNavigationDrawer extends StatelessWidget {
           child: Text('Photo Vault'),
         ),
         NavigationDrawerDestination(
-          icon: Icon(Icons.photo_library_outlined),
-          selectedIcon: Icon(Icons.photo_library),
-          label: Text('Photos'),
-        ),
-        NavigationDrawerDestination(
           icon: Icon(Icons.chat_bubble_outline),
           selectedIcon: Icon(Icons.chat_bubble),
           label: Text('Chat'),
+        ),
+        NavigationDrawerDestination(
+          icon: Icon(Icons.photo_library_outlined),
+          selectedIcon: Icon(Icons.photo_library),
+          label: Text('Photos'),
         ),
         NavigationDrawerDestination(
           icon: Icon(Icons.delete_outline),

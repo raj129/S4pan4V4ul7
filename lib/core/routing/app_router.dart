@@ -52,7 +52,7 @@ GoRouter buildAppRouter({
           title: 'Calculator',
           child: CalculatorFeature(
             onVaultTriggerRequested: () {
-              context.push('/lock?returnTo=%2Fgallery');
+              context.push('/lock?returnTo=%2Fchat');
             },
           ),
         ),
@@ -78,8 +78,8 @@ GoRouter buildAppRouter({
           importManager: deps.importManager,
         ),
         branches: [
-          StatefulShellBranch(routes: [_galleryRoute(deps, session)]),
           StatefulShellBranch(routes: [_chatRoute(deps, session)]),
+          StatefulShellBranch(routes: [_galleryRoute(deps, session)]),
           StatefulShellBranch(routes: [_trashRoute(deps)]),
           StatefulShellBranch(
             routes: [
@@ -122,12 +122,12 @@ Future<String?> _redirect(
 
   if (!session.isUnlocked) {
     if (isCalculatorRoot || isLockRoute) return null;
-    final encoded = Uri.encodeComponent(loc == '/' ? '/gallery' : loc);
+    final encoded = Uri.encodeComponent(loc == '/' ? '/chat' : loc);
     return '/lock?returnTo=$encoded';
   }
 
   if (isLockRoute || isOnboarding) {
-    return '/gallery';
+    return '/chat';
   }
 
   return null;
@@ -148,7 +148,7 @@ void _onOnboardingStateChanged(
       deps.importManager.hasPendingShareFiles ||
           deps.importManager.hasPendingImportSelection
       ? '/import/share-intent'
-      : '/gallery';
+      : '/chat';
   context.go(target, extra: state.mode);
 }
 
@@ -215,8 +215,11 @@ GoRoute _galleryRoute(AppDependencies deps, AppSessionState session) {
 GoRoute _chatRoute(AppDependencies deps, AppSessionState session) {
   return GoRoute(
     path: '/chat',
-    builder: (context, state) =>
-        ChatApp(authRepository: deps.authRepository, userMode: session.mode),
+    builder: (context, state) => ChatApp(
+      dependencies: deps.chatDependencies,
+      vaultBridge: deps.chatVaultBridge,
+      userMode: session.mode,
+    ),
   );
 }
 
@@ -284,6 +287,14 @@ GoRoute _settingsRoute(
         builder: (context, state) => ChangePinScreen(
           changePinUseCase: deps.changePinUseCase,
           pinValidator: deps.pinValidator,
+          onPinChanged: (newPin) async {
+            final uid = deps.chatDependencies.authService.currentUid;
+            if (uid == null) return;
+            await deps.chatDependencies.identityService.rewrapForNewPin(
+              uid: uid,
+              newPin: newPin,
+            );
+          },
         ),
       ),
     ],
@@ -296,12 +307,12 @@ GoRoute _lockRoute(AppDependencies deps, AppSessionState session) {
     builder: (context, state) {
       final returnTo = state.uri.queryParameters['returnTo'];
       final decodedReturnTo = returnTo == null
-          ? '/gallery'
+          ? '/chat'
           : Uri.decodeComponent(returnTo);
       return LockScreen(
         unlockVaultUseCase: deps.unlockVaultUseCase,
         pinValidator: deps.pinValidator,
-        title: 'Open private vault',
+        title: 'Calculator',
         subtitle: 'Enter your vault passcode to leave calculator mode.',
         onUnlocked: () {
           session.unlock();

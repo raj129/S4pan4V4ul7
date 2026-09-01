@@ -127,7 +127,7 @@ class CreateVaultUseCase {
         vaultId: vaultId,
         settings: settings,
       );
-      _vaultSession.unlock(vaultId: vaultId, vmkBytes: vmkBytes);
+      _vaultSession.unlock(vaultId: vaultId, vmkBytes: vmkBytes, pin: pin);
 
       return vaultId;
     } catch (e) {

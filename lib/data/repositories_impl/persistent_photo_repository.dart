@@ -24,6 +24,14 @@ class PersistentPhotoRepositoryImpl implements PersistentPhotoRepository {
   late drift_db.VaultDatabase _db;
   bool _initialized = false;
 
+  /// The open database, shared with other features that persist to the same
+  /// file (the chat message cache). Null until [initialize] has run.
+  ///
+  /// Sharing one connection matters: opening a second `VaultDatabase` would
+  /// point a separate connection at the same SQLite file, so writes made
+  /// through one would not invalidate streams on the other.
+  drift_db.VaultDatabase? get database => _initialized ? _db : null;
+
   @override
   Future<void> initialize() async {
     if (_initialized) return;
