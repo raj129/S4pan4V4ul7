@@ -93,6 +93,9 @@ class _ThreadScreenState extends State<ThreadScreen> {
   bool _showEmojiPicker = false;
   bool _searching = false;
   final _searchCtrl = TextEditingController();
+  ChatMessage? _editingMessage;
+
+  bool get _isEditing => _editingMessage != null;
 
   /// Message flashed after jumping to it from a quote.
   String? _highlightedId;
@@ -281,6 +284,31 @@ class _ThreadScreenState extends State<ThreadScreen> {
     _searchCtrl.clear();
     context.read<ActiveThreadCubit>().clearSearch();
     setState(() => _searching = false);
+  }
+
+  void _cancelEdit() {
+    if (!_isEditing) return;
+    setState(() {
+      _editingMessage = null;
+      _textCtrl.clear();
+      _hasText.value = false;
+      _showEmojiPicker = false;
+      _inputFocus.unfocus();
+    });
+  }
+
+  Future<void> _commitEdit() async {
+    final msg = _editingMessage;
+    if (msg == null || !_isEditing) return;
+    final edited = _textCtrl.text.trim();
+    if (edited.isEmpty) {
+      _cancelEdit();
+      return;
+    }
+    final cubit = context.read<ActiveThreadCubit>();
+    await cubit.editMessage(msg, edited);
+    if (!mounted) return;
+    _cancelEdit();
   }
 
   Widget _buildMessageList() {
@@ -542,11 +570,6 @@ class _ThreadScreenState extends State<ThreadScreen> {
     navigator.pop();
   }
   Future<void> _promptEdit(ChatMessage msg) async {
-    // Always use the screen's own stable context, never the per-row context
-    // handed to a ListView item builder: that context can be deactivated
-    // mid-await if the message list rebuilds while the dialog is open
-    // (e.g. a new message streams in), which previously threw
-    // `_dependents.isEmpty` when the dialog tried to pop.
     final cubit = context.read<ActiveThreadCubit>();
     final messenger = ScaffoldMessenger.of(context);
     if (!cubit.canEditMessage(msg)) {
@@ -555,39 +578,20 @@ class _ThreadScreenState extends State<ThreadScreen> {
       );
       return;
     }
-    final controller = TextEditingController(
-      text: msg.localDecryptedText ?? '',
-    );
-    String? result;
-    try {
-      result = await showDialog<String>(
-        context: context,
-        builder: (dialogContext) => AlertDialog(
-          title: const Text('Edit message'),
-          content: TextField(
-            controller: controller,
-            autofocus: true,
-            maxLines: null,
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(dialogContext, controller.text),
-              child: const Text('Save'),
-            ),
-          ],
-        ),
+    final text = msg.localDecryptedText ?? '';
+    context.read<ActiveThreadCubit>().clearReplyTarget();
+    setState(() {
+      _editingMessage = msg;
+      _textCtrl.text = text;
+      _textCtrl.selection = TextSelection.fromPosition(
+        TextPosition(offset: _textCtrl.text.length),
       );
-    } finally {
-      controller.dispose();
-    }
-    if (!mounted) return;
-    final edited = result?.trim();
-    if (edited == null || edited.isEmpty) return;
-    await cubit.editMessage(msg, edited);
+      _showEmojiPicker = false;
+      _hasText.value = _textCtrl.text.trim().isNotEmpty;
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _inputFocus.requestFocus();
+    });
   }
 
   /// "Delete for me" only ever needs a lightweight confirmation since it is
@@ -812,7 +816,43 @@ class _ThreadScreenState extends State<ThreadScreen> {
     );
   }
 
-  /// The composer surface: reply strip + input bar sharing one elevated plane.
+  Widget _buildEditHeader() {
+    final cs = Theme.of(context).colorScheme;
+    final textTheme = Theme.of(context).textTheme;
+    return Container(
+      padding: const EdgeInsets.fromLTRB(
+        AppSpacing.md,
+        AppSpacing.sm,
+        AppSpacing.md,
+        AppSpacing.xs,
+      ),
+      child: Row(
+        children: [
+          Text(
+            'Edit message',
+            style: textTheme.titleSmall?.copyWith(
+              color: cs.onSurface,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const Spacer(),
+          IconButton(
+            tooltip: 'Cancel edit',
+            onPressed: _cancelEdit,
+            icon: const Icon(Icons.close_rounded),
+          ),
+          IconButton(
+            tooltip: 'Update message',
+            onPressed: _commitEdit,
+            icon: const Icon(Icons.check_rounded),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// The composer surface: reply strip + edit header + input bar sharing one
+  /// elevated plane.
   Widget _buildComposerSurface(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     return DecoratedBox(
@@ -824,7 +864,11 @@ class _ThreadScreenState extends State<ThreadScreen> {
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
-        children: [_buildReplyPreview(), _buildInputBar(context)],
+        children: [
+          if (_isEditing) _buildEditHeader(),
+          if (!_isEditing) _buildReplyPreview(),
+          _buildInputBar(context),
+        ],
       ),
     );
   }
@@ -878,7 +922,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
                           }
                         },
                         decoration: InputDecoration(
-                          hintText: 'Message',
+                          hintText: _isEditing ? 'Edit message' : 'Message',
                           filled: false,
                           border: InputBorder.none,
                           enabledBorder: InputBorder.none,
@@ -890,8 +934,13 @@ class _ThreadScreenState extends State<ThreadScreen> {
                           hintStyle: Theme.of(context).textTheme.bodyLarge
                               ?.copyWith(color: cs.onSurfaceVariant),
                         ),
-                        onChanged: (v) =>
-                            context.read<ActiveThreadCubit>().onTextChanged(v),
+                        onChanged: (v) {
+                          if (_isEditing) {
+                            _hasText.value = v.trim().isNotEmpty;
+                            return;
+                          }
+                          context.read<ActiveThreadCubit>().onTextChanged(v);
+                        },
                       ),
                     ),
                     _ComposerAction(
@@ -904,7 +953,11 @@ class _ThreadScreenState extends State<ThreadScreen> {
               ),
             ),
             const SizedBox(width: AppSpacing.sm),
-            _SendButton(hasText: _hasText, onSend: _send),
+            _SendButton(
+              hasText: _hasText,
+              onSend: _isEditing ? _commitEdit : _send,
+              icon: _isEditing ? Icons.check_rounded : Icons.send_rounded,
+            ),
           ],
         ),
       ),
@@ -1168,12 +1221,18 @@ class _ComposerAction extends StatelessWidget {
   }
 }
 
-/// Send button that grows into view only once there is something to send.
+/// Send/update button that grows into view only once there is something to
+/// send or update.
 class _SendButton extends StatelessWidget {
-  const _SendButton({required this.hasText, required this.onSend});
+  const _SendButton({
+    required this.hasText,
+    required this.onSend,
+    this.icon = Icons.send_rounded,
+  });
 
   final ValueListenable<bool> hasText;
   final VoidCallback onSend;
+  final IconData icon;
 
   @override
   Widget build(BuildContext context) {
@@ -1197,7 +1256,7 @@ class _SendButton extends StatelessWidget {
                 child: Padding(
                   padding: const EdgeInsets.all(AppSpacing.md),
                   child: Icon(
-                    Icons.send_rounded,
+                    icon,
                     size: 20,
                     color: enabled ? cs.onPrimary : cs.onSurfaceVariant,
                   ),
