@@ -368,7 +368,12 @@ class _ThreadScreenState extends State<ThreadScreen> {
                 _inputFocus.requestFocus();
               },
               onReact: (emoji) => cubit.toggleReaction(msg, emoji),
-              onEdit: cubit.canEditMessage(msg) ? () => _promptEdit(context, msg) : null,
+              // Always wired up for own, non-media messages — eligibility
+              // (30-minute / edited-before-read rule) is checked once,
+              // centrally, inside `_promptEdit`, so both the long-press menu
+              // entry and the Signal-style double-tap give the same
+              // accept/reject behaviour instead of silently disappearing.
+              onEdit: isMine && !msg.isMedia ? () => _promptEdit(msg) : null,
               onCopy: msg.localDecryptedText?.trim().isNotEmpty == true
                   ? () => _copyMessage(msg.localDecryptedText!)
                   : null,
@@ -382,9 +387,9 @@ class _ThreadScreenState extends State<ThreadScreen> {
               onDiscard: msg.status == MessageStatus.failed
                   ? () => cubit.discardMessage(msg.messageId)
                   : null,
-              onDeleteForMe: () => cubit.deleteMessageForMe(msg),
+              onDeleteForMe: () => _confirmDeleteForMe(msg),
               onDeleteForEveryone: isMine
-                  ? () => cubit.deleteMessageForEveryone(msg)
+                  ? () => _confirmDeleteForEveryone(msg)
                   : null,
             );
           },
@@ -483,7 +488,8 @@ class _ThreadScreenState extends State<ThreadScreen> {
       builder: (dialogContext) => AlertDialog(
         title: const Text('Clear messages'),
         content: const Text(
-          'Delete every message in this chat but keep the conversation?',
+          'Remove every message from your view of this chat? '
+          'The other person will not be affected and can still see them.',
         ),
         actions: [
           TextButton(
@@ -535,43 +541,117 @@ class _ThreadScreenState extends State<ThreadScreen> {
     if (!mounted) return;
     navigator.pop();
   }
-  Future<void> _promptEdit(BuildContext context, ChatMessage msg) async {
-    if (!context.read<ActiveThreadCubit>().canEditMessage(msg)) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
+  Future<void> _promptEdit(ChatMessage msg) async {
+    // Always use the screen's own stable context, never the per-row context
+    // handed to a ListView item builder: that context can be deactivated
+    // mid-await if the message list rebuilds while the dialog is open
+    // (e.g. a new message streams in), which previously threw
+    // `_dependents.isEmpty` when the dialog tried to pop.
+    final cubit = context.read<ActiveThreadCubit>();
+    final messenger = ScaffoldMessenger.of(context);
+    if (!cubit.canEditMessage(msg)) {
+      messenger.showSnackBar(
         const SnackBar(content: Text('This message can no longer be edited.')),
       );
       return;
     }
-    final cubit = context.read<ActiveThreadCubit>();
     final controller = TextEditingController(
       text: msg.localDecryptedText ?? '',
     );
-    final result = await showDialog<String>(
+    String? result;
+    try {
+      result = await showDialog<String>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Edit message'),
+          content: TextField(
+            controller: controller,
+            autofocus: true,
+            maxLines: null,
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(dialogContext, controller.text),
+              child: const Text('Save'),
+            ),
+          ],
+        ),
+      );
+    } finally {
+      controller.dispose();
+    }
+    if (!mounted) return;
+    final edited = result?.trim();
+    if (edited == null || edited.isEmpty) return;
+    await cubit.editMessage(msg, edited);
+  }
+
+  /// "Delete for me" only ever needs a lightweight confirmation since it is
+  /// non-destructive to the other participant, but it still goes through the
+  /// screen's own stable [context] (never a per-row context) for the same
+  /// reason `_promptEdit` does — a `showDialog` awaiting a per-row context
+  /// can outlive that context if the list rebuilds mid-dialog.
+  Future<void> _confirmDeleteForMe(ChatMessage msg) async {
+    final cubit = context.read<ActiveThreadCubit>();
+    final ok = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title: const Text('Edit message'),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          maxLines: null,
+        title: const Text('Delete message'),
+        content: const Text(
+          'Remove this message from your copy of the chat? '
+          'The other person will still see it.',
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(dialogContext),
+            onPressed: () => Navigator.pop(dialogContext, false),
             child: const Text('Cancel'),
           ),
           FilledButton(
-            onPressed: () => Navigator.pop(dialogContext, controller.text),
-            child: const Text('Save'),
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Delete'),
           ),
         ],
       ),
     );
-    final edited = result?.trim();
-    controller.dispose();
-    if (!mounted || edited == null || edited.isEmpty) return;
-    await cubit.editMessage(msg, edited);
+    if (ok != true || !mounted) return;
+    await cubit.deleteMessageForMe(msg);
+  }
+
+  /// "Delete for everyone" is destructive and irreversible, so it gets a
+  /// distinct, more explicit confirmation (mirroring Signal/WhatsApp), again
+  /// routed through the screen's stable [context].
+  Future<void> _confirmDeleteForEveryone(ChatMessage msg) async {
+    final cubit = context.read<ActiveThreadCubit>();
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Delete for everyone'),
+        content: const Text(
+          'This message will be deleted for everyone in this chat. '
+          'This cannot be undone.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(dialogContext).colorScheme.error,
+              foregroundColor: Theme.of(dialogContext).colorScheme.onError,
+            ),
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Delete for everyone'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    await cubit.deleteMessageForEveryone(msg);
   }
 
   /// Pick a conversation and re-send the message into it.

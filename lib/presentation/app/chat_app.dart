@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
 
 import '../../core/di/chat_dependencies.dart';
 import '../../application/services/chat_notification_service.dart';
@@ -176,6 +177,7 @@ class _ChatAppState extends State<ChatApp> with WidgetsBindingObserver {
                       outbox: _deps.outbox,
                       cryptoService: _deps.cryptoService,
                       myUid: currentUser.uid,
+                      connectivityStream: Connectivity().onConnectivityChanged,
                     ),
                   ),
                 ],

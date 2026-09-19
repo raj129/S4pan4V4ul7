@@ -49,6 +49,26 @@ class DriftMessageCacheRepository implements MessageCacheRepository {
   @override
   Future<void> clearThread(String threadId) => _db.deleteCachedThread(threadId);
 
+  static String _clearedBeforeKey(String threadId) =>
+      'chat_cleared_before_$threadId';
+
+  @override
+  Future<void> setClearedBefore(String threadId, DateTime at) {
+    return _db.upsertAppSetting(
+      _clearedBeforeKey(threadId),
+      at.toUtc().millisecondsSinceEpoch.toString(),
+    );
+  }
+
+  @override
+  Future<DateTime?> getClearedBefore(String threadId) async {
+    final raw = await _db.getAppSetting(_clearedBeforeKey(threadId));
+    if (raw == null) return null;
+    final ms = int.tryParse(raw);
+    if (ms == null) return null;
+    return DateTime.fromMillisecondsSinceEpoch(ms, isUtc: true);
+  }
+
   List<ChatMessage> _decodeAll(List<CachedChatMessage> rows) {
     final result = <ChatMessage>[];
     for (final row in rows) {

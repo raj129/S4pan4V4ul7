@@ -726,6 +726,29 @@ class VaultDatabase extends _$VaultDatabase {
         );
   }
 
+  /// Generic key/value settings row, reused for small per-device flags (e.g.
+  /// the local "clear chat" watermark) that do not need a dedicated table.
+  Future<void> upsertAppSetting(String key, String value) async {
+    await into(appSettings).insertOnConflictUpdate(
+      AppSettingsCompanion.insert(
+        key: key,
+        value: value,
+        updatedAtMs: DateTime.now().toUtc().millisecondsSinceEpoch,
+      ),
+    );
+  }
+
+  Future<String?> getAppSetting(String key) async {
+    final row = await (select(
+      appSettings,
+    )..where((s) => s.key.equals(key))).getSingleOrNull();
+    return row?.value;
+  }
+
+  Future<void> deleteAppSetting(String key) async {
+    await (delete(appSettings)..where((s) => s.key.equals(key))).go();
+  }
+
   /// Clear all tables (for testing or reset vault).
   Future<void> clearAllTables() async {
     await delete(photos).go();

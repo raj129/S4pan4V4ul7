@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:typed_data';
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:equatable/equatable.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:uuid/uuid.dart';
@@ -155,7 +156,32 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
     required this.outbox,
     required this.cryptoService,
     required this.myUid,
-  }) : super(const ActiveThreadLoading());
+    Stream<List<ConnectivityResult>>? connectivityStream,
+  }) : super(const ActiveThreadLoading()) {
+    // Auto-drain the outbox the moment connectivity is restored, instead of
+    // only retrying the next time the user happens to reopen the thread —
+    // this is what makes queued offline messages "send automatically once
+    // connectivity is restored" rather than just "send whenever revisited."
+    //
+    // Deliberately opt-in only (no default `Connectivity()` stream here):
+    // touching that platform EventChannel requires a live Flutter binding,
+    // which plain unit tests never initialize. Production wiring passes the
+    // real stream explicitly (see `ChatApp`); tests simply omit it and lose
+    // nothing, since `drainOutbox()` still runs on every `openThread()`.
+    if (connectivityStream != null) {
+      _connectivitySub = connectivityStream.listen(
+        (results) {
+          final isOffline = results.isEmpty ||
+              results.every((r) => r == ConnectivityResult.none);
+          if (_wasOffline && !isOffline) {
+            unawaited(drainOutbox());
+          }
+          _wasOffline = isOffline;
+        },
+        onError: (_) {},
+      );
+    }
+  }
 
   final MessageRepository messageRepository;
   final ThreadRepository threadRepository;
@@ -172,6 +198,14 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
   StreamSubscription<bool>? _typingSub;
   StreamSubscription<UserPresence>? _presenceSub;
   Timer? _typingDebounce;
+
+  /// Guards against the loading state persisting forever if the cache is
+  /// cold and the first live snapshot never arrives (e.g. genuinely offline
+  /// with no queued writes to replay). Forces an (empty) loaded state so the
+  /// composer and retry affordances are still reachable.
+  Timer? _openTimeoutTimer;
+  StreamSubscription<List<ConnectivityResult>>? _connectivitySub;
+  bool _wasOffline = false;
   String? _currentThreadId;
   ChatThread? _thread;
   ChatUser? _otherUser;
@@ -197,6 +231,18 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
   /// stream the optimistic copy disappears without a merge conflict.
   final Map<String, ChatMessage> _pending = {};
 
+  /// Local-only "clear chat" watermark for the open thread (null if the chat
+  /// has never been cleared on this device). Messages sent at or before this
+  /// instant are hidden from the buffer even though they still exist on the
+  /// server / for the other participant.
+  DateTime? _clearedBefore;
+
+  List<ChatMessage> _afterClearWatermark(List<ChatMessage> msgs) {
+    final cutoff = _clearedBefore;
+    if (cutoff == null) return msgs;
+    return msgs.where((m) => m.sentAt.isAfter(cutoff)).toList();
+  }
+
   // ---------------------------------------------------------------------------
   // Open thread
   // ---------------------------------------------------------------------------
@@ -213,6 +259,12 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
     _reachedStart = false;
 
     emit(const ActiveThreadLoading());
+
+    try {
+      _clearedBefore = await messageCache.getClearedBefore(thread.threadId);
+    } catch (_) {
+      _clearedBefore = null;
+    }
 
     // Ensure thread key is derived if not already stored.
     if (otherUser.publicKey.isNotEmpty) {
@@ -235,32 +287,53 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
         limit: _pageSize,
       );
       if (cached.isNotEmpty) {
-        _mergeIntoBuffer(await _decryptAll(cached, thread.threadId));
+        _mergeIntoBuffer(
+          _afterClearWatermark(await _decryptAll(cached, thread.threadId)),
+        );
         _emitMessages();
       }
     } catch (_) {
       // A cold or corrupt cache must never block opening the thread.
     }
 
-    // Mark as read.
-    await threadRepository.resetUnread(
-      threadId: thread.threadId,
-      uid: myUid,
-    );
+    // Mark as read. Best-effort: if this write fails (e.g. no network and no
+    // offline persistence queue), it must not abort thread setup — that used
+    // to leave the screen stuck on the loading spinner forever because the
+    // message-stream subscription below was never reached.
+    try {
+      await threadRepository.resetUnread(
+        threadId: thread.threadId,
+        uid: myUid,
+      );
+    } catch (_) {
+      // Unread count sync can be retried later; it is not load-blocking.
+    }
 
     _messageSub?.cancel();
     _typingSub?.cancel();
     _presenceSub?.cancel();
+    _openTimeoutTimer?.cancel();
+
+    // Belt-and-braces: if neither the cache nor the live stream produces a
+    // result within a few seconds, stop spinning and show the (possibly
+    // empty) thread instead of a permanent loading indicator.
+    _openTimeoutTimer = Timer(const Duration(seconds: 8), () {
+      if (state is ActiveThreadLoading) {
+        _emitMessages();
+      }
+    });
 
     _messageSub = messageRepository.watchMessages(thread.threadId).listen(
       (msgs) async {
         final decrypted = await _decryptAll(msgs, thread.threadId);
-        _mergeIntoBuffer(decrypted);
+        _mergeIntoBuffer(_afterClearWatermark(decrypted));
+        _openTimeoutTimer?.cancel();
         _emitMessages();
         // Cache ciphertext, not the decrypted copies.
         unawaited(messageCache.save(msgs).catchError((_) {}));
       },
       onError: (e) {
+        _openTimeoutTimer?.cancel();
         // With a warm cache the conversation is still readable, so degrade to
         // a banner instead of replacing the screen with an error.
         if (_buffer.isNotEmpty) {
@@ -1018,6 +1091,8 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
     _typingSub?.cancel();
     _presenceSub?.cancel();
     _typingDebounce?.cancel();
+    _openTimeoutTimer?.cancel();
+    _connectivitySub?.cancel();
     if (_currentThreadId != null) {
       await typingRepository.setTyping(
         threadId: _currentThreadId!,

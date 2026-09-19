@@ -86,7 +86,11 @@ class MessageBubble extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (message.deletedForEveryone) {
+    // "Delete for me" and "delete for everyone" must look identical and be
+    // fully non-interactive: isDeletedFor(myUid) covers both cases (it is
+    // true when deletedForEveryone is set, or when this user's uid is in
+    // deletedFor), so a single check keeps both delete paths in sync.
+    if (message.isDeletedFor(myUid)) {
       return _TombstoneBubble(
         isMine: isMine,
         isLastInGroup: isLastInGroup,
@@ -107,8 +111,49 @@ class MessageBubble extends StatelessWidget {
       withTail: isFirstInGroup && !bare,
     );
 
+    final bubble = bare
+        ? _BubbleContent(
+            message: message,
+            isMine: isMine,
+            myUid: myUid,
+            otherUid: otherUid,
+            otherIsOnline: otherIsOnline,
+            mediaLoader: mediaLoader,
+            onTapQuote: onTapQuote,
+            textColor: cs.onSurface,
+            metaColor: cs.onSurfaceVariant,
+            bare: true,
+          )
+        : Material(
+            color: isHighlighted ? cs.tertiaryContainer : bgColor,
+            shape: shape,
+            elevation: AppElevation.raised,
+            shadowColor: chat.bubbleShadow,
+            animationDuration: AppDuration.normal,
+            child: Padding(
+              padding: EdgeInsets.fromLTRB(
+                AppSpacing.md + shape.tailInsets.left,
+                AppSpacing.sm,
+                AppSpacing.md + shape.tailInsets.right,
+                AppSpacing.sm,
+              ),
+              child: _BubbleContent(
+                message: message,
+                isMine: isMine,
+                myUid: myUid,
+                otherUid: otherUid,
+                otherIsOnline: otherIsOnline,
+                mediaLoader: mediaLoader,
+                onTapQuote: onTapQuote,
+                textColor: textColor,
+                metaColor: textColor,
+                bare: false,
+              ),
+            ),
+          );
+
     return Align(
-      alignment: Alignment.centerRight,
+      alignment: isMine ? Alignment.centerRight : Alignment.centerLeft,
       child: Padding(
         padding: EdgeInsets.only(
           top: AppSpacing.xxs,
@@ -117,14 +162,11 @@ class MessageBubble extends StatelessWidget {
           right: isMine ? AppSpacing.sm : AppSpacing.xxl,
         ),
         child: Column(
-          crossAxisAlignment: isMine
-              ? CrossAxisAlignment.end
-              : CrossAxisAlignment.start,
+          crossAxisAlignment:
+              isMine ? CrossAxisAlignment.end : CrossAxisAlignment.start,
           children: [
             Dismissible(
               key: ValueKey('swipe_${message.messageId}'),
-              // Swipe toward the centre of the screen to reply, in the
-              // direction that feels natural for each side of the conversation.
               direction: onReply == null || !canReplyFromLeftToRight
                   ? DismissDirection.none
                   : DismissDirection.startToEnd,
@@ -133,61 +175,30 @@ class MessageBubble extends StatelessWidget {
               },
               confirmDismiss: (_) async {
                 onReply?.call();
-                // Never actually dismiss: the swipe is a shortcut, not a delete.
                 return false;
               },
               background: const _ReplySwipeBackground(alignEnd: false),
               secondaryBackground: const SizedBox.shrink(),
               child: GestureDetector(
                 onLongPress: () => _showActionSheet(context),
+                // Signal-style: double-tapping your own message jumps
+                // straight to edit. `onEdit` is only wired up for own
+                // messages, so this is a no-op on incoming messages. The
+                // 30-minute/edited-before-read rule itself is enforced
+                // centrally in `ActiveThreadCubit.canEditMessage` /
+                // `_promptEdit`, so the double-tap always attempts the
+                // action and lets that single source of truth decide
+                // whether it succeeds or surfaces a "can no longer be
+                // edited" message.
+                onDoubleTap: isMine ? onEdit : null,
                 child: AnimatedContainer(
                   duration: AppDuration.normal,
                   curve: Curves.easeOut,
                   constraints: BoxConstraints(
-                    maxWidth: MediaQuery.of(context).size.width * 0.76,
+                    maxWidth: MediaQuery.of(context).size.width * 0.78,
+                    minWidth: 0,
                   ),
-                  child: bare
-                      ? _BubbleContent(
-                          message: message,
-                          isMine: isMine,
-                          myUid: myUid,
-                          otherUid: otherUid,
-                          otherIsOnline: otherIsOnline,
-                          mediaLoader: mediaLoader,
-                          onTapQuote: onTapQuote,
-                          textColor: cs.onSurface,
-                          metaColor: cs.onSurfaceVariant,
-                          bare: true,
-                        )
-                      : Material(
-                          color: isHighlighted
-                              ? cs.tertiaryContainer
-                              : bgColor,
-                          shape: shape,
-                          elevation: AppElevation.raised,
-                          shadowColor: chat.bubbleShadow,
-                          animationDuration: AppDuration.normal,
-                          child: Padding(
-                            padding: EdgeInsets.fromLTRB(
-                              AppSpacing.md + shape.tailInsets.left,
-                              AppSpacing.sm,
-                              AppSpacing.md + shape.tailInsets.right,
-                              AppSpacing.sm,
-                            ),
-                            child: _BubbleContent(
-                              message: message,
-                              isMine: isMine,
-                              myUid: myUid,
-                              otherUid: otherUid,
-                              otherIsOnline: otherIsOnline,
-                              mediaLoader: mediaLoader,
-                              onTapQuote: onTapQuote,
-                              textColor: textColor,
-                              metaColor: textColor,
-                              bare: false,
-                            ),
-                          ),
-                        ),
+                  child: bubble,
                 ),
               ),
             ),
@@ -424,15 +435,23 @@ class _BubbleContent extends StatelessWidget {
             ),
           ),
         const SizedBox(height: AppSpacing.xxs),
-        Align(
-          alignment: Alignment.centerRight,
-          child: _MetaRow(
-            message: message,
-            isMine: isMine,
-            otherUid: otherUid,
-            otherIsOnline: otherIsOnline,
-            textColor: metaColor,
-          ),
+        // `Row(mainAxisSize: min)` rather than `Align`: an unconstrained
+        // `Align` always expands to the maximum width offered by its parent,
+        // which was silently stretching every bubble (even a one-word
+        // message) out to the 78%-of-screen cap. A shrink-wrapped Row lets
+        // the bubble's width track its actual content again.
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          mainAxisAlignment: MainAxisAlignment.end,
+          children: [
+            _MetaRow(
+              message: message,
+              isMine: isMine,
+              otherUid: otherUid,
+              otherIsOnline: otherIsOnline,
+              textColor: metaColor,
+            ),
+          ],
         ),
       ],
     );

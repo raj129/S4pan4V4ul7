@@ -131,17 +131,16 @@ class ThreadListCubit extends Cubit<ThreadListState> {
   }
 
 
+  /// Local-only "Clear chat": hides history on this device without touching
+  /// Firestore or the other participant's copy (mirrors Signal/WhatsApp).
+  /// Use [deleteThread] instead for a destructive, shared delete.
   Future<void> clearThread(String threadId) async {
     try {
-      await messageRepository.deleteAllMessages(threadId);
-      await mediaRepository.deleteThreadMedia(threadId);
+      final now = DateTime.now().toUtc();
+      await messageCache.setClearedBefore(threadId, now);
       await messageCache.clearThread(threadId);
-      await threadRepository.clearThreadPreview(
-        threadId: threadId,
-        clearedAt: DateTime.now().toUtc(),
-      );
     } catch (e) {
-      emit(ThreadListError('Clear failed: '));
+      emit(ThreadListError('Clear failed: $e'));
     }
   }
   Future<void> deleteThread(String threadId) async {

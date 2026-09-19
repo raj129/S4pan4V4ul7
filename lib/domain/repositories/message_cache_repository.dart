@@ -25,6 +25,16 @@ abstract class MessageCacheRepository {
 
   /// Remove an entire thread's cache.
   Future<void> clearThread(String threadId);
+
+  /// Persist a local-only "cleared before" watermark for [threadId].
+  ///
+  /// Used to implement a WhatsApp/Signal-style "Clear chat": history at or
+  /// before [at] is hidden on this device only. Nothing on the server (or
+  /// the other participant's copy) is touched.
+  Future<void> setClearedBefore(String threadId, DateTime at);
+
+  /// The local "cleared before" watermark for [threadId], if any.
+  Future<DateTime?> getClearedBefore(String threadId);
 }
 
 /// Cache that stores nothing.
@@ -52,6 +62,12 @@ class NoopMessageCacheRepository implements MessageCacheRepository {
 
   @override
   Future<void> clearThread(String threadId) async {}
+
+  @override
+  Future<void> setClearedBefore(String threadId, DateTime at) async {}
+
+  @override
+  Future<DateTime?> getClearedBefore(String threadId) async => null;
 }
 
 /// Serialisation shared by the cache implementation.

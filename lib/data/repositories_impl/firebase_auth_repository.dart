@@ -36,14 +36,15 @@ class FirebaseAuthRepository implements AuthRepository {
       );
 
       final GoogleSignInAuthentication googleAuth = googleUser.authentication;
-      final authorization = await googleUser.authorizationClient
-          .authorizeScopes(_authScopes);
-
-      final accessToken = authorization.accessToken;
       final idToken = googleAuth.idToken;
 
+      if (idToken == null || idToken.isEmpty) {
+        throw const AuthException(
+          'Google sign-in failed: no ID token was returned.',
+        );
+      }
+
       final AuthCredential credential = GoogleAuthProvider.credential(
-        accessToken: accessToken,
         idToken: idToken,
       );
 
@@ -62,10 +63,12 @@ class FirebaseAuthRepository implements AuthRepository {
     } on AuthException {
       rethrow;
     } on PlatformException catch (e) {
-      // Code 16 = SIGN_IN_CANCELLED / reauth failed from Credential Manager.
+      // Credential Manager can reject the request when a second authorization
+      // prompt is triggered unnecessarily; treat these as user cancellation.
       if (e.code == 'sign_in_canceled' ||
           e.code == 'sign_in_cancelled' ||
-          e.code == '16') {
+          e.code == '16' ||
+          e.code == 'CANCELLED') {
         throw const AuthException(
           'Sign-in was cancelled. Please try again.',
         );

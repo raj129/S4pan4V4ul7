@@ -2,6 +2,7 @@
     <!-- Required for flutter_secure_storage / Android Keystore (API 23+) -->
     <!-- Required for Firebase Auth / Google Sign-In (future) -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.CAMERA" />
     <!-- Android 18+: explicit read/write URI permissions for camera and gallery -->
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
