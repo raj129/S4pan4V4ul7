@@ -2,8 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../core/widgets/app_surfaces.dart';
 import '../../../presentation/state/onboarding/onboarding_cubit.dart';
 import '../../../presentation/state/onboarding/onboarding_state.dart';
+import '../../theme/app_spacing.dart';
 
 /// Screen 3 (optional): Google sign-in.
 ///
@@ -14,6 +16,8 @@ class GoogleSignInScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('Sign in with Google'),
@@ -26,40 +30,65 @@ class GoogleSignInScreen extends StatelessWidget {
         builder: (context, state) {
           return SafeArea(
             child: Padding(
-              padding: const EdgeInsets.all(32),
+              padding: const EdgeInsets.all(AppSpacing.xl),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  const Spacer(),
-                  const Icon(Icons.backup_rounded, size: 72),
-                  const SizedBox(height: 24),
-                  Text(
-                    'Enable encrypted backup & restore',
-                    textAlign: TextAlign.center,
-                    style: Theme.of(context).textTheme.titleLarge,
-                  ),
-                  const SizedBox(height: 12),
-                  Text(
-                    'Your vault key will be encrypted before being backed up. '
-                    'Google cannot read your photos or keys.',
-                    textAlign: TextAlign.center,
-                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  Expanded(
+                    child: SingleChildScrollView(
+                      child: Column(
+                        children: [
+                          const SizedBox(height: AppSpacing.huge),
+                          Container(
+                            width: AppSpacing.huge * 2,
+                            height: AppSpacing.huge * 2,
+                            decoration: BoxDecoration(
+                              color: theme.colorScheme.primaryContainer,
+                              borderRadius: AppRadius.all(AppRadius.xl),
+                            ),
+                            child: Icon(
+                              Icons.backup_rounded,
+                              size: AppSpacing.huge,
+                              color: theme.colorScheme.onPrimaryContainer,
+                            ),
+                          ),
+                          const SizedBox(height: AppSpacing.xxl),
+                          Text(
+                            'Enable encrypted backup & restore',
+                            textAlign: TextAlign.center,
+                            style: theme.textTheme.headlineSmall,
+                          ),
+                          const SizedBox(height: AppSpacing.md),
+                          Text(
+                            'Your vault key is encrypted before backup. Google cannot read your photos or keys.',
+                            textAlign: TextAlign.center,
+                            style: theme.textTheme.bodyLarge?.copyWith(
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
-                  const Spacer(),
-                  if (state is OnboardingGoogleSignInFailed)
-                    _ErrorBanner(message: state.message),
-                  const SizedBox(height: 12),
+                  if (state is OnboardingGoogleSignInFailed) ...[
+                    InfoBanner(
+                      message: state.message,
+                      tone: InfoBannerTone.error,
+                    ),
+                    const SizedBox(height: AppSpacing.md),
+                  ],
                   if (state is OnboardingGoogleSignInSuccess) ...[
-                    _SuccessBanner(email: state.email),
-                    const SizedBox(height: 12),
+                    InfoBanner(
+                      message: 'Signed in as ${state.email}',
+                      tone: InfoBannerTone.success,
+                    ),
+                    const SizedBox(height: AppSpacing.md),
                     FilledButton.icon(
                       onPressed: () => context.push('/restore'),
                       icon: const Icon(Icons.restore_rounded),
                       label: const Text('Restore from Google backup'),
                     ),
-                    const SizedBox(height: 8),
+                    const SizedBox(height: AppSpacing.sm),
                     OutlinedButton.icon(
                       onPressed: () => context
                           .read<OnboardingCubit>()
@@ -76,75 +105,17 @@ class GoogleSignInScreen extends StatelessWidget {
                       icon: const Icon(Icons.account_circle_outlined),
                       label: const Text('Continue with Google'),
                     ),
-                  const SizedBox(height: 12),
+                  const SizedBox(height: AppSpacing.md),
                   TextButton(
                     onPressed: () =>
                         context.read<OnboardingCubit>().fallbackToLocalMode(),
                     child: const Text('Skip — continue locally instead'),
                   ),
-                  const Spacer(),
                 ],
               ),
             ),
           );
         },
-      ),
-    );
-  }
-
-}
-
-class _SuccessBanner extends StatelessWidget {
-  const _SuccessBanner({required this.email});
-  final String email;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.secondaryContainer,
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Text(
-        'Signed in as $email',
-        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-          color: Theme.of(context).colorScheme.onSecondaryContainer,
-        ),
-      ),
-    );
-  }
-}
-
-class _ErrorBanner extends StatelessWidget {
-  const _ErrorBanner({required this.message});
-  final String message;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.errorContainer,
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Row(
-        children: [
-          Icon(
-            Icons.error_outline_rounded,
-            color: Theme.of(context).colorScheme.onErrorContainer,
-            size: 18,
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              message,
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: Theme.of(context).colorScheme.onErrorContainer,
-              ),
-            ),
-          ),
-        ],
       ),
     );
   }

@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../theme/app_spacing.dart';
+
 /// Shows a standard Cancel/Confirm [AlertDialog] and returns `true` only when
 /// the user taps the confirm action.
 ///
@@ -12,11 +14,19 @@ Future<bool> showConfirmDialog(
   String cancelLabel = 'Cancel',
   String confirmLabel = 'Confirm',
 }) async {
+  final theme = Theme.of(context);
   final confirmed = await showDialog<bool>(
     context: context,
     builder: (context) => AlertDialog(
+      icon: Icon(Icons.help_outline_rounded, color: theme.colorScheme.primary),
       title: Text(title),
       content: Text(content),
+      actionsPadding: const EdgeInsets.fromLTRB(
+        AppSpacing.lg,
+        0,
+        AppSpacing.lg,
+        AppSpacing.lg,
+      ),
       actions: [
         TextButton(
           onPressed: () => Navigator.of(context).pop(false),

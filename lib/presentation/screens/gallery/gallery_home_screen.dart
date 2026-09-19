@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
@@ -9,9 +11,12 @@ import '../../../application/usecases/unlock_vault_usecase.dart';
 import '../../../domain/entities/user_mode.dart';
 import '../../../domain/entities/vault_photo.dart';
 import '../../../domain/repositories/photo_repository.dart';
+import '../../../core/widgets/app_state_views.dart';
+import '../../../core/widgets/app_surfaces.dart';
 import '../../widgets/confirm_dialog.dart';
 import '../../widgets/pin_reauth_dialog.dart';
 import '../../../core/widgets/main_scaffold_scope.dart';
+import '../../theme/app_spacing.dart';
 import '../import/import_screen.dart';
 
 /// Screen 8: Gallery home — empty state.
@@ -202,8 +207,9 @@ class _GalleryBodyState extends State<_GalleryBody> {
       if (!allowed || !mounted) return;
     }
 
-    final selectedPhotos =
-        _photos.where((p) => _selectedIds.contains(p.id)).toList();
+    final selectedPhotos = _photos
+        .where((p) => _selectedIds.contains(p.id))
+        .toList();
     _exitSelectionMode();
 
     int successCount = 0;
@@ -252,7 +258,9 @@ class _GalleryBodyState extends State<_GalleryBody> {
 
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('${idsToDelete.length} photos moved to Secure Trash')),
+      SnackBar(
+        content: Text('${idsToDelete.length} photos moved to Secure Trash'),
+      ),
     );
   }
 
@@ -285,32 +293,18 @@ class _GalleryBodyState extends State<_GalleryBody> {
   @override
   Widget build(BuildContext context) {
     if (_loading) {
-      return const Center(child: CircularProgressIndicator());
+      return const LoadingView(message: 'Loading encrypted photos...');
     }
     if (_photos.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              Icons.photo_library_outlined,
-              size: 96,
-              color: Theme.of(context).colorScheme.outlineVariant,
-            ),
-            const SizedBox(height: 24),
-            Text(
-              'Your vault is empty',
-              style: Theme.of(context).textTheme.titleLarge,
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'Tap Import to add encrypted photos.',
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
-              ),
-            ),
-          ],
-        ),
+      return EmptyView(
+        icon: Icons.photo_library_outlined,
+        title: 'Your vault is empty',
+        subtitle: 'Tap Import to add encrypted photos.',
+        actionLabel: 'Import photos',
+        actionIcon: Icons.add_photo_alternate_outlined,
+        onAction: () {
+          showImportBottomSheet(context, importManager: widget.importManager);
+        },
       );
     }
     return Column(
@@ -340,23 +334,27 @@ class _GalleryBodyState extends State<_GalleryBody> {
         if (widget.photoSyncEnabled && !_isSelectionMode)
           const LinearProgressIndicator(minHeight: 2),
         if (widget.photoSyncEnabled && !_isSelectionMode)
-          const Padding(
-            padding: EdgeInsets.only(bottom: 4),
-            child: Text('Sync is running in background'),
+          Padding(
+            padding: const EdgeInsets.only(bottom: AppSpacing.xs),
+            child: Text(
+              'Sync is running in background',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+            ),
           ),
         Expanded(
-          child: GridView.builder(
-            padding: const EdgeInsets.all(8),
-            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-              crossAxisCount: 3,
-              crossAxisSpacing: 8,
-              mainAxisSpacing: 8,
-            ),
+          child: MediaGrid(
             itemCount: _photos.length,
             itemBuilder: (context, index) {
               final photo = _photos[index];
               final isSelected = _selectedIds.contains(photo.id);
-              return GestureDetector(
+              return _GalleryTile(
+                photo: photo,
+                isSelected: isSelected,
+                isSelectionMode: _isSelectionMode,
+                loadThumbnail: () =>
+                    widget.importManager.loadThumbnailBytes(photo),
                 onTap: () {
                   if (_isSelectionMode) {
                     _toggleSelection(photo.id);
@@ -369,93 +367,134 @@ class _GalleryBodyState extends State<_GalleryBody> {
                     _toggleSelection(photo.id);
                   }
                 },
-                child: Stack(
-                  fit: StackFit.expand,
-                  children: [
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(8),
-                      child: FutureBuilder(
-                        future: widget.importManager.loadThumbnailBytes(
-                          photo,
-                        ),
-                        builder: (context, snapshot) {
-                          final bytes = snapshot.data;
-                          if (snapshot.connectionState !=
-                                  ConnectionState.done ||
-                              bytes == null) {
-                            return Container(
-                              color: Theme.of(
-                                context,
-                              ).colorScheme.surfaceContainerHighest,
-                              child: const Center(
-                                child: SizedBox(
-                                  width: 20,
-                                  height: 20,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                  ),
-                                ),
-                              ),
-                            );
-                          }
-                          return Image.memory(
-                            bytes,
-                            fit: BoxFit.cover,
-                            errorBuilder: (_, _, _) => Container(
-                              color: Theme.of(
-                                context,
-                              ).colorScheme.surfaceContainerHighest,
-                              child: const Icon(Icons.image_outlined),
-                            ),
-                          );
-                        },
-                      ),
-                    ),
-                    if (isSelected)
-                      Container(
-                        decoration: BoxDecoration(
-                          color: Theme.of(context)
-                              .colorScheme
-                              .primary
-                              .withValues(alpha: 0.3),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                      ),
-                    if (isSelected)
-                      const Positioned(
-                        top: 4,
-                        left: 4,
-                        child: Icon(
-                          Icons.check_circle,
-                          color: Colors.white,
-                          size: 20,
-                        ),
-                      ),
-                    if (!_isSelectionMode)
-                      Positioned(
-                        top: 4,
-                        right: 4,
-                        child: Material(
-                          color: Colors.black54,
-                          borderRadius: BorderRadius.circular(999),
-                          child: IconButton(
-                            visualDensity: VisualDensity.compact,
-                            icon: const Icon(
-                              Icons.delete_outline,
-                              color: Colors.white,
-                              size: 18,
-                            ),
-                            onPressed: () => _delete(photo),
-                          ),
-                        ),
-                      ),
-                  ],
-                ),
+                onDelete: () => _delete(photo),
               );
             },
           ),
         ),
       ],
+    );
+  }
+}
+
+class _GalleryTile extends StatelessWidget {
+  const _GalleryTile({
+    required this.photo,
+    required this.isSelected,
+    required this.isSelectionMode,
+    required this.loadThumbnail,
+    required this.onTap,
+    required this.onLongPress,
+    required this.onDelete,
+  });
+
+  final VaultPhoto photo;
+  final bool isSelected;
+  final bool isSelectionMode;
+  final Future<Uint8List?> Function() loadThumbnail;
+  final VoidCallback onTap;
+  final VoidCallback onLongPress;
+  final VoidCallback onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return GestureDetector(
+      onTap: onTap,
+      onLongPress: onLongPress,
+      child: AnimatedScale(
+        duration: AppDuration.fast,
+        scale: isSelected ? 0.96 : 1,
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            ClipRRect(
+              borderRadius: AppRadius.all(AppRadius.md),
+              clipBehavior: Clip.antiAlias,
+              child: FutureBuilder<Uint8List?>(
+                future: loadThumbnail(),
+                builder: (context, snapshot) {
+                  final bytes = snapshot.data;
+                  if (snapshot.connectionState != ConnectionState.done ||
+                      bytes == null) {
+                    return ColoredBox(
+                      color: scheme.surfaceContainerHighest,
+                      child: const Center(
+                        child: SizedBox.square(
+                          dimension: AppSpacing.xl,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                      ),
+                    );
+                  }
+                  return Image.memory(
+                    bytes,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, _, _) => ColoredBox(
+                      color: scheme.surfaceContainerHighest,
+                      child: const Icon(Icons.image_outlined),
+                    ),
+                  );
+                },
+              ),
+            ),
+            Positioned.fill(
+              child: AnimatedContainer(
+                duration: AppDuration.fast,
+                decoration: BoxDecoration(
+                  borderRadius: AppRadius.all(AppRadius.md),
+                  border: Border.all(
+                    color: isSelected ? scheme.primary : scheme.outlineVariant,
+                    width: isSelected ? 2 : 1,
+                  ),
+                  color: isSelected
+                      ? scheme.primary.withValues(alpha: 0.22)
+                      : scheme.surfaceTint.withValues(alpha: 0),
+                ),
+              ),
+            ),
+            if (isSelectionMode)
+              Positioned(
+                top: AppSpacing.xs,
+                left: AppSpacing.xs,
+                child: AnimatedContainer(
+                  duration: AppDuration.fast,
+                  padding: const EdgeInsets.all(AppSpacing.xxs),
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: isSelected
+                        ? scheme.primary
+                        : scheme.surface.withValues(alpha: 0.80),
+                    border: Border.all(color: scheme.onPrimary),
+                  ),
+                  child: Icon(
+                    isSelected ? Icons.check_rounded : Icons.circle_outlined,
+                    color: isSelected ? scheme.onPrimary : scheme.primary,
+                    size: 18,
+                  ),
+                ),
+              ),
+            if (!isSelectionMode)
+              Positioned(
+                top: AppSpacing.xs,
+                right: AppSpacing.xs,
+                child: Material(
+                  color: scheme.scrim.withValues(alpha: 0.54),
+                  borderRadius: AppRadius.all(AppRadius.pill),
+                  child: IconButton(
+                    visualDensity: VisualDensity.compact,
+                    icon: Icon(
+                      Icons.delete_outline,
+                      color: scheme.onInverseSurface,
+                      size: 18,
+                    ),
+                    onPressed: onDelete,
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -467,7 +506,10 @@ class _BackupStatusBadge extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+      padding: const EdgeInsets.symmetric(
+        vertical: AppSpacing.sm,
+        horizontal: AppSpacing.xs,
+      ),
       child: Chip(
         avatar: Icon(
           synced ? Icons.cloud_done_rounded : Icons.cloud_upload_outlined,

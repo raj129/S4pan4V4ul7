@@ -1,5 +1,11 @@
 import 'package:flutter/material.dart';
 
+import '../../../features/calculator/presentation/theme/calculator_theme.dart';
+
+/// Chrome for the facade's utility pages.
+///
+/// Deliberately styled from [CalculatorTheme] rather than the app theme: this
+/// surface is part of the disguise and must never inherit the vault's look.
 class UtilityShell extends StatelessWidget {
   const UtilityShell({required this.child, this.title, super.key});
 
@@ -9,7 +15,7 @@ class UtilityShell extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF10131B),
+      backgroundColor: CalculatorTheme.shellBackground,
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.fromLTRB(16, 16, 16, 20),
@@ -20,7 +26,7 @@ class UtilityShell extends StatelessWidget {
                 Text(
                   title!,
                   style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                    color: Colors.white,
+                    color: CalculatorTheme.primaryText,
                     fontWeight: FontWeight.w700,
                   ),
                 ),

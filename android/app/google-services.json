@@ -9,7 +9,7 @@
       "client_info": {
         "mobilesdk_app_id": "1:209716874258:android:becd7304e0ba1b772cdccb",
         "android_client_info": {
-          "package_name": "com.example.weather"
+          "package_name": "com.system.calculator"
         }
       },
       "oauth_client": [
@@ -17,7 +17,7 @@
           "client_id": "209716874258-a39mj6h381ud13ce905ji6pjrcfpal6a.apps.googleusercontent.com",
           "client_type": 1,
           "android_info": {
-            "package_name": "com.example.weather",
+            "package_name": "com.system.calculator",
             "certificate_hash": "b313ed328be1a7b62bf17e3a46652cd4f303d655"
           }
         },
@@ -25,7 +25,7 @@
           "client_id": "209716874258-hiu56pgo2v8gcj1vkkiealo47d3ocoaa.apps.googleusercontent.com",
           "client_type": 1,
           "android_info": {
-            "package_name": "com.example.weather",
+            "package_name": "com.system.calculator",
             "certificate_hash": "bef3f7a4fdc8e756da1c9bc6759323f635790459"
           }
         },

@@ -1,12 +1,13 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../../application/services/pin_validator.dart';
+import '../../../core/widgets/app_surfaces.dart';
 import '../../../domain/entities/user_mode.dart';
 import '../../../presentation/state/onboarding/onboarding_cubit.dart';
 import '../../../presentation/state/onboarding/onboarding_state.dart';
-import 'pin_dot_row.dart';
+import '../../theme/app_spacing.dart';
+import '../../widgets/pin/pin_pad.dart';
 
 /// Screen 4: Create PIN screen.
 ///
@@ -71,48 +72,19 @@ class _CreatePinScreenState extends State<CreatePinScreen> {
               : null;
           // If invalid, reset digits so user re-enters from scratch.
           if (state is OnboardingPinInvalid && _digits.isNotEmpty) {
-            WidgetsBinding.instance.addPostFrameCallback(
-              (_) => setState(() => _digits.clear()),
-            );
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (mounted) setState(_digits.clear);
+            });
           }
-          return SafeArea(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                const SizedBox(height: 32),
-                Text(
-                  'Create your vault PIN',
-                  textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.titleLarge,
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  'This PIN is separate from your device PIN.',
-                  textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
-                  ),
-                ),
-                const SizedBox(height: 32),
-                PinDotRow(filledCount: _digits.length, total: _pinLength),
-                if (errorMsg != null) ...[
-                  const SizedBox(height: 12),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 32),
-                    child: Text(
-                      errorMsg,
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        color: Theme.of(context).colorScheme.error,
-                      ),
-                    ),
-                  ),
-                ],
-                const Spacer(),
-                _PinPad(onDigit: _onDigitTap, onDelete: _onDelete),
-                const SizedBox(height: 24),
-              ],
-            ),
+          return _PinEntryLayout(
+            icon: Icons.lock_outline_rounded,
+            title: 'Create your vault PIN',
+            subtitle: 'This PIN is separate from your device PIN.',
+            filledCount: _digits.length,
+            total: _pinLength,
+            errorMessage: errorMsg,
+            onDigit: _onDigitTap,
+            onDelete: _onDelete,
           );
         },
       ),
@@ -176,48 +148,19 @@ class _ConfirmPinScreenState extends State<ConfirmPinScreen> {
               ? state.message
               : null;
           if (state is OnboardingPinInvalid && _digits.isNotEmpty) {
-            WidgetsBinding.instance.addPostFrameCallback(
-              (_) => setState(() => _digits.clear()),
-            );
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (mounted) setState(_digits.clear);
+            });
           }
-          return SafeArea(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                const SizedBox(height: 32),
-                Text(
-                  'Confirm your vault PIN',
-                  textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.titleLarge,
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  'Enter the same 4-digit PIN again.',
-                  textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
-                  ),
-                ),
-                const SizedBox(height: 32),
-                PinDotRow(filledCount: _digits.length, total: _pinLength),
-                if (errorMsg != null) ...[
-                  const SizedBox(height: 12),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 32),
-                    child: Text(
-                      errorMsg,
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        color: Theme.of(context).colorScheme.error,
-                      ),
-                    ),
-                  ),
-                ],
-                const Spacer(),
-                _PinPad(onDigit: _onDigitTap, onDelete: _onDelete),
-                const SizedBox(height: 24),
-              ],
-            ),
+          return _PinEntryLayout(
+            icon: Icons.verified_user_outlined,
+            title: 'Confirm your vault PIN',
+            subtitle: 'Enter the same 4-digit PIN again.',
+            filledCount: _digits.length,
+            total: _pinLength,
+            errorMessage: errorMsg,
+            onDigit: _onDigitTap,
+            onDelete: _onDelete,
           );
         },
       ),
@@ -225,67 +168,117 @@ class _ConfirmPinScreenState extends State<ConfirmPinScreen> {
   }
 }
 
-// ─────────────────────────────────────────────
-// Shared PIN pad widget
-// ─────────────────────────────────────────────
+class _PinEntryLayout extends StatelessWidget {
+  const _PinEntryLayout({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.filledCount,
+    required this.total,
+    required this.onDigit,
+    required this.onDelete,
+    this.errorMessage,
+  });
 
-class _PinPad extends StatelessWidget {
-  const _PinPad({required this.onDigit, required this.onDelete});
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final int filledCount;
+  final int total;
   final ValueChanged<int> onDigit;
   final VoidCallback onDelete;
-
-  static const _layout = [
-    [1, 2, 3],
-    [4, 5, 6],
-    [7, 8, 9],
-    [-1, 0, -2], // -1 = empty, -2 = delete
-  ];
+  final String? errorMessage;
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 48),
-      child: Column(
-        children: _layout.map((row) {
-          return Row(
-            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-            children: row.map((digit) {
-              if (digit == -1) return const SizedBox(width: 72, height: 72);
-              if (digit == -2) {
-                return _PinKey(
-                  onTap: onDelete,
-                  child: const Icon(Icons.backspace_outlined),
-                );
-              }
-              return _PinKey(
-                onTap: () => onDigit(digit),
-                child: Text(
-                  '$digit',
-                  style: Theme.of(context).textTheme.headlineSmall,
-                ),
-              );
-            }).toList(),
-          );
-        }).toList(),
+    final theme = Theme.of(context);
+    return SafeArea(
+      child: Padding(
+        padding: AppSpacing.page,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const SizedBox(height: AppSpacing.xxl),
+            _PinHero(icon: icon, title: title, subtitle: subtitle),
+            const SizedBox(height: AppSpacing.xxl),
+            PinDotRow(
+              filledCount: filledCount,
+              total: total,
+              hasError: errorMessage != null,
+            ),
+            AnimatedSwitcher(
+              duration: AppDuration.fast,
+              child: errorMessage == null
+                  ? const SizedBox(height: AppSpacing.xl)
+                  : Padding(
+                      key: ValueKey(errorMessage),
+                      padding: const EdgeInsets.only(top: AppSpacing.lg),
+                      child: InfoBanner(
+                        message: errorMessage!,
+                        tone: InfoBannerTone.error,
+                      ),
+                    ),
+            ),
+            const Spacer(),
+            PinPad(onDigit: onDigit, onDelete: onDelete),
+            Text(
+              'Digits are hidden and never shown on screen.',
+              textAlign: TextAlign.center,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: AppSpacing.lg),
+          ],
+        ),
       ),
     );
   }
 }
 
-class _PinKey extends StatelessWidget {
-  const _PinKey({required this.child, required this.onTap});
-  final Widget child;
-  final VoidCallback onTap;
+class _PinHero extends StatelessWidget {
+  const _PinHero({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+  });
+
+  final IconData icon;
+  final String title;
+  final String subtitle;
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(
-      onTap: () {
-        HapticFeedback.selectionClick();
-        onTap();
-      },
-      borderRadius: BorderRadius.circular(36),
-      child: SizedBox(width: 72, height: 72, child: Center(child: child)),
+    final theme = Theme.of(context);
+    return Column(
+      children: [
+        Container(
+          padding: const EdgeInsets.all(AppSpacing.lg),
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: theme.colorScheme.primaryContainer,
+          ),
+          child: Icon(
+            icon,
+            size: AppSpacing.xxl,
+            color: theme.colorScheme.onPrimaryContainer,
+          ),
+        ),
+        const SizedBox(height: AppSpacing.xl),
+        Text(
+          title,
+          textAlign: TextAlign.center,
+          style: theme.textTheme.headlineSmall,
+        ),
+        const SizedBox(height: AppSpacing.sm),
+        Text(
+          subtitle,
+          textAlign: TextAlign.center,
+          style: theme.textTheme.bodyMedium?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
+        ),
+      ],
     );
   }
 }

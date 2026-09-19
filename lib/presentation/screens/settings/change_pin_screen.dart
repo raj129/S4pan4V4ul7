@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../application/services/pin_validator.dart';
 import '../../../application/usecases/change_pin_usecase.dart';
+import '../../../core/widgets/app_surfaces.dart';
+import '../../theme/app_spacing.dart';
+import '../../widgets/pin/pin_pad.dart';
 
 enum ChangePinStep { verifyOld, enterNew, confirmNew }
 
@@ -99,10 +101,7 @@ class _ChangePinScreenState extends State<ChangePinScreen> {
     });
 
     try {
-      await widget.changePinUseCase.execute(
-        oldPin: _oldPin,
-        newPin: _newPin,
-      );
+      await widget.changePinUseCase.execute(oldPin: _oldPin, newPin: _newPin);
       // Re-wrap the chat identity key so history stays recoverable. A failure
       // here must not read as a failed PIN change — the PIN itself did change.
       var chatKeyWarning = false;
@@ -141,173 +140,127 @@ class _ChangePinScreenState extends State<ChangePinScreen> {
 
   @override
   Widget build(BuildContext context) {
-    String title = '';
-    String subtitle = '';
+    final copy = switch (_step) {
+      ChangePinStep.verifyOld => (
+        icon: Icons.lock_outline_rounded,
+        title: 'Confirm Old PIN',
+        subtitle: 'Enter your current app PIN to continue.',
+      ),
+      ChangePinStep.enterNew => (
+        icon: Icons.password_rounded,
+        title: 'Enter New PIN',
+        subtitle: 'Choose a new 4-digit PIN.',
+      ),
+      ChangePinStep.confirmNew => (
+        icon: Icons.verified_user_outlined,
+        title: 'Confirm New PIN',
+        subtitle: 'Re-enter your new PIN.',
+      ),
+    };
 
-    switch (_step) {
-      case ChangePinStep.verifyOld:
-        title = 'Confirm Old PIN';
-        subtitle = 'Enter your current app PIN to continue.';
-        break;
-      case ChangePinStep.enterNew:
-        title = 'Enter New PIN';
-        subtitle = 'Choose a new 4-digit PIN.';
-        break;
-      case ChangePinStep.confirmNew:
-        title = 'Confirm New PIN';
-        subtitle = 'Re-enter your new PIN.';
-        break;
-    }
-
+    final theme = Theme.of(context);
     return Scaffold(
       appBar: AppBar(title: const Text('Change PIN')),
-      body: Padding(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            const SizedBox(height: 20),
-            Text(
-              title,
-              style: Theme.of(context).textTheme.headlineSmall,
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 8),
-            Text(
-              subtitle,
-              style: Theme.of(context).textTheme.bodyMedium,
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 32),
-            _PinDotRow(filledCount: _digits.length, total: _pinLength),
-            if (_step != ChangePinStep.verifyOld) ...[
-              const SizedBox(height: 24),
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Icon(
-                    Icons.info_outline,
-                    size: 18,
-                    color: Theme.of(context).colorScheme.outline,
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
+      body: SafeArea(
+        child: Padding(
+          padding: AppSpacing.page,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const SizedBox(height: AppSpacing.xxl),
+              _ChangePinHero(
+                icon: copy.icon,
+                title: copy.title,
+                subtitle: copy.subtitle,
+              ),
+              const SizedBox(height: AppSpacing.xxl),
+              PinDotRow(
+                filledCount: _digits.length,
+                total: _pinLength,
+                hasError: _error != null,
+              ),
+              if (_step != ChangePinStep.verifyOld) ...[
+                const SizedBox(height: AppSpacing.lg),
+                const InfoBanner(
+                  message:
                       'Your PIN also unlocks your chat history on a new device. '
                       'If you forget it, past messages cannot be recovered.',
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: Theme.of(context).colorScheme.outline,
-                      ),
-                    ),
-                  ),
-                ],
+                  tone: InfoBannerTone.info,
+                ),
+              ],
+              if (_error != null) ...[
+                const SizedBox(height: AppSpacing.lg),
+                InfoBanner(message: _error!, tone: InfoBannerTone.error),
+              ],
+              if (_busy) ...[
+                const SizedBox(height: AppSpacing.lg),
+                const Center(child: CircularProgressIndicator()),
+              ],
+              const Spacer(),
+              PinPad(
+                onDigit: _onDigitTap,
+                onDelete: _onDelete,
+                enabled: !_busy,
               ),
-            ],
-            if (_error != null) ...[
-              const SizedBox(height: 24),
               Text(
-                _error!,
+                'Digits are hidden while you update the vault PIN.',
                 textAlign: TextAlign.center,
-                style: TextStyle(color: Theme.of(context).colorScheme.error),
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
               ),
+              const SizedBox(height: AppSpacing.lg),
             ],
-            if (_busy) ...[
-              const SizedBox(height: 24),
-              const Center(child: CircularProgressIndicator()),
-            ],
-            const Spacer(),
-            _PinPad(onDigit: _onDigitTap, onDelete: _onDelete),
-          ],
+          ),
         ),
       ),
     );
   }
 }
 
-class _PinDotRow extends StatelessWidget {
-  const _PinDotRow({required this.filledCount, required this.total});
-  final int filledCount;
-  final int total;
+class _ChangePinHero extends StatelessWidget {
+  const _ChangePinHero({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+  });
+
+  final IconData icon;
+  final String title;
+  final String subtitle;
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: List.generate(total, (index) {
-        final filled = index < filledCount;
-        return Container(
-          width: 12,
-          height: 12,
-          margin: const EdgeInsets.symmetric(horizontal: 6),
+    final theme = Theme.of(context);
+    return Column(
+      children: [
+        Container(
+          padding: const EdgeInsets.all(AppSpacing.lg),
           decoration: BoxDecoration(
             shape: BoxShape.circle,
-            color: filled
-                ? Theme.of(context).colorScheme.primary
-                : Theme.of(context).colorScheme.outlineVariant,
+            color: theme.colorScheme.primaryContainer,
           ),
-        );
-      }),
-    );
-  }
-}
-
-class _PinPad extends StatelessWidget {
-  const _PinPad({required this.onDigit, required this.onDelete});
-  final ValueChanged<int> onDigit;
-  final VoidCallback onDelete;
-
-  static const _layout = [
-    [1, 2, 3],
-    [4, 5, 6],
-    [7, 8, 9],
-    [-1, 0, -2],
-  ];
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 48, vertical: 16),
-      child: Column(
-        children: _layout.map((row) {
-          return Row(
-            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-            children: row.map((digit) {
-              if (digit == -1) return const SizedBox(width: 72, height: 72);
-              if (digit == -2) {
-                return _PinKey(
-                  onTap: onDelete,
-                  child: const Icon(Icons.backspace_outlined),
-                );
-              }
-              return _PinKey(
-                onTap: () => onDigit(digit),
-                child: Text(
-                  '$digit',
-                  style: Theme.of(context).textTheme.headlineSmall,
-                ),
-              );
-            }).toList(),
-          );
-        }).toList(),
-      ),
-    );
-  }
-}
-
-class _PinKey extends StatelessWidget {
-  const _PinKey({required this.onTap, required this.child});
-  final VoidCallback onTap;
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      onTap: () {
-        HapticFeedback.selectionClick();
-        onTap();
-      },
-      borderRadius: BorderRadius.circular(36),
-      child: SizedBox(width: 72, height: 72, child: Center(child: child)),
+          child: Icon(
+            icon,
+            size: AppSpacing.xxl,
+            color: theme.colorScheme.onPrimaryContainer,
+          ),
+        ),
+        const SizedBox(height: AppSpacing.xl),
+        Text(
+          title,
+          style: theme.textTheme.headlineSmall,
+          textAlign: TextAlign.center,
+        ),
+        const SizedBox(height: AppSpacing.sm),
+        Text(
+          subtitle,
+          style: theme.textTheme.bodyMedium?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
+          textAlign: TextAlign.center,
+        ),
+      ],
     );
   }
 }

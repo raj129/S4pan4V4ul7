@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../presentation/theme/app_spacing.dart';
+
 /// Centered spinner used for full-screen loading states.
 ///
 /// Replaces the many ad-hoc `Center(child: CircularProgressIndicator())`
@@ -11,17 +13,49 @@ class LoadingView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return Center(
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const CircularProgressIndicator(),
+          const SizedBox(
+            width: 32,
+            height: 32,
+            child: CircularProgressIndicator(strokeWidth: 3),
+          ),
           if (message != null) ...[
-            const SizedBox(height: 16),
-            Text(message!, style: Theme.of(context).textTheme.bodyMedium),
+            const SizedBox(height: AppSpacing.lg),
+            Text(
+              message!,
+              textAlign: TextAlign.center,
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
           ],
         ],
       ),
+    );
+  }
+}
+
+/// Icon sitting inside a soft tinted disc — reads better than a bare glyph.
+class _StateIcon extends StatelessWidget {
+  const _StateIcon({required this.icon, required this.tint});
+
+  final IconData icon;
+  final Color tint;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 88,
+      height: 88,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: tint.withValues(alpha: 0.12),
+      ),
+      child: Icon(icon, size: 40, color: tint),
     );
   }
 }
@@ -32,33 +66,56 @@ class LoadingView extends StatelessWidget {
 /// scattered across screens with no shared visual treatment or retry
 /// affordance.
 class ErrorView extends StatelessWidget {
-  const ErrorView({super.key, required this.message, this.onRetry});
+  const ErrorView({
+    super.key,
+    required this.message,
+    this.title,
+    this.onRetry,
+    this.retryLabel,
+  });
 
   final String message;
+
+  /// Short headline shown above the detail message.
+  final String? title;
+
   final VoidCallback? onRetry;
+  final String? retryLabel;
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(24),
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(AppSpacing.xl),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(
-              Icons.error_outline,
-              size: 48,
-              color: Theme.of(context).colorScheme.error,
+            _StateIcon(
+              icon: Icons.error_outline_rounded,
+              tint: theme.colorScheme.error,
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: AppSpacing.lg),
+            Text(
+              title ?? 'Something went wrong',
+              textAlign: TextAlign.center,
+              style: theme.textTheme.titleMedium,
+            ),
+            const SizedBox(height: AppSpacing.sm),
             Text(
               message,
               textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.bodyMedium,
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
             ),
             if (onRetry != null) ...[
-              const SizedBox(height: 16),
-              FilledButton.tonal(onPressed: onRetry, child: const Text('Retry')),
+              const SizedBox(height: AppSpacing.xl),
+              FilledButton.tonalIcon(
+                onPressed: onRetry,
+                icon: const Icon(Icons.refresh_rounded),
+                label: Text(retryLabel ?? 'Try again'),
+              ),
             ],
           ],
         ),
@@ -81,6 +138,7 @@ class EmptyView extends StatelessWidget {
     this.subtitle,
     this.actionLabel,
     this.onAction,
+    this.actionIcon,
   });
 
   final IconData icon;
@@ -88,36 +146,47 @@ class EmptyView extends StatelessWidget {
   final String? subtitle;
   final String? actionLabel;
   final VoidCallback? onAction;
+  final IconData? actionIcon;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(24),
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(AppSpacing.xl),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, size: 56, color: theme.colorScheme.outline),
-            const SizedBox(height: 16),
+            _StateIcon(icon: icon, tint: theme.colorScheme.primary),
+            const SizedBox(height: AppSpacing.lg),
             Text(
               title,
               textAlign: TextAlign.center,
               style: theme.textTheme.titleMedium,
             ),
             if (subtitle != null) ...[
-              const SizedBox(height: 8),
-              Text(
-                subtitle!,
-                textAlign: TextAlign.center,
-                style: theme.textTheme.bodyMedium?.copyWith(
-                  color: theme.colorScheme.outline,
+              const SizedBox(height: AppSpacing.sm),
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 320),
+                child: Text(
+                  subtitle!,
+                  textAlign: TextAlign.center,
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
                 ),
               ),
             ],
             if (actionLabel != null && onAction != null) ...[
-              const SizedBox(height: 20),
-              FilledButton(onPressed: onAction, child: Text(actionLabel!)),
+              const SizedBox(height: AppSpacing.xl),
+              if (actionIcon != null)
+                FilledButton.icon(
+                  onPressed: onAction,
+                  icon: Icon(actionIcon),
+                  label: Text(actionLabel!),
+                )
+              else
+                FilledButton(onPressed: onAction, child: Text(actionLabel!)),
             ],
           ],
         ),

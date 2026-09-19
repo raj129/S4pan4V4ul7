@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
 import '../../../application/services/pin_validator.dart';
 import '../../../application/usecases/unlock_vault_usecase.dart';
+import '../../../core/widgets/app_surfaces.dart';
+import '../../theme/app_spacing.dart';
+import '../../widgets/pin/pin_pad.dart';
 
 class LockScreen extends StatefulWidget {
   const LockScreen({
@@ -40,7 +42,10 @@ class _LockScreenState extends State<LockScreen> {
   void _onDigitTap(int digit) {
     if (_isTemporarilyLocked) return;
     if (_unlocking || _digits.length >= _pinLength) return;
-    setState(() => _digits.add(digit));
+    setState(() {
+      _digits.add(digit);
+      _error = null;
+    });
     if (_digits.length == _pinLength) {
       _submit();
     }
@@ -83,16 +88,19 @@ class _LockScreenState extends State<LockScreen> {
       return;
     }
     _failedAttempts += 1;
-    final lockSeconds = _lockoutScheduleSeconds[_failedAttempts.clamp(
-      0,
-      _lockoutScheduleSeconds.length - 1,
-    )];
+    final lockSeconds =
+        _lockoutScheduleSeconds[_failedAttempts.clamp(
+          0,
+          _lockoutScheduleSeconds.length - 1,
+        )];
     if (lockSeconds > 0) {
       _lockedUntil = DateTime.now().add(Duration(seconds: lockSeconds));
     }
     setState(() {
       _unlocking = false;
-      _error = _isTemporarilyLocked ? _lockoutMessage : 'Incorrect PIN. Try again.';
+      _error = _isTemporarilyLocked
+          ? _lockoutMessage
+          : 'Incorrect PIN. Try again.';
     });
   }
 
@@ -118,139 +126,101 @@ class _LockScreenState extends State<LockScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final locked = _isTemporarilyLocked;
     return Scaffold(
       appBar: AppBar(title: Text(widget.title)),
-      body: Padding(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text(
-              'Enter your app PIN',
-              style: Theme.of(context).textTheme.titleLarge,
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 8),
-            Text(
-              widget.subtitle,
-              style: Theme.of(context).textTheme.bodyMedium,
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 24),
-            _PinDotRow(filledCount: _digits.length, total: _pinLength),
-            if (_error != null) ...[
-              const SizedBox(height: 12),
-              Text(
-                _error!,
-                textAlign: TextAlign.center,
-                style: TextStyle(color: Theme.of(context).colorScheme.error),
+      body: SafeArea(
+        child: Padding(
+          padding: AppSpacing.page,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const SizedBox(height: AppSpacing.xxl),
+              _LockHero(title: 'Enter your app PIN', subtitle: widget.subtitle),
+              const SizedBox(height: AppSpacing.xxl),
+              PinDotRow(
+                filledCount: _digits.length,
+                total: _pinLength,
+                hasError: _error != null,
               ),
-            ],
-            if (_isTemporarilyLocked) ...[
-              const SizedBox(height: 8),
-              Text(
-                _lockoutMessage,
-                textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.bodySmall,
+              if (_error != null) ...[
+                const SizedBox(height: AppSpacing.lg),
+                InfoBanner(message: _error!, tone: InfoBannerTone.error),
+              ] else if (locked) ...[
+                const SizedBox(height: AppSpacing.lg),
+                InfoBanner(
+                  message: _lockoutMessage,
+                  tone: InfoBannerTone.warning,
+                ),
+              ] else
+                const SizedBox(height: AppSpacing.xl),
+              if (_unlocking) ...[
+                const SizedBox(height: AppSpacing.lg),
+                const Center(child: CircularProgressIndicator()),
+              ],
+              const Spacer(),
+              PinPad(
+                onDigit: _onDigitTap,
+                onDelete: _onDelete,
+                enabled: !_unlocking && !locked,
               ),
+              Text(
+                locked
+                    ? 'PIN entry is temporarily paused.'
+                    : 'Your vault stays locked until the PIN is verified.',
+                textAlign: TextAlign.center,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+              const SizedBox(height: AppSpacing.lg),
             ],
-            if (_unlocking) ...[
-              const SizedBox(height: 12),
-              const Center(child: CircularProgressIndicator()),
-            ],
-            const Spacer(),
-            _PinPad(onDigit: _onDigitTap, onDelete: _onDelete),
-          ],
+          ),
         ),
       ),
     );
   }
 }
 
-class _PinDotRow extends StatelessWidget {
-  const _PinDotRow({required this.filledCount, required this.total});
-  final int filledCount;
-  final int total;
+class _LockHero extends StatelessWidget {
+  const _LockHero({required this.title, required this.subtitle});
+
+  final String title;
+  final String subtitle;
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: List.generate(total, (index) {
-        final filled = index < filledCount;
-        return Container(
-          width: 12,
-          height: 12,
-          margin: const EdgeInsets.symmetric(horizontal: 6),
+    final theme = Theme.of(context);
+    return Column(
+      children: [
+        Container(
+          padding: const EdgeInsets.all(AppSpacing.lg),
           decoration: BoxDecoration(
             shape: BoxShape.circle,
-            color: filled
-                ? Theme.of(context).colorScheme.primary
-                : Theme.of(context).colorScheme.outline,
+            color: theme.colorScheme.primaryContainer,
           ),
-        );
-      }),
-    );
-  }
-}
-
-class _PinPad extends StatelessWidget {
-  const _PinPad({required this.onDigit, required this.onDelete});
-  final ValueChanged<int> onDigit;
-  final VoidCallback onDelete;
-
-  static const _layout = [
-    [1, 2, 3],
-    [4, 5, 6],
-    [7, 8, 9],
-    [-1, 0, -2],
-  ];
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 48, vertical: 16),
-      child: Column(
-        children: _layout.map((row) {
-          return Row(
-            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-            children: row.map((digit) {
-              if (digit == -1) return const SizedBox(width: 72, height: 72);
-              if (digit == -2) {
-                return _PinKey(
-                  onTap: onDelete,
-                  child: const Icon(Icons.backspace_outlined),
-                );
-              }
-              return _PinKey(
-                onTap: () => onDigit(digit),
-                child: Text(
-                  '$digit',
-                  style: Theme.of(context).textTheme.headlineSmall,
-                ),
-              );
-            }).toList(),
-          );
-        }).toList(),
-      ),
-    );
-  }
-}
-
-class _PinKey extends StatelessWidget {
-  const _PinKey({required this.onTap, required this.child});
-  final VoidCallback onTap;
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      onTap: () {
-        HapticFeedback.selectionClick();
-        onTap();
-      },
-      borderRadius: BorderRadius.circular(36),
-      child: SizedBox(width: 72, height: 72, child: Center(child: child)),
+          child: Icon(
+            Icons.lock_open_outlined,
+            size: AppSpacing.xxl,
+            color: theme.colorScheme.onPrimaryContainer,
+          ),
+        ),
+        const SizedBox(height: AppSpacing.xl),
+        Text(
+          title,
+          style: theme.textTheme.headlineSmall,
+          textAlign: TextAlign.center,
+        ),
+        const SizedBox(height: AppSpacing.sm),
+        Text(
+          subtitle,
+          style: theme.textTheme.bodyMedium?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
+          textAlign: TextAlign.center,
+        ),
+      ],
     );
   }
 }

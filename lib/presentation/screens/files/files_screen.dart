@@ -1,12 +1,14 @@
 import 'package:flutter/material.dart';
 
 import '../../../core/widgets/base_screen_shell.dart';
+import '../../theme/app_spacing.dart';
 
 class FilesScreen extends StatelessWidget {
   const FilesScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return BaseScreenShell(
       title: 'Encrypted Files',
       drawerSelectedIndex: 3,
@@ -17,15 +19,15 @@ class FilesScreen extends StatelessWidget {
             Icon(
               Icons.folder_open_outlined,
               size: 64,
-              color: Theme.of(context).colorScheme.primary,
+              color: theme.colorScheme.primary,
             ),
-            const SizedBox(height: 16),
-            const Text(
-              'Secure File Storage',
-              style: TextStyle(fontWeight: FontWeight.bold),
+            const SizedBox(height: AppSpacing.lg),
+            Text('Secure File Storage', style: theme.textTheme.titleMedium),
+            const SizedBox(height: AppSpacing.sm),
+            Text(
+              'Store any file type in your vault.',
+              style: theme.textTheme.bodyMedium,
             ),
-            const SizedBox(height: 8),
-            const Text('Store any file type in your vault.'),
           ],
         ),
       ),

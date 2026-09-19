@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../../../application/services/import_manager.dart';
+import '../../../core/widgets/app_state_views.dart';
+import '../../theme/app_spacing.dart';
 
 class ImportPreviewScreen extends StatefulWidget {
   const ImportPreviewScreen({
@@ -40,23 +42,20 @@ class _ImportPreviewScreenState extends State<ImportPreviewScreen> {
         future: _previewFuture,
         builder: (context, snapshot) {
           if (snapshot.connectionState != ConnectionState.done) {
-            return const Center(child: CircularProgressIndicator());
+            return const LoadingView(message: 'Loading preview...');
           }
           if (snapshot.hasError) {
-            return Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  const Icon(Icons.error_outline, size: 48),
-                  const SizedBox(height: 16),
-                  Text('Failed to load preview: ${snapshot.error}'),
-                ],
-              ),
+            return ErrorView(
+              title: 'Preview unavailable',
+              message: 'Failed to load preview: ${snapshot.error}',
             );
           }
           final bytes = snapshot.data;
           if (bytes == null || bytes.isEmpty) {
-            return const Center(child: Text('No image data'));
+            return const EmptyView(
+              icon: Icons.image_not_supported_outlined,
+              title: 'No image data',
+            );
           }
           return Column(
             children: [
@@ -66,7 +65,12 @@ class _ImportPreviewScreenState extends State<ImportPreviewScreen> {
                 ),
               ),
               Padding(
-                padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                padding: const EdgeInsets.fromLTRB(
+                  AppSpacing.lg,
+                  AppSpacing.sm,
+                  AppSpacing.lg,
+                  AppSpacing.lg,
+                ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -75,7 +79,7 @@ class _ImportPreviewScreenState extends State<ImportPreviewScreen> {
                       style: Theme.of(context).textTheme.bodySmall,
                       overflow: TextOverflow.ellipsis,
                     ),
-                    const SizedBox(height: 4),
+                    const SizedBox(height: AppSpacing.xs),
                     Text(
                       'Size: ${(bytes.length / 1024 / 1024).toStringAsFixed(2)} MB',
                       style: Theme.of(context).textTheme.bodySmall,
@@ -85,7 +89,12 @@ class _ImportPreviewScreenState extends State<ImportPreviewScreen> {
               ),
               SafeArea(
                 top: false,
-                minimum: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                minimum: const EdgeInsets.fromLTRB(
+                  AppSpacing.lg,
+                  AppSpacing.sm,
+                  AppSpacing.lg,
+                  AppSpacing.lg,
+                ),
                 child: Row(
                   children: [
                     Expanded(
@@ -94,7 +103,7 @@ class _ImportPreviewScreenState extends State<ImportPreviewScreen> {
                         child: const Text('Cancel'),
                       ),
                     ),
-                    const SizedBox(width: 12),
+                    const SizedBox(width: AppSpacing.md),
                     Expanded(
                       child: FilledButton(
                         onPressed: widget.onConfirm,

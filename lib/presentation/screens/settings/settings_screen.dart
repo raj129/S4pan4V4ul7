@@ -3,9 +3,11 @@ import 'package:go_router/go_router.dart';
 
 import '../../../application/services/pin_validator.dart';
 import '../../../application/usecases/unlock_vault_usecase.dart';
+import '../../../core/widgets/app_surfaces.dart';
 import '../../../core/widgets/base_screen_shell.dart';
 import '../../../domain/entities/user_mode.dart';
 import '../../../domain/repositories/settings_repository.dart';
+import '../../theme/app_spacing.dart';
 import '../../widgets/pin_reauth_dialog.dart';
 
 class SettingsScreen extends StatefulWidget {
@@ -50,10 +52,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _loadSettings() async {
     final photoSync = await widget.settingsRepository.isPhotoSyncEnabled();
-    final externalMirror =
-        await widget.settingsRepository.isExternalStorageMirrorEnabled();
-    final driveBackup =
-        await widget.settingsRepository.isDriveEncryptedBackupEnabled();
+    final externalMirror = await widget.settingsRepository
+        .isExternalStorageMirrorEnabled();
+    final driveBackup = await widget.settingsRepository
+        .isDriveEncryptedBackupEnabled();
     if (!mounted) return;
     setState(() {
       _photoSyncEnabled = photoSync;
@@ -64,191 +66,239 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final errorColor = Theme.of(context).colorScheme.error;
+
     return BaseScreenShell(
       title: 'Settings',
       drawerSelectedIndex: 4,
       body: ListView(
+        padding: const EdgeInsets.only(bottom: AppSpacing.xl),
         children: [
-          const _SectionHeader('Security'),
-          SwitchListTile(
-            title: const Text('Lock app on open'),
-            subtitle: const Text('Require PIN whenever app opens'),
-            value: _appLockOnOpen,
-            onChanged: (v) => setState(() => _appLockOnOpen = v),
+          const SectionHeader('Security'),
+          SettingsCard(
+            children: [
+              _SettingsSwitch(
+                icon: Icons.lock_outline_rounded,
+                title: 'Lock app on open',
+                subtitle: 'Require your PIN each time the vault opens.',
+                value: _appLockOnOpen,
+                onChanged: (v) => setState(() => _appLockOnOpen = v),
+              ),
+              _SettingsSwitch(
+                icon: Icons.screen_lock_portrait_outlined,
+                title: 'Auto-lock on background',
+                subtitle: 'Protect the vault when you leave the app.',
+                value: _autoLockOnBackground,
+                onChanged: (v) => setState(() => _autoLockOnBackground = v),
+              ),
+            ],
           ),
-          SwitchListTile(
-            title: const Text('Auto-lock on background'),
-            subtitle: const Text('Lock vault when app goes to background'),
-            value: _autoLockOnBackground,
-            onChanged: (v) => setState(() => _autoLockOnBackground = v),
-          ),
-          const _SectionHeader('Backup & Sync'),
-          SwitchListTile(
-            title: const Text('VMK backup'),
-            subtitle: Text(
-              widget.mode == UserMode.googleEnabled
-                  ? 'Encrypted VMK backup is enabled in Google mode'
-                  : 'Enable Google mode to use backup',
-            ),
-            value: _vmkBackupEnabled,
-            onChanged: widget.mode == UserMode.googleEnabled
-                ? (v) => setState(() => _vmkBackupEnabled = v)
-                : null,
-          ),
-          SwitchListTile(
-            title: const Text('Photo sync'),
-            subtitle: const Text('Disabled by default; enable explicitly'),
-            value: _photoSyncEnabled,
-            onChanged: (v) async {
-              if (!v) {
-                final allowed = await requirePinReauth(
-                  context: context,
-                  unlockVaultUseCase: widget.unlockVaultUseCase,
-                  pinValidator: widget.pinValidator,
-                  actionLabel: 'disable photo sync',
-                );
-                if (!allowed) return;
-              }
-              setState(() => _photoSyncEnabled = v);
-              await widget.settingsRepository.setPhotoSyncEnabled(v);
-              await widget.onSettingsChanged();
-            },
-          ),
-          SwitchListTile(
-            title: const Text('Keep encrypted copy in external storage'),
-            subtitle: const Text(
-              'Stores encrypted files + manifest under Android/media for recovery after reinstall.',
-            ),
-            value: _externalStorageMirrorEnabled,
-            onChanged: (v) async {
-              setState(() => _externalStorageMirrorEnabled = v);
-              await widget.settingsRepository.setExternalStorageMirrorEnabled(v);
-              await widget.onSettingsChanged();
-            },
-          ),
-          SwitchListTile(
-            title: const Text('Upload encrypted package to Google Drive'),
-            subtitle: const Text(
-              'Uploads encrypted objects + manifest + wrapped VMK envelope.',
-            ),
-            value: _driveEncryptedBackupEnabled,
-            onChanged: widget.mode == UserMode.googleEnabled
-                ? (v) async {
-                    if (!v) {
-                      final allowed = await requirePinReauth(
-                        context: context,
-                        unlockVaultUseCase: widget.unlockVaultUseCase,
-                        pinValidator: widget.pinValidator,
-                        actionLabel: 'disable Drive backup',
-                      );
-                      if (!allowed) return;
-                    }
-                    setState(() => _driveEncryptedBackupEnabled = v);
-                    await widget.settingsRepository
-                        .setDriveEncryptedBackupEnabled(v);
-                    await widget.onSettingsChanged();
+          const SectionHeader('Backup & sync'),
+          SettingsCard(
+            children: [
+              _SettingsSwitch(
+                icon: Icons.vpn_key_outlined,
+                title: 'VMK backup',
+                subtitle: widget.mode == UserMode.googleEnabled
+                    ? 'Back up the wrapped vault master key for restore.'
+                    : 'Switch to Google mode to enable key backup.',
+                value: _vmkBackupEnabled,
+                onChanged: widget.mode == UserMode.googleEnabled
+                    ? (v) => setState(() => _vmkBackupEnabled = v)
+                    : null,
+              ),
+              _SettingsSwitch(
+                icon: Icons.cloud_sync_outlined,
+                title: 'Photo sync',
+                subtitle: 'Upload encrypted photo packages only when enabled.',
+                value: _photoSyncEnabled,
+                onChanged: (v) async {
+                  if (!v) {
+                    final allowed = await requirePinReauth(
+                      context: context,
+                      unlockVaultUseCase: widget.unlockVaultUseCase,
+                      pinValidator: widget.pinValidator,
+                      actionLabel: 'disable photo sync',
+                    );
+                    if (!allowed) return;
                   }
-                : null,
+                  setState(() => _photoSyncEnabled = v);
+                  await widget.settingsRepository.setPhotoSyncEnabled(v);
+                  await widget.onSettingsChanged();
+                },
+              ),
+              _SettingsSwitch(
+                icon: Icons.sd_storage_outlined,
+                title: 'External encrypted mirror',
+                subtitle:
+                    'Keep encrypted files and manifest under Android/media for reinstall recovery.',
+                value: _externalStorageMirrorEnabled,
+                onChanged: (v) async {
+                  setState(() => _externalStorageMirrorEnabled = v);
+                  await widget.settingsRepository
+                      .setExternalStorageMirrorEnabled(v);
+                  await widget.onSettingsChanged();
+                },
+              ),
+              _SettingsSwitch(
+                icon: Icons.drive_folder_upload_outlined,
+                title: 'Google Drive encrypted package',
+                subtitle:
+                    'Back up encrypted objects, manifest, and wrapped key envelope.',
+                value: _driveEncryptedBackupEnabled,
+                onChanged: widget.mode == UserMode.googleEnabled
+                    ? (v) async {
+                        if (!v) {
+                          final allowed = await requirePinReauth(
+                            context: context,
+                            unlockVaultUseCase: widget.unlockVaultUseCase,
+                            pinValidator: widget.pinValidator,
+                            actionLabel: 'disable Drive backup',
+                          );
+                          if (!allowed) return;
+                        }
+                        setState(() => _driveEncryptedBackupEnabled = v);
+                        await widget.settingsRepository
+                            .setDriveEncryptedBackupEnabled(v);
+                        await widget.onSettingsChanged();
+                      }
+                    : null,
+              ),
+              _SettingsSwitch(
+                icon: Icons.wifi_rounded,
+                title: 'Backup on Wi-Fi only',
+                subtitle: 'Avoid mobile data when backup jobs run.',
+                value: _wifiOnlyBackup,
+                onChanged: (v) => setState(() => _wifiOnlyBackup = v),
+              ),
+              _SettingsSwitch(
+                icon: Icons.battery_charging_full_rounded,
+                title: 'Sync while charging only',
+                subtitle: 'Defer sync jobs until the device is plugged in.',
+                value: _chargingOnlySync,
+                onChanged: (v) => setState(() => _chargingOnlySync = v),
+              ),
+              ListTile(
+                leading: const Icon(Icons.sync_rounded),
+                title: const Text('Sync now'),
+                subtitle: const Text('Queue a manual encrypted backup sync.'),
+                onTap: () {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Sync job queued.')),
+                  );
+                },
+              ),
+            ],
           ),
-          SwitchListTile(
-            title: const Text('Backup on Wi-Fi only'),
-            value: _wifiOnlyBackup,
-            onChanged: (v) => setState(() => _wifiOnlyBackup = v),
+          const SectionHeader('Import & privacy'),
+          SettingsCard(
+            children: [
+              _SettingsSwitch(
+                icon: Icons.photo_camera_outlined,
+                title: 'Allow camera import',
+                subtitle: 'Let the app add new photos captured on-device.',
+                value: _allowCameraImport,
+                onChanged: (v) => setState(() => _allowCameraImport = v),
+              ),
+              _SettingsSwitch(
+                icon: Icons.ios_share_outlined,
+                title: 'Allow share-intent import',
+                subtitle:
+                    'Accept photos shared into the vault from other apps.',
+                value: _allowShareIntentImport,
+                onChanged: (v) => setState(() => _allowShareIntentImport = v),
+              ),
+              _SettingsSwitch(
+                icon: Icons.badge_outlined,
+                title: 'Preserve EXIF metadata',
+                subtitle:
+                    'Keep camera, location, and timestamp metadata on import.',
+                value: _preserveExif,
+                onChanged: (v) => setState(() => _preserveExif = v),
+              ),
+              _SettingsSwitch(
+                icon: Icons.privacy_tip_outlined,
+                title: 'Strip metadata on share',
+                subtitle: 'Remove metadata when exporting a decrypted copy.',
+                value: _stripMetadataOnShare,
+                onChanged: (v) => setState(() => _stripMetadataOnShare = v),
+              ),
+            ],
           ),
-          SwitchListTile(
-            title: const Text('Sync while charging only'),
-            value: _chargingOnlySync,
-            onChanged: (v) => setState(() => _chargingOnlySync = v),
+          const SectionHeader('Vault & account'),
+          SettingsCard(
+            children: [
+              ListTile(
+                leading: const Icon(Icons.password_rounded),
+                title: const Text('Change app PIN'),
+                subtitle: const Text(
+                  'Re-authenticate before choosing a new PIN.',
+                ),
+                onTap: () async {
+                  final allowed = await requirePinReauth(
+                    context: context,
+                    unlockVaultUseCase: widget.unlockVaultUseCase,
+                    pinValidator: widget.pinValidator,
+                    actionLabel: 'change your PIN',
+                  );
+                  if (!allowed || !context.mounted) return;
+                  context.push('/settings/change-pin');
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.cloud_outlined),
+                title: const Text('Google mode & restore'),
+                subtitle: Text('${widget.mode.title} · Manage cloud restore'),
+                onTap: () async {
+                  final allowed = await requirePinReauth(
+                    context: context,
+                    unlockVaultUseCase: widget.unlockVaultUseCase,
+                    pinValidator: widget.pinValidator,
+                    actionLabel: 'open restore',
+                  );
+                  if (!allowed || !context.mounted) return;
+                  context.push('/restore');
+                },
+              ),
+              ListTile(
+                leading: Icon(Icons.delete_forever_outlined, color: errorColor),
+                title: Text('Reset vault', style: TextStyle(color: errorColor)),
+                subtitle: const Text(
+                  'Delete local vault data from this device.',
+                ),
+                onTap: () {},
+              ),
+            ],
           ),
-          ListTile(
-            leading: const Icon(Icons.sync),
-            title: const Text('Sync now'),
-            subtitle: const Text('Manual sync trigger'),
-            onTap: () {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Sync job queued.')),
-              );
-            },
-          ),
-          const Divider(height: 1),
-          const _SectionHeader('Import & Privacy'),
-          SwitchListTile(
-            title: const Text('Allow camera import'),
-            value: _allowCameraImport,
-            onChanged: (v) => setState(() => _allowCameraImport = v),
-          ),
-          SwitchListTile(
-            title: const Text('Allow share-intent import'),
-            value: _allowShareIntentImport,
-            onChanged: (v) => setState(() => _allowShareIntentImport = v),
-          ),
-          SwitchListTile(
-            title: const Text('Preserve EXIF metadata on import'),
-            value: _preserveExif,
-            onChanged: (v) => setState(() => _preserveExif = v),
-          ),
-          SwitchListTile(
-            title: const Text('Strip metadata on decrypted share'),
-            value: _stripMetadataOnShare,
-            onChanged: (v) => setState(() => _stripMetadataOnShare = v),
-          ),
-          const Divider(height: 1),
-          const _SectionHeader('Vault & Account'),
-          ListTile(
-            leading: const Icon(Icons.lock_outline),
-            title: const Text('Change app PIN'),
-            onTap: () async {
-              final allowed = await requirePinReauth(
-                context: context,
-                unlockVaultUseCase: widget.unlockVaultUseCase,
-                pinValidator: widget.pinValidator,
-                actionLabel: 'change your PIN',
-              );
-              if (!allowed || !context.mounted) return;
-              context.push('/settings/change-pin');
-            },
-          ),
-          ListTile(
-            leading: const Icon(Icons.cloud_outlined),
-            title: const Text('Google mode & restore'),
-            subtitle: Text(widget.mode.title),
-            onTap: () async {
-              final allowed = await requirePinReauth(
-                context: context,
-                unlockVaultUseCase: widget.unlockVaultUseCase,
-                pinValidator: widget.pinValidator,
-                actionLabel: 'open restore',
-              );
-              if (!allowed || !context.mounted) return;
-              context.push('/restore');
-            },
-          ),
-          ListTile(
-            leading: const Icon(Icons.delete_forever_outlined),
-            title: const Text('Reset vault'),
-            onTap: () {},
-          ),
-          const SizedBox(height: 24),
         ],
       ),
     );
   }
 }
 
-class _SectionHeader extends StatelessWidget {
-  const _SectionHeader(this.label);
-  final String label;
+class _SettingsSwitch extends StatelessWidget {
+  const _SettingsSwitch({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.value,
+    required this.onChanged,
+  });
+
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final bool value;
+  final ValueChanged<bool>? onChanged;
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-      child: Text(
-        label,
-        style: Theme.of(
-          context,
-        ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
-      ),
+    return SwitchListTile(
+      secondary: Icon(icon),
+      title: Text(title),
+      subtitle: Text(subtitle),
+      value: value,
+      onChanged: onChanged,
     );
   }
 }

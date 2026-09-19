@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../../presentation/state/onboarding/onboarding_cubit.dart';
 import '../../../presentation/state/onboarding/onboarding_state.dart';
+import '../../theme/app_spacing.dart';
 import 'mode_info_sheet.dart';
 
 /// Screen 1: Welcome screen.
@@ -16,67 +17,63 @@ class WelcomeScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
     return Scaffold(
       body: BlocListener<OnboardingCubit, OnboardingState>(
-        listener: (context, state) {
-          // Navigation is handled by the router; no push needed here.
-        },
+        listener: (context, state) {},
         child: SafeArea(
           child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 32),
+            padding: const EdgeInsets.all(AppSpacing.xl),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                const Spacer(flex: 3),
-                // Logo placeholder
-                const _AppLogo(),
-                const SizedBox(height: 24),
-                Text(
-                  'Set up your private vault',
-                  textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.headlineLarge?.copyWith(
-                    fontWeight: FontWeight.bold,
+                Expanded(
+                  child: SingleChildScrollView(
+                    child: Column(
+                      children: [
+                        const SizedBox(height: AppSpacing.huge),
+                        const _AppLogo(),
+                        const SizedBox(height: AppSpacing.xxl),
+                        Text(
+                          'Set up your private vault',
+                          textAlign: TextAlign.center,
+                          style: theme.textTheme.headlineLarge,
+                        ),
+                        const SizedBox(height: AppSpacing.md),
+                        Text(
+                          'Create a PIN-protected encrypted photo vault hidden behind the calculator.',
+                          textAlign: TextAlign.center,
+                          style: theme.textTheme.bodyLarge?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
-                const SizedBox(height: 12),
-                Text(
-                  'Create a passcode-protected photo vault behind the calculator.',
-                  textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
-                  ),
-                ),
-                const Spacer(flex: 2),
-                // Primary CTA
                 FilledButton(
                   onPressed: () =>
                       context.read<OnboardingCubit>().selectLocalMode(),
                   child: const Text('Continue locally'),
                 ),
-                const SizedBox(height: 12),
-                // Secondary CTA
+                const SizedBox(height: AppSpacing.md),
                 OutlinedButton.icon(
                   onPressed: () =>
                       context.read<OnboardingCubit>().selectGoogleMode(),
                   icon: const Icon(Icons.account_circle_outlined),
                   label: const Text('Sign in with Google'),
                 ),
-                const SizedBox(height: 16),
-                // Learn more
-                Center(
-                  child: TextButton(
-                    onPressed: () => _showModeInfo(context),
-                    child: const Text('What\'s the difference?'),
-                  ),
+                const SizedBox(height: AppSpacing.sm),
+                TextButton(
+                  onPressed: () => _showModeInfo(context),
+                  child: const Text('What\'s the difference?'),
                 ),
-                Center(
-                  child: TextButton.icon(
-                    onPressed: () => context.push('/restore'),
-                    icon: const Icon(Icons.restore_rounded, size: 18),
-                    label: const Text('Restore from Google backup'),
-                  ),
+                TextButton.icon(
+                  onPressed: () => context.push('/restore'),
+                  icon: const Icon(Icons.restore_rounded),
+                  label: const Text('Restore from Google backup'),
                 ),
-                const Spacer(flex: 1),
               ],
             ),
           ),
@@ -91,9 +88,6 @@ class WelcomeScreen extends StatelessWidget {
       builder: (_) => const ModeInfoSheet(),
       isScrollControlled: true,
       useSafeArea: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
     );
   }
 }
@@ -103,18 +97,19 @@ class _AppLogo extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return Center(
       child: Container(
-        width: 96,
-        height: 96,
+        width: AppSpacing.huge * 2,
+        height: AppSpacing.huge * 2,
         decoration: BoxDecoration(
-          color: Theme.of(context).colorScheme.primaryContainer,
-          borderRadius: BorderRadius.circular(24),
+          color: theme.colorScheme.primaryContainer,
+          borderRadius: AppRadius.all(AppRadius.xl),
         ),
         child: Icon(
           Icons.lock_outline_rounded,
-          size: 52,
-          color: Theme.of(context).colorScheme.onPrimaryContainer,
+          size: AppSpacing.huge,
+          color: theme.colorScheme.onPrimaryContainer,
         ),
       ),
     );

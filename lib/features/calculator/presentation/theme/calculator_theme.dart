@@ -8,6 +8,9 @@ class CalculatorTheme {
   const CalculatorTheme._();
 
   static const Color surface = Color(0xFF171B25);
+
+  /// Backdrop behind the facade's utility pages (unit converter, etc.).
+  static const Color shellBackground = Color(0xFF10131B);
   static const Color keyBackground = Color(0xFF232938);
   static const Color keyMuted = Color(0xFF1E2431);
   static const Color accent = Color(0xFF4B6BFB);

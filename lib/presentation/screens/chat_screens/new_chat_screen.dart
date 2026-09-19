@@ -1,12 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
-import '../../../application/services/contact_discovery_service.dart';
-import '../../state/chat/contact_discovery_cubit.dart';
+import '../../../core/widgets/app_surfaces.dart';
 import '../../state/chat/user_lookup_cubit.dart';
+import '../../theme/app_spacing.dart';
 import 'thread_screen.dart';
 
-/// Screen for starting a chat: matched contacts first, email fallback below.
+/// Screen for starting a chat by entering an email only.
 class NewChatScreen extends StatefulWidget {
   const NewChatScreen({super.key});
 
@@ -17,14 +17,6 @@ class NewChatScreen extends StatefulWidget {
 class _NewChatScreenState extends State<NewChatScreen> {
   final _controller = TextEditingController();
   final _formKey = GlobalKey<FormState>();
-
-  @override
-  void initState() {
-    super.initState();
-    // Kick off the scan immediately; the permission prompt appears on the
-    // first attempt and the result is cached in the cubit afterwards.
-    context.read<ContactDiscoveryCubit>().scan();
-  }
 
   @override
   void dispose() {
@@ -55,18 +47,23 @@ class _NewChatScreenState extends State<NewChatScreen> {
           }
         },
         child: ListView(
-          padding: const EdgeInsets.all(20),
+          padding: const EdgeInsets.fromLTRB(
+            AppSpacing.md,
+            AppSpacing.md,
+            AppSpacing.md,
+            AppSpacing.huge,
+          ),
           children: [
             _buildEmailForm(context),
-            const SizedBox(height: 28),
-            const Divider(),
-            const SizedBox(height: 12),
-            Text(
-              'From your contacts',
-              style: Theme.of(context).textTheme.titleMedium,
+            const SizedBox(height: AppSpacing.lg),
+            const InfoBanner(
+              tone: InfoBannerTone.info,
+              icon: Icons.privacy_tip_outlined,
+              title: 'Private start',
+              message:
+                  'Chats begin by email only. The app does not reveal who is '
+                  'already on the platform before you try.',
             ),
-            const SizedBox(height: 8),
-            _buildContactList(context),
           ],
         ),
       ),
@@ -81,18 +78,18 @@ class _NewChatScreenState extends State<NewChatScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Text(
-                'Enter Gmail address',
-                style: Theme.of(context).textTheme.titleMedium,
+              const SectionHeader(
+                'Start by email',
+                padding: EdgeInsets.only(bottom: AppSpacing.sm),
               ),
-              const SizedBox(height: 8),
               TextFormField(
                 controller: _controller,
                 keyboardType: TextInputType.emailAddress,
+                textInputAction: TextInputAction.search,
                 decoration: const InputDecoration(
+                  labelText: 'Email address',
                   hintText: 'user@gmail.com',
-                  border: OutlineInputBorder(),
-                  prefixIcon: Icon(Icons.email_outlined),
+                  prefixIcon: Icon(Icons.alternate_email_rounded),
                 ),
                 validator: (v) {
                   if (v == null || v.trim().isEmpty) {
@@ -105,48 +102,34 @@ class _NewChatScreenState extends State<NewChatScreen> {
                   return null;
                 },
               ),
-              const SizedBox(height: 16),
-              if (state is UserLookupLoading)
-                const Center(child: CircularProgressIndicator())
-              else
-                FilledButton(
-                  onPressed: () {
-                    if (_formKey.currentState?.validate() ?? false) {
-                      context.read<UserLookupCubit>().lookupByEmail(
-                        _controller.text,
-                      );
-                    }
-                  },
-                  child: const Text('Find user'),
+              const SizedBox(height: AppSpacing.md),
+              FilledButton.icon(
+                icon: state is UserLookupLoading
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.person_search_rounded),
+                label: Text(
+                  state is UserLookupLoading ? 'Searching…' : 'Start chat',
                 ),
+                onPressed: state is UserLookupLoading
+                    ? null
+                    : () {
+                        if (_formKey.currentState?.validate() ?? false) {
+                          context.read<UserLookupCubit>().lookupByEmail(
+                            _controller.text.trim(),
+                          );
+                        }
+                      },
+              ),
               if (state is UserLookupNotFound) ...[
-                const SizedBox(height: 24),
-                Card(
-                  color: Theme.of(context).colorScheme.errorContainer,
-                  child: Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Row(
-                      children: [
-                        Icon(
-                          Icons.person_off_outlined,
-                          color: Theme.of(
-                            context,
-                          ).colorScheme.onErrorContainer,
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Text(
-                            '${state.email} is not registered.',
-                            style: TextStyle(
-                              color: Theme.of(
-                                context,
-                              ).colorScheme.onErrorContainer,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
+                const SizedBox(height: AppSpacing.md),
+                InfoBanner(
+                  tone: InfoBannerTone.error,
+                  icon: Icons.person_off_outlined,
+                  message: '${state.email} is not registered.',
                 ),
               ],
             ],
@@ -155,120 +138,4 @@ class _NewChatScreenState extends State<NewChatScreen> {
       },
     );
   }
-
-  Widget _buildContactList(BuildContext context) {
-    return BlocBuilder<ContactDiscoveryCubit, ContactDiscoveryState>(
-      builder: (context, state) {
-        switch (state) {
-          case ContactDiscoveryIdle():
-          case ContactDiscoveryLoading():
-            return const Padding(
-              padding: EdgeInsets.all(24),
-              child: Center(child: CircularProgressIndicator()),
-            );
-
-          case ContactDiscoveryFailed(:final message):
-            return _Notice(
-              icon: Icons.error_outline,
-              text: 'Could not read contacts: $message',
-              actionLabel: 'Retry',
-              onAction: () => context.read<ContactDiscoveryCubit>().scan(),
-            );
-
-          case ContactDiscoveryLoaded(:final result):
-            if (!result.permissionGranted) {
-              return _Notice(
-                icon: Icons.contacts_outlined,
-                text:
-                    'Contacts permission was denied. You can still start a '
-                    'chat by typing an email address above.',
-                actionLabel: 'Try again',
-                onAction: () => context.read<ContactDiscoveryCubit>().scan(),
-              );
-            }
-            if (result.matches.isEmpty) {
-              return _Notice(
-                icon: Icons.person_search_outlined,
-                text: result.scannedEmails == 0
-                    ? 'None of your contacts have an email address saved.'
-                    : 'None of your ${result.scannedEmails} contact email '
-                          'addresses are registered yet.',
-                actionLabel: 'Rescan',
-                onAction: () => context.read<ContactDiscoveryCubit>().scan(),
-              );
-            }
-            return Column(
-              children: [
-                for (final match in result.matches)
-                  _ContactTile(match: match),
-              ],
-            );
-        }
-      },
-    );
-  }
 }
-
-class _ContactTile extends StatelessWidget {
-  const _ContactTile({required this.match});
-
-  final MatchedContact match;
-
-  @override
-  Widget build(BuildContext context) {
-    return ListTile(
-      contentPadding: EdgeInsets.zero,
-      leading: CircleAvatar(
-        backgroundImage: match.user.photoUrl != null
-            ? NetworkImage(match.user.photoUrl!)
-            : null,
-        child: match.user.photoUrl == null
-            ? Text(match.user.initials)
-            : null,
-      ),
-      title: Text(match.contactName),
-      subtitle: Text(
-        match.user.email,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-      ),
-      trailing: const Icon(Icons.chat_bubble_outline, size: 20),
-      onTap: () =>
-          context.read<UserLookupCubit>().lookupByEmail(match.user.email),
-    );
-  }
-}
-
-class _Notice extends StatelessWidget {
-  const _Notice({
-    required this.icon,
-    required this.text,
-    required this.actionLabel,
-    required this.onAction,
-  });
-
-  final IconData icon;
-  final String text;
-  final String actionLabel;
-  final VoidCallback onAction;
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return Card(
-      color: cs.surfaceContainerHighest,
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Row(
-          children: [
-            Icon(icon, color: cs.onSurfaceVariant),
-            const SizedBox(width: 12),
-            Expanded(child: Text(text)),
-            TextButton(onPressed: onAction, child: Text(actionLabel)),
-          ],
-        ),
-      ),
-    );
-  }
-}
-

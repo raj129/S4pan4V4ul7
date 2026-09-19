@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 
 import '../../application/services/pin_validator.dart';
 import '../../application/usecases/unlock_vault_usecase.dart';
+import '../../core/widgets/app_surfaces.dart';
+import '../theme/app_spacing.dart';
 
 Future<bool> requirePinReauth({
   required BuildContext context,
@@ -86,10 +88,11 @@ class _PinReauthDialogState extends State<_PinReauthDialog> {
     }
 
     _failedAttempts += 1;
-    final lockSeconds = _lockoutScheduleSeconds[_failedAttempts.clamp(
-      0,
-      _lockoutScheduleSeconds.length - 1,
-    )];
+    final lockSeconds =
+        _lockoutScheduleSeconds[_failedAttempts.clamp(
+          0,
+          _lockoutScheduleSeconds.length - 1,
+        )];
     if (lockSeconds > 0) {
       _lockedUntil = DateTime.now().add(Duration(seconds: lockSeconds));
     }
@@ -97,7 +100,9 @@ class _PinReauthDialogState extends State<_PinReauthDialog> {
     setState(() {
       _submitting = false;
       _controller.clear();
-      _error = _isTemporarilyLocked ? _lockoutMessage : 'Incorrect PIN. Try again.';
+      _error = _isTemporarilyLocked
+          ? _lockoutMessage
+          : 'Incorrect PIN. Try again.';
     });
   }
 
@@ -109,48 +114,56 @@ class _PinReauthDialogState extends State<_PinReauthDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final locked = _isTemporarilyLocked;
     return AlertDialog(
+      icon: Icon(Icons.lock_outline_rounded, color: theme.colorScheme.primary),
       title: const Text('Confirm app PIN'),
       content: Column(
         mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text('Enter your 4-digit PIN to ${widget.actionLabel}.'),
-          const SizedBox(height: 12),
+          Text(
+            'Enter your 4-digit PIN to ${widget.actionLabel}.',
+            style: theme.textTheme.bodyMedium,
+          ),
+          const SizedBox(height: AppSpacing.lg),
           TextField(
             controller: _controller,
             autofocus: true,
-            enabled: !_submitting && !_isTemporarilyLocked,
+            enabled: !_submitting && !locked,
             keyboardType: TextInputType.number,
             maxLength: PinValidator.requiredLength,
             obscureText: true,
             decoration: const InputDecoration(
               labelText: 'App PIN',
               counterText: '',
+              prefixIcon: Icon(Icons.password_rounded),
             ),
+            onChanged: (_) {
+              if (_error != null) setState(() => _error = null);
+            },
             onSubmitted: (_) => _submit(),
           ),
-          if (_error != null)
-            Padding(
-              padding: const EdgeInsets.only(top: 8),
-              child: Text(
-                _error!,
-                style: TextStyle(color: Theme.of(context).colorScheme.error),
-              ),
-            ),
+          if (_error != null) ...[
+            const SizedBox(height: AppSpacing.md),
+            InfoBanner(message: _error!, tone: InfoBannerTone.error),
+          ],
           if (_submitting) ...[
-            const SizedBox(height: 12),
+            const SizedBox(height: AppSpacing.lg),
             const Center(child: CircularProgressIndicator()),
           ],
         ],
       ),
       actions: [
         TextButton(
-          onPressed: _submitting ? null : () => Navigator.of(context).pop(false),
+          onPressed: _submitting
+              ? null
+              : () => Navigator.of(context).pop(false),
           child: const Text('Cancel'),
         ),
         FilledButton(
-          onPressed: (_submitting || _isTemporarilyLocked) ? null : _submit,
+          onPressed: (_submitting || locked) ? null : _submit,
           child: const Text('Confirm'),
         ),
       ],

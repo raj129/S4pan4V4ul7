@@ -1,9 +1,14 @@
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:intl/intl.dart';
 
 import '../../../domain/entities/chat_message.dart';
 import '../../../domain/entities/message_metadata.dart';
 import '../../../domain/entities/message_reply.dart';
+import '../../theme/app_spacing.dart';
+import '../../theme/app_typography.dart';
+import '../../theme/chat_theme.dart';
+import 'chat_bubble_shape.dart';
 import 'chat_media_preview.dart';
 
 /// Emoji offered in the quick reaction bar, matching WhatsApp's default set.
@@ -20,6 +25,8 @@ class MessageBubble extends StatelessWidget {
     required this.mediaLoader,
     required this.onDeleteForMe,
     this.otherIsOnline = false,
+    this.isFirstInGroup = true,
+    this.isLastInGroup = true,
     this.onDeleteForEveryone,
     this.onReply,
     this.onReact,
@@ -29,6 +36,8 @@ class MessageBubble extends StatelessWidget {
     this.onTapQuote,
     this.onRetry,
     this.onDiscard,
+    this.onCopy,
+    this.canReplyFromLeftToRight = true,
     this.isHighlighted = false,
   });
 
@@ -37,6 +46,13 @@ class MessageBubble extends StatelessWidget {
   final String myUid;
   final String otherUid;
   final bool otherIsOnline;
+
+  /// First message of a consecutive run by the same sender: draws the tail.
+  final bool isFirstInGroup;
+
+  /// Last message of a run: carries the larger gap to the next group.
+  final bool isLastInGroup;
+
   final ChatMediaLoader mediaLoader;
   final VoidCallback onDeleteForMe;
   final VoidCallback? onDeleteForEveryone;
@@ -59,149 +75,135 @@ class MessageBubble extends StatelessWidget {
   /// Drop a failed message from the outbox without sending it.
   final VoidCallback? onDiscard;
 
+  /// Copy the decrypted text to the clipboard.
+  final VoidCallback? onCopy;
+
+  /// Force every reply swipe to use the same left-to-right gesture.
+  final bool canReplyFromLeftToRight;
+
   /// Briefly tinted after the user jumps here from a quote.
   final bool isHighlighted;
 
   @override
   Widget build(BuildContext context) {
     if (message.deletedForEveryone) {
-      return _TombstoneBubble(isMine: isMine);
+      return _TombstoneBubble(
+        isMine: isMine,
+        isLastInGroup: isLastInGroup,
+      );
     }
 
     final cs = Theme.of(context).colorScheme;
-    final bgColor = isMine ? cs.primary : cs.surfaceContainerHigh;
-    final textColor = isMine ? cs.onPrimary : cs.onSurface;
+    final chat = context.chatColors;
+    final bgColor = chat.bubbleFor(isMine: isMine);
+    final textColor = chat.onBubbleFor(isMine: isMine);
     final grouped = message.groupedReactions;
 
     // Emoji-only messages render bare and oversized, as in WhatsApp.
     final bare = message.isEmojiOnly;
-    final text = message.localDecryptedText;
+
+    final shape = ChatBubbleShape(
+      isMine: isMine,
+      withTail: isFirstInGroup && !bare,
+    );
 
     return Align(
-      alignment: isMine ? Alignment.centerRight : Alignment.centerLeft,
-      child: Column(
-        crossAxisAlignment: isMine
-            ? CrossAxisAlignment.end
-            : CrossAxisAlignment.start,
-        children: [
-          Dismissible(
-            key: ValueKey('swipe_${message.messageId}'),
-            // Swipe toward the centre of the screen to reply, in the direction
-            // that feels natural for each side of the conversation.
-            direction: onReply == null
-                ? DismissDirection.none
-                : (isMine
-                      ? DismissDirection.endToStart
-                      : DismissDirection.startToEnd),
-            confirmDismiss: (_) async {
-              onReply?.call();
-              // Never actually dismiss: the swipe is a shortcut, not a delete.
-              return false;
-            },
-            background: const _ReplySwipeBackground(alignEnd: false),
-            secondaryBackground: const _ReplySwipeBackground(alignEnd: true),
-            child: GestureDetector(
-              onLongPress: () => _showActionSheet(context),
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 250),
-                margin: const EdgeInsets.symmetric(vertical: 3, horizontal: 4),
-                padding: bare
-                    ? const EdgeInsets.symmetric(horizontal: 6, vertical: 2)
-                    : const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                constraints: BoxConstraints(
-                  maxWidth: MediaQuery.of(context).size.width * 0.74,
-                ),
-                decoration: BoxDecoration(
-                  color: isHighlighted
-                      ? cs.tertiaryContainer
-                      : (bare ? Colors.transparent : bgColor),
-                  borderRadius: BorderRadius.only(
-                    topLeft: const Radius.circular(18),
-                    topRight: const Radius.circular(18),
-                    bottomLeft: Radius.circular(isMine ? 18 : 4),
-                    bottomRight: Radius.circular(isMine ? 4 : 18),
+      alignment: Alignment.centerRight,
+      child: Padding(
+        padding: EdgeInsets.only(
+          top: AppSpacing.xxs,
+          bottom: isLastInGroup ? AppSpacing.sm : AppSpacing.xxs,
+          left: isMine ? AppSpacing.xxl : AppSpacing.sm,
+          right: isMine ? AppSpacing.sm : AppSpacing.xxl,
+        ),
+        child: Column(
+          crossAxisAlignment: isMine
+              ? CrossAxisAlignment.end
+              : CrossAxisAlignment.start,
+          children: [
+            Dismissible(
+              key: ValueKey('swipe_${message.messageId}'),
+              // Swipe toward the centre of the screen to reply, in the
+              // direction that feels natural for each side of the conversation.
+              direction: onReply == null || !canReplyFromLeftToRight
+                  ? DismissDirection.none
+                  : DismissDirection.startToEnd,
+              dismissThresholds: const {
+                DismissDirection.startToEnd: 0.25,
+              },
+              confirmDismiss: (_) async {
+                onReply?.call();
+                // Never actually dismiss: the swipe is a shortcut, not a delete.
+                return false;
+              },
+              background: const _ReplySwipeBackground(alignEnd: false),
+              secondaryBackground: const SizedBox.shrink(),
+              child: GestureDetector(
+                onLongPress: () => _showActionSheet(context),
+                child: AnimatedContainer(
+                  duration: AppDuration.normal,
+                  curve: Curves.easeOut,
+                  constraints: BoxConstraints(
+                    maxWidth: MediaQuery.of(context).size.width * 0.76,
                   ),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    if (message.isForwarded)
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: 2),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(
-                              Icons.shortcut,
-                              size: 12,
-                              color: textColor.withValues(alpha: 0.7),
+                  child: bare
+                      ? _BubbleContent(
+                          message: message,
+                          isMine: isMine,
+                          myUid: myUid,
+                          otherUid: otherUid,
+                          otherIsOnline: otherIsOnline,
+                          mediaLoader: mediaLoader,
+                          onTapQuote: onTapQuote,
+                          textColor: cs.onSurface,
+                          metaColor: cs.onSurfaceVariant,
+                          bare: true,
+                        )
+                      : Material(
+                          color: isHighlighted
+                              ? cs.tertiaryContainer
+                              : bgColor,
+                          shape: shape,
+                          elevation: AppElevation.raised,
+                          shadowColor: chat.bubbleShadow,
+                          animationDuration: AppDuration.normal,
+                          child: Padding(
+                            padding: EdgeInsets.fromLTRB(
+                              AppSpacing.md + shape.tailInsets.left,
+                              AppSpacing.sm,
+                              AppSpacing.md + shape.tailInsets.right,
+                              AppSpacing.sm,
                             ),
-                            const SizedBox(width: 4),
-                            Text(
-                              'Forwarded',
-                              style: TextStyle(
-                                fontSize: 11,
-                                fontStyle: FontStyle.italic,
-                                color: textColor.withValues(alpha: 0.7),
-                              ),
+                            child: _BubbleContent(
+                              message: message,
+                              isMine: isMine,
+                              myUid: myUid,
+                              otherUid: otherUid,
+                              otherIsOnline: otherIsOnline,
+                              mediaLoader: mediaLoader,
+                              onTapQuote: onTapQuote,
+                              textColor: textColor,
+                              metaColor: textColor,
+                              bare: false,
                             ),
-                          ],
-                        ),
-                      ),
-                    if (message.replyTo != null)
-                      _QuotedHeader(
-                        reply: message.replyTo!,
-                        isMine: isMine,
-                        myUid: myUid,
-                        onTap: onTapQuote == null
-                            ? null
-                            : () => onTapQuote!(message.replyTo!.messageId),
-                      ),
-                    if (message.isMedia)
-                      ChatMediaPreview(
-                        message: message,
-                        loader: mediaLoader,
-                      ),
-                    if (text != null && text.isNotEmpty)
-                      Padding(
-                        padding: EdgeInsets.only(
-                          top: message.isMedia ? 6 : 0,
-                        ),
-                        child: Text(
-                          text,
-                          style: TextStyle(
-                            color: bare ? null : textColor,
-                            fontSize: bare ? 40 : null,
                           ),
                         ),
-                      ),
-                    const SizedBox(height: 2),
-                    Align(
-                      alignment: Alignment.centerRight,
-                      child: _MetaRow(
-                        message: message,
-                        isMine: isMine,
-                        otherUid: otherUid,
-                        otherIsOnline: otherIsOnline,
-                        textColor: bare ? cs.onSurfaceVariant : textColor,
-                      ),
-                    ),
-                  ],
                 ),
               ),
             ),
-          ),
-          if (grouped.isNotEmpty)
-            _ReactionRow(grouped: grouped, myUid: myUid, onTap: onReact),
-        ],
+            if (grouped.isNotEmpty)
+              _ReactionRow(grouped: grouped, myUid: myUid, onTap: onReact),
+          ],
+        ),
       ),
     );
   }
 
   void _showActionSheet(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
     showModalBottomSheet<void>(
       context: context,
+      showDragHandle: true,
       builder: (sheetContext) => SafeArea(
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -209,7 +211,7 @@ class MessageBubble extends StatelessWidget {
             if (message.status == MessageStatus.failed) ...[
               if (onRetry != null)
                 ListTile(
-                  leading: const Icon(Icons.refresh),
+                  leading: const Icon(Icons.refresh_rounded),
                   title: const Text('Try again'),
                   onTap: () {
                     Navigator.pop(sheetContext);
@@ -218,8 +220,14 @@ class MessageBubble extends StatelessWidget {
                 ),
               if (onDiscard != null)
                 ListTile(
-                  leading: const Icon(Icons.delete_outline),
-                  title: const Text('Discard unsent message'),
+                  leading: Icon(
+                    Icons.delete_outline_rounded,
+                    color: cs.error,
+                  ),
+                  title: Text(
+                    'Discard unsent message',
+                    style: TextStyle(color: cs.error),
+                  ),
                   onTap: () {
                     Navigator.pop(sheetContext);
                     onDiscard!();
@@ -229,25 +237,40 @@ class MessageBubble extends StatelessWidget {
             ],
             if (onReact != null)
               Padding(
-                padding: const EdgeInsets.symmetric(vertical: 8),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                  children: [
-                    for (final emoji in kQuickReactions)
-                      _QuickReactionButton(
-                        emoji: emoji,
-                        selected: message.reactionOf(myUid) == emoji,
-                        onTap: () {
-                          Navigator.pop(sheetContext);
-                          onReact!(emoji);
-                        },
-                      ),
-                  ],
+                padding: const EdgeInsets.fromLTRB(
+                  AppSpacing.md,
+                  0,
+                  AppSpacing.md,
+                  AppSpacing.sm,
+                ),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: AppSpacing.sm,
+                    vertical: AppSpacing.xs,
+                  ),
+                  decoration: BoxDecoration(
+                    color: cs.surfaceContainerHighest,
+                    borderRadius: AppRadius.all(AppRadius.pill),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    children: [
+                      for (final emoji in kQuickReactions)
+                        _QuickReactionButton(
+                          emoji: emoji,
+                          selected: message.reactionOf(myUid) == emoji,
+                          onTap: () {
+                            Navigator.pop(sheetContext);
+                            onReact!(emoji);
+                          },
+                        ),
+                    ],
+                  ),
                 ),
               ),
             if (onReply != null)
               ListTile(
-                leading: const Icon(Icons.reply_outlined),
+                leading: const Icon(Icons.reply_rounded),
                 title: const Text('Reply'),
                 onTap: () {
                   Navigator.pop(sheetContext);
@@ -263,9 +286,18 @@ class MessageBubble extends StatelessWidget {
                   onEdit!();
                 },
               ),
+            if (onCopy != null && !message.isMedia)
+              ListTile(
+                leading: const Icon(Icons.content_copy_rounded),
+                title: const Text('Copy message'),
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  onCopy!();
+                },
+              ),
             if (onForward != null)
               ListTile(
-                leading: const Icon(Icons.shortcut),
+                leading: const Icon(Icons.shortcut_rounded),
                 title: const Text('Forward'),
                 onTap: () {
                   Navigator.pop(sheetContext);
@@ -274,7 +306,7 @@ class MessageBubble extends StatelessWidget {
               ),
             if (onSaveToVault != null)
               ListTile(
-                leading: const Icon(Icons.lock_outline),
+                leading: const Icon(Icons.lock_outline_rounded),
                 title: const Text('Save to vault'),
                 onTap: () {
                   Navigator.pop(sheetContext);
@@ -282,8 +314,8 @@ class MessageBubble extends StatelessWidget {
                 },
               ),
             ListTile(
-              leading: const Icon(Icons.delete_outline),
-              title: const Text('Delete for me'),
+              leading: Icon(Icons.delete_outline_rounded, color: cs.error),
+              title: Text('Delete for me', style: TextStyle(color: cs.error)),
               onTap: () {
                 Navigator.pop(sheetContext);
                 onDeleteForMe();
@@ -291,8 +323,11 @@ class MessageBubble extends StatelessWidget {
             ),
             if (onDeleteForEveryone != null)
               ListTile(
-                leading: const Icon(Icons.delete_sweep_outlined),
-                title: const Text('Delete for everyone'),
+                leading: Icon(Icons.delete_sweep_outlined, color: cs.error),
+                title: Text(
+                  'Delete for everyone',
+                  style: TextStyle(color: cs.error),
+                ),
                 onTap: () {
                   Navigator.pop(sheetContext);
                   onDeleteForEveryone!();
@@ -301,6 +336,105 @@ class MessageBubble extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// Inner layout of a bubble: forwarded marker, quote, media, text, meta row.
+///
+/// Split out so the bare (emoji-only) and framed variants stay in sync.
+class _BubbleContent extends StatelessWidget {
+  const _BubbleContent({
+    required this.message,
+    required this.isMine,
+    required this.myUid,
+    required this.otherUid,
+    required this.otherIsOnline,
+    required this.mediaLoader,
+    required this.onTapQuote,
+    required this.textColor,
+    required this.metaColor,
+    required this.bare,
+  });
+
+  final ChatMessage message;
+  final bool isMine;
+  final String myUid;
+  final String otherUid;
+  final bool otherIsOnline;
+  final ChatMediaLoader mediaLoader;
+  final void Function(String messageId)? onTapQuote;
+  final Color textColor;
+  final Color metaColor;
+  final bool bare;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final text = message.localDecryptedText;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (message.isForwarded)
+          Padding(
+            padding: const EdgeInsets.only(bottom: AppSpacing.xxs),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  Icons.shortcut_rounded,
+                  size: 13,
+                  color: textColor.withValues(alpha: 0.7),
+                ),
+                const SizedBox(width: AppSpacing.xs),
+                Text(
+                  'Forwarded',
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    fontStyle: FontStyle.italic,
+                    color: textColor.withValues(alpha: 0.7),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        if (message.replyTo != null)
+          _QuotedHeader(
+            reply: message.replyTo!,
+            isMine: isMine,
+            myUid: myUid,
+            textColor: textColor,
+            onTap: onTapQuote == null
+                ? null
+                : () => onTapQuote!(message.replyTo!.messageId),
+          ),
+        if (message.isMedia)
+          ClipRRect(
+            borderRadius: AppRadius.all(AppRadius.sm),
+            child: ChatMediaPreview(message: message, loader: mediaLoader),
+          ),
+        if (text != null && text.isNotEmpty)
+          Padding(
+            padding: EdgeInsets.only(top: message.isMedia ? AppSpacing.sm : 0),
+            child: _MessageText(
+              text: text,
+              color: textColor,
+              bare: bare,
+            ),
+          ),
+        const SizedBox(height: AppSpacing.xxs),
+        Align(
+          alignment: Alignment.centerRight,
+          child: _MetaRow(
+            message: message,
+            isMine: isMine,
+            otherUid: otherUid,
+            otherIsOnline: otherIsOnline,
+            textColor: metaColor,
+          ),
+        ),
+      ],
     );
   }
 }
@@ -318,18 +452,19 @@ class _QuickReactionButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(
+    return InkResponse(
       onTap: onTap,
-      borderRadius: BorderRadius.circular(24),
-      child: Container(
-        padding: const EdgeInsets.all(8),
+      radius: 28,
+      child: AnimatedContainer(
+        duration: AppDuration.fast,
+        padding: const EdgeInsets.all(AppSpacing.sm),
         decoration: BoxDecoration(
           shape: BoxShape.circle,
           color: selected
-              ? Theme.of(context).colorScheme.primaryContainer
+              ? Theme.of(context).colorScheme.primary.withValues(alpha: 0.18)
               : Colors.transparent,
         ),
-        child: Text(emoji, style: const TextStyle(fontSize: 24)),
+        child: Text(emoji, style: const TextStyle(fontSize: 26)),
       ),
     );
   }
@@ -353,7 +488,7 @@ class _MetaRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final faded = textColor.withValues(alpha: 0.7);
+    final faded = textColor.withValues(alpha: 0.65);
     // Prefer the locally-supplied status (outbox: sending/failed); otherwise
     // derive it from whether the recipient has actually read the message.
     final status =
@@ -368,18 +503,15 @@ class _MetaRow extends StatelessWidget {
       children: [
         if (message.isEdited)
           Padding(
-            padding: const EdgeInsets.only(right: 4),
-            child: Text(
-              'edited',
-              style: TextStyle(fontSize: 10, color: faded),
-            ),
+            padding: const EdgeInsets.only(right: AppSpacing.xs),
+            child: Text('edited', style: AppTypography.bubbleMeta(faded)),
           ),
         Text(
           DateFormat.jm().format(message.sentAt.toLocal()),
-          style: TextStyle(fontSize: 10, color: faded),
+          style: AppTypography.bubbleMeta(faded),
         ),
         if (isMine) ...[
-          const SizedBox(width: 4),
+          const SizedBox(width: AppSpacing.xs),
           _StatusTicks(status: status, color: faded),
         ],
       ],
@@ -398,21 +530,25 @@ class _StatusTicks extends StatelessWidget {
   Widget build(BuildContext context) {
     switch (status) {
       case MessageStatus.sending:
-        return Icon(Icons.schedule, size: 12, color: color);
+        return Icon(Icons.schedule_rounded, size: 13, color: color);
       case MessageStatus.failed:
         return Icon(
-          Icons.error_outline,
-          size: 13,
+          Icons.error_outline_rounded,
+          size: 14,
           color: Theme.of(context).colorScheme.error,
         );
       case MessageStatus.read:
         // Only "read" is coloured, so a glance distinguishes it from
         // "delivered" without having to count ticks.
-        return const Icon(Icons.done_all, size: 14, color: Color(0xFF34B7F1));
+        return Icon(
+          Icons.done_all_rounded,
+          size: 15,
+          color: context.chatColors.readTick,
+        );
       case MessageStatus.delivered:
-        return Icon(Icons.done_all, size: 14, color: color);
+        return Icon(Icons.done_all_rounded, size: 15, color: color);
       case MessageStatus.sent:
-        return Icon(Icons.done, size: 14, color: color);
+        return Icon(Icons.done_rounded, size: 15, color: color);
     }
   }
 }
@@ -423,29 +559,36 @@ class _QuotedHeader extends StatelessWidget {
     required this.reply,
     required this.isMine,
     required this.myUid,
+    required this.textColor,
     this.onTap,
   });
 
   final MessageReply reply;
   final bool isMine;
   final String myUid;
+  final Color textColor;
   final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    final accent = isMine ? cs.onPrimary : cs.primary;
+    final theme = Theme.of(context);
+    final accent = isMine ? textColor : context.chatColors.quoteStrip;
     final label = reply.senderId == myUid ? 'You' : 'Them';
     final preview = reply.localDecryptedPreview?.trim();
 
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        margin: const EdgeInsets.only(bottom: 6),
-        padding: const EdgeInsets.fromLTRB(8, 6, 8, 6),
+        margin: const EdgeInsets.only(bottom: AppSpacing.sm),
+        padding: const EdgeInsets.fromLTRB(
+          AppSpacing.sm,
+          AppSpacing.xs + 2,
+          AppSpacing.sm,
+          AppSpacing.xs + 2,
+        ),
         decoration: BoxDecoration(
           color: accent.withValues(alpha: 0.12),
-          borderRadius: BorderRadius.circular(8),
+          borderRadius: AppRadius.all(AppRadius.xs),
           border: Border(left: BorderSide(color: accent, width: 3)),
         ),
         child: Column(
@@ -454,8 +597,7 @@ class _QuotedHeader extends StatelessWidget {
           children: [
             Text(
               label,
-              style: TextStyle(
-                fontSize: 11,
+              style: theme.textTheme.labelSmall?.copyWith(
                 fontWeight: FontWeight.w700,
                 color: accent,
               ),
@@ -464,11 +606,8 @@ class _QuotedHeader extends StatelessWidget {
               preview == null || preview.isEmpty ? '🔒 Message' : preview,
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                fontSize: 12,
-                color: (isMine ? cs.onPrimary : cs.onSurface).withValues(
-                  alpha: 0.8,
-                ),
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: textColor.withValues(alpha: 0.8),
               ),
             ),
           ],
@@ -488,35 +627,41 @@ class _ReactionRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return Padding(
-      padding: const EdgeInsets.only(left: 10, right: 10, bottom: 4),
-      child: Wrap(
-        spacing: 4,
-        children: [
-          for (final entry in grouped.entries)
-            GestureDetector(
-              onTap: onTap == null ? null : () => onTap!(entry.key),
-              child: Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 8,
-                  vertical: 3,
-                ),
-                decoration: BoxDecoration(
-                  color: entry.value.contains(myUid)
-                      ? cs.primaryContainer
-                      : cs.surfaceContainerHighest,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Text(
-                  entry.value.length > 1
-                      ? '${entry.key} ${entry.value.length}'
-                      : entry.key,
-                  style: const TextStyle(fontSize: 12),
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    return Transform.translate(
+      // Overlap the bubble slightly so the chips read as attached to it.
+      offset: const Offset(0, -6),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: AppSpacing.sm),
+        child: Wrap(
+          spacing: AppSpacing.xs,
+          children: [
+            for (final entry in grouped.entries)
+              GestureDetector(
+                onTap: onTap == null ? null : () => onTap!(entry.key),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: AppSpacing.sm,
+                    vertical: AppSpacing.xxs,
+                  ),
+                  decoration: BoxDecoration(
+                    color: entry.value.contains(myUid)
+                        ? cs.primaryContainer
+                        : cs.surfaceContainerHighest,
+                    borderRadius: AppRadius.all(AppRadius.pill),
+                    border: Border.all(color: cs.surface, width: 1.5),
+                  ),
+                  child: Text(
+                    entry.value.length > 1
+                        ? '${entry.key} ${entry.value.length}'
+                        : entry.key,
+                    style: theme.textTheme.labelSmall,
+                  ),
                 ),
               ),
-            ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -527,34 +672,47 @@ class _ReactionRow extends StatelessWidget {
 /// The document is kept rather than removed so the message does not silently
 /// vanish from the other side of the conversation.
 class _TombstoneBubble extends StatelessWidget {
-  const _TombstoneBubble({required this.isMine});
+  const _TombstoneBubble({required this.isMine, required this.isLastInGroup});
 
   final bool isMine;
+  final bool isLastInGroup;
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
     return Align(
       alignment: isMine ? Alignment.centerRight : Alignment.centerLeft,
       child: Container(
-        margin: const EdgeInsets.symmetric(vertical: 3, horizontal: 4),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        margin: EdgeInsets.only(
+          top: AppSpacing.xxs,
+          bottom: isLastInGroup ? AppSpacing.sm : AppSpacing.xxs,
+          left: isMine ? AppSpacing.xxl : AppSpacing.sm,
+          right: isMine ? AppSpacing.sm : AppSpacing.xxl,
+        ),
+        padding: const EdgeInsets.symmetric(
+          horizontal: AppSpacing.md,
+          vertical: AppSpacing.sm,
+        ),
         decoration: BoxDecoration(
-          color: cs.surfaceContainerHighest,
-          borderRadius: BorderRadius.circular(18),
+          color: cs.surfaceContainerHighest.withValues(alpha: 0.6),
+          borderRadius: AppRadius.all(AppRadius.lg),
           border: Border.all(color: cs.outlineVariant),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.block, size: 14, color: cs.onSurfaceVariant),
-            const SizedBox(width: 6),
+            Icon(
+              Icons.block_rounded,
+              size: 15,
+              color: cs.onSurfaceVariant,
+            ),
+            const SizedBox(width: AppSpacing.sm),
             Text(
               'This message was deleted',
-              style: TextStyle(
+              style: theme.textTheme.bodySmall?.copyWith(
                 fontStyle: FontStyle.italic,
                 color: cs.onSurfaceVariant,
-                fontSize: 13,
               ),
             ),
           ],
@@ -572,11 +730,78 @@ class _ReplySwipeBackground extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
     return Align(
       alignment: alignEnd ? Alignment.centerRight : Alignment.centerLeft,
-      child: const Padding(
-        padding: EdgeInsets.symmetric(horizontal: 16),
-        child: Icon(Icons.reply, size: 20),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
+        child: Container(
+          padding: const EdgeInsets.all(AppSpacing.sm),
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: cs.primary.withValues(alpha: 0.15),
+          ),
+          child: Icon(Icons.reply_rounded, size: 20, color: cs.primary),
+        ),
+      ),
+    );
+  }
+}
+
+class _MessageText extends StatelessWidget {
+  const _MessageText({
+    required this.text,
+    required this.color,
+    required this.bare,
+  });
+
+  final String text;
+  final Color color;
+  final bool bare;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final spans = <InlineSpan>[];
+    final regex = RegExp(r'(https?:\/\/[^\s]+)', caseSensitive: false);
+    var start = 0;
+    for (final match in regex.allMatches(text)) {
+      if (match.start > start) {
+        spans.add(TextSpan(text: text.substring(start, match.start)));
+      }
+      final raw = match.group(0)!;
+      spans.add(
+        WidgetSpan(
+          alignment: PlaceholderAlignment.baseline,
+          baseline: TextBaseline.alphabetic,
+          child: GestureDetector(
+            onTap: () => launchUrl(Uri.parse(raw), mode: LaunchMode.externalApplication),
+            child: Text(
+              raw,
+              style: (bare
+                      ? const TextStyle(fontSize: 44, height: 1.1)
+                      : theme.textTheme.bodyLarge)
+                  ?.copyWith(
+                    color: color,
+                    decoration: TextDecoration.underline,
+                    decorationColor: color.withValues(alpha: 0.8),
+                  ),
+            ),
+          ),
+        ),
+      );
+      start = match.end;
+    }
+    if (start < text.length) {
+      spans.add(TextSpan(text: text.substring(start)));
+    }
+
+    return SelectableText.rich(
+      TextSpan(
+        style: bare
+            ? const TextStyle(fontSize: 44, height: 1.1)
+            : theme.textTheme.bodyLarge?.copyWith(color: color),
+        children: spans.isEmpty ? [TextSpan(text: text)] : spans,
       ),
     );
   }

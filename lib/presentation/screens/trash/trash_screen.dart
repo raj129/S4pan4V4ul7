@@ -4,10 +4,13 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../application/services/import_manager.dart';
-import '../../../domain/entities/vault_photo.dart';
-import '../../../domain/repositories/photo_repository.dart';
+import '../../../core/widgets/app_surfaces.dart';
 import '../../../core/widgets/app_state_views.dart';
 import '../../../core/widgets/main_scaffold_scope.dart';
+import '../../../domain/entities/vault_photo.dart';
+import '../../../domain/repositories/photo_repository.dart';
+import '../../theme/app_colors.dart';
+import '../../theme/app_spacing.dart';
 import '../../state/trash/trash_controller.dart';
 import '../../widgets/confirm_dialog.dart';
 
@@ -224,15 +227,10 @@ class _TrashBody extends StatelessWidget {
       return const EmptyView(
         icon: Icons.delete_outline,
         title: 'Trash is empty',
+        subtitle: 'Deleted photos will appear here until they expire.',
       );
     }
-    return GridView.builder(
-      padding: const EdgeInsets.all(8),
-      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 3,
-        crossAxisSpacing: 8,
-        mainAxisSpacing: 8,
-      ),
+    return MediaGrid(
       itemCount: controller.photos.length,
       itemBuilder: (context, index) {
         final photo = controller.photos[index];
@@ -293,100 +291,141 @@ class _TrashTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final daysLeft = _daysLeftLabel;
+    final scheme = Theme.of(context).colorScheme;
+    final semantic = context.semantic;
     return GestureDetector(
       onTap: onTap,
       onLongPress: onLongPress,
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          ClipRRect(
-            borderRadius: BorderRadius.circular(8),
-            child: FutureBuilder<Uint8List?>(
-              future: loadThumbnail(),
-              builder: (context, snapshot) {
-                if (snapshot.connectionState != ConnectionState.done ||
-                    snapshot.data == null) {
-                  return Container(
-                    color: Theme.of(
-                      context,
-                    ).colorScheme.surfaceContainerHighest,
+      child: AnimatedScale(
+        duration: AppDuration.fast,
+        scale: isSelected ? 0.96 : 1,
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            ClipRRect(
+              borderRadius: AppRadius.all(AppRadius.md),
+              clipBehavior: Clip.antiAlias,
+              child: FutureBuilder<Uint8List?>(
+                future: loadThumbnail(),
+                builder: (context, snapshot) {
+                  if (snapshot.connectionState != ConnectionState.done ||
+                      snapshot.data == null) {
+                    return ColoredBox(color: scheme.surfaceContainerHighest);
+                  }
+                  return AnimatedOpacity(
+                    duration: AppDuration.fast,
+                    opacity: isSelected ? 0.55 : 0.72,
+                    child: Image.memory(snapshot.data!, fit: BoxFit.cover),
                   );
-                }
-                return Opacity(
-                  opacity: isSelected ? 0.4 : 0.6,
-                  child: Image.memory(snapshot.data!, fit: BoxFit.cover),
-                );
-              },
-            ),
-          ),
-          if (isSelected)
-            Container(
-              decoration: BoxDecoration(
-                color: Theme.of(
-                  context,
-                ).colorScheme.primary.withValues(alpha: 0.3),
-                borderRadius: BorderRadius.circular(8),
+                },
               ),
             ),
-          if (isSelected)
-            const Positioned(
-              top: 4,
-              left: 4,
-              child: Icon(Icons.check_circle, color: Colors.white, size: 20),
-            ),
-          if (daysLeft.isNotEmpty)
-            Positioned(
-              top: 4,
-              right: 4,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+            Positioned.fill(
+              child: AnimatedContainer(
+                duration: AppDuration.fast,
                 decoration: BoxDecoration(
-                  color: Colors.black54,
-                  borderRadius: BorderRadius.circular(4),
-                ),
-                child: Text(
-                  daysLeft,
-                  style: const TextStyle(color: Colors.white, fontSize: 10),
-                ),
-              ),
-            ),
-          if (!isSelectionMode)
-            Positioned(
-              bottom: 4,
-              left: 4,
-              right: 4,
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  _RoundIconButton(icon: Icons.restore, onPressed: onRestore),
-                  _RoundIconButton(
-                    icon: Icons.delete_forever,
-                    onPressed: onPermanentlyDelete,
+                  borderRadius: AppRadius.all(AppRadius.md),
+                  border: Border.all(
+                    color: isSelected ? semantic.danger : scheme.outlineVariant,
+                    width: isSelected ? 2 : 1,
                   ),
-                ],
+                  color: isSelected
+                      ? semantic.danger.withValues(alpha: 0.24)
+                      : scheme.surfaceTint.withValues(alpha: 0),
+                ),
               ),
             ),
-        ],
+            if (isSelectionMode)
+              Positioned(
+                top: AppSpacing.xs,
+                left: AppSpacing.xs,
+                child: AnimatedContainer(
+                  duration: AppDuration.fast,
+                  padding: const EdgeInsets.all(AppSpacing.xxs),
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: isSelected
+                        ? semantic.danger
+                        : scheme.surface.withValues(alpha: 0.80),
+                    border: Border.all(color: scheme.onPrimary),
+                  ),
+                  child: Icon(
+                    isSelected ? Icons.check_rounded : Icons.circle_outlined,
+                    color: isSelected ? scheme.onPrimary : semantic.danger,
+                    size: 18,
+                  ),
+                ),
+              ),
+            if (daysLeft.isNotEmpty)
+              Positioned(
+                top: AppSpacing.xs,
+                right: AppSpacing.xs,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: AppSpacing.xs,
+                    vertical: AppSpacing.xxs,
+                  ),
+                  decoration: BoxDecoration(
+                    color: scheme.scrim.withValues(alpha: 0.56),
+                    borderRadius: AppRadius.all(AppRadius.xs),
+                  ),
+                  child: Text(
+                    daysLeft,
+                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                      color: scheme.onInverseSurface,
+                    ),
+                  ),
+                ),
+              ),
+            if (!isSelectionMode)
+              Positioned(
+                bottom: AppSpacing.xs,
+                left: AppSpacing.xs,
+                right: AppSpacing.xs,
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    _RoundIconButton(icon: Icons.restore, onPressed: onRestore),
+                    _RoundIconButton(
+                      icon: Icons.delete_forever,
+                      onPressed: onPermanentlyDelete,
+                      isDestructive: true,
+                    ),
+                  ],
+                ),
+              ),
+          ],
+        ),
       ),
     );
   }
 }
 
 class _RoundIconButton extends StatelessWidget {
-  const _RoundIconButton({required this.icon, required this.onPressed});
+  const _RoundIconButton({
+    required this.icon,
+    required this.onPressed,
+    this.isDestructive = false,
+  });
 
   final IconData icon;
   final VoidCallback onPressed;
+  final bool isDestructive;
 
   @override
   Widget build(BuildContext context) {
-    return CircleAvatar(
-      radius: 14,
-      backgroundColor: Colors.black54,
-      child: IconButton(
-        iconSize: 14,
-        icon: Icon(icon, color: Colors.white),
-        onPressed: onPressed,
+    final scheme = Theme.of(context).colorScheme;
+    final accent = isDestructive ? context.semantic.danger : scheme.primary;
+    return Material(
+      color: scheme.scrim.withValues(alpha: 0.58),
+      shape: const CircleBorder(),
+      child: InkWell(
+        customBorder: const CircleBorder(),
+        onTap: onPressed,
+        child: Padding(
+          padding: const EdgeInsets.all(AppSpacing.sm),
+          child: Icon(icon, size: 18, color: accent),
+        ),
       ),
     );
   }

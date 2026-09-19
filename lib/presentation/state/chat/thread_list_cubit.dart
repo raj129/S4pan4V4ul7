@@ -130,6 +130,20 @@ class ThreadListCubit extends Cubit<ThreadListState> {
     return true;
   }
 
+
+  Future<void> clearThread(String threadId) async {
+    try {
+      await messageRepository.deleteAllMessages(threadId);
+      await mediaRepository.deleteThreadMedia(threadId);
+      await messageCache.clearThread(threadId);
+      await threadRepository.clearThreadPreview(
+        threadId: threadId,
+        clearedAt: DateTime.now().toUtc(),
+      );
+    } catch (e) {
+      emit(ThreadListError('Clear failed: '));
+    }
+  }
   Future<void> deleteThread(String threadId) async {
     try {
       await messageRepository.deleteAllMessages(threadId);

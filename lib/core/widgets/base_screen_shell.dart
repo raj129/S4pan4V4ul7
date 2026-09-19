@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../presentation/theme/app_spacing.dart';
 import 'app_navigation_drawer.dart';
 
 class BaseScreenShell extends StatelessWidget {
@@ -30,11 +31,14 @@ class BaseScreenShell extends StatelessWidget {
         title: Text(title),
         leading: showDrawerMenu
             ? IconButton(
-                icon: const Icon(Icons.menu),
+                tooltip: 'Open navigation',
+                icon: const Icon(Icons.menu_rounded),
                 onPressed: () => _scaffoldKey.currentState?.openDrawer(),
               )
             : null,
-        actions: actions,
+        actions: actions == null
+            ? null
+            : [...actions!, const SizedBox(width: AppSpacing.xs)],
       ),
       drawer: showDrawerMenu
           ? AppNavigationDrawer(

@@ -9,7 +9,6 @@ import '../screens/chat_screens/chat_list_screen.dart';
 import '../screens/chat_screens/chat_sign_in_screen.dart';
 import '../widgets/chat/chat_media_preview.dart';
 import '../state/chat/chat_auth_cubit.dart';
-import '../state/chat/contact_discovery_cubit.dart';
 import '../state/chat/thread_list_cubit.dart';
 import '../state/chat/user_lookup_cubit.dart';
 import '../state/chat/active_thread_cubit.dart';
@@ -162,12 +161,6 @@ class _ChatAppState extends State<ChatApp> with WidgetsBindingObserver {
                     create: (_) => UserLookupCubit(
                       userRepository: _deps.userRepository,
                       threadRepository: _deps.threadRepository,
-                      myUid: currentUser.uid,
-                    ),
-                  ),
-                  BlocProvider(
-                    create: (_) => ContactDiscoveryCubit(
-                      service: _deps.contactDiscoveryService,
                       myUid: currentUser.uid,
                     ),
                   ),

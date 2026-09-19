@@ -1,5 +1,7 @@
 import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:uuid/uuid.dart';
@@ -10,9 +12,16 @@ import '../../../domain/entities/chat_message.dart';
 import '../../../domain/entities/message_metadata.dart';
 import '../../../domain/entities/chat_thread.dart';
 import '../../../domain/entities/chat_user.dart';
+import '../../../core/widgets/app_state_views.dart';
 import '../../state/chat/active_thread_cubit.dart';
+import '../../state/chat/thread_list_cubit.dart';
+import '../../theme/app_colors.dart';
+import '../../theme/app_spacing.dart';
+import '../../widgets/chat/chat_day_divider.dart';
 import '../../widgets/chat/chat_media_preview.dart';
+import '../../widgets/chat/chat_wallpaper.dart';
 import '../../widgets/chat/message_bubble.dart';
+import '../../widgets/chat/typing_indicator.dart';
 import '../../widgets/chat/vault_picker_sheet.dart';
 
 /// Push the thread screen, carrying the chat providers across the navigator.
@@ -88,9 +97,14 @@ class _ThreadScreenState extends State<ThreadScreen> {
   /// Message flashed after jumping to it from a quote.
   String? _highlightedId;
 
+  /// Drives the send button's reveal without rebuilding the whole composer on
+  /// every keystroke.
+  final _hasText = ValueNotifier<bool>(false);
+
   @override
   void initState() {
     super.initState();
+    _textCtrl.addListener(_onTextControllerChanged);
     context.read<ActiveThreadCubit>().openThread(
       thread: widget.thread,
       otherUser: widget.otherUser,
@@ -101,6 +115,10 @@ class _ThreadScreenState extends State<ThreadScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) context.read<ActiveThreadCubit>().markVisibleAsRead();
     });
+  }
+
+  void _onTextControllerChanged() {
+    _hasText.value = _textCtrl.text.trim().isNotEmpty;
   }
 
   void _onScroll() {
@@ -115,6 +133,8 @@ class _ThreadScreenState extends State<ThreadScreen> {
   @override
   void dispose() {
     widget.notificationService?.setActiveThread(null);
+    _textCtrl.removeListener(_onTextControllerChanged);
+    _hasText.dispose();
     _textCtrl.dispose();
     _searchCtrl.dispose();
     _scrollCtrl.dispose();
@@ -141,10 +161,17 @@ class _ThreadScreenState extends State<ThreadScreen> {
         appBar: _buildAppBar(context),
         body: Column(
           children: [
-            Expanded(child: _buildMessageList()),
-            _buildTypingBanner(),
-            _buildReplyPreview(),
-            _buildInputBar(context),
+            Expanded(
+              child: ChatWallpaper(
+                child: Column(
+                  children: [
+                    Expanded(child: _buildMessageList()),
+                    _buildTypingBanner(),
+                  ],
+                ),
+              ),
+            ),
+            _buildComposerSurface(context),
             _buildEmojiPicker(),
           ],
         ),
@@ -183,6 +210,19 @@ class _ThreadScreenState extends State<ThreadScreen> {
     return AppBar(
       leadingWidth: 40,
       actions: [
+        PopupMenuButton<String>(
+          onSelected: (value) {
+            if (value == 'clear') {
+              _confirmClearMessages(context);
+            } else if (value == 'delete') {
+              _confirmDeleteThread(context);
+            }
+          },
+          itemBuilder: (context) => const [
+            PopupMenuItem(value: 'clear', child: Text('Clear messages')),
+            PopupMenuItem(value: 'delete', child: Text('Delete thread')),
+          ],
+        ),
         IconButton(
           icon: const Icon(Icons.search),
           onPressed: () => setState(() => _searching = true),
@@ -193,36 +233,42 @@ class _ThreadScreenState extends State<ThreadScreen> {
           final online = state is ActiveThreadLoaded
               ? state.otherIsOnline
               : false;
+          final theme = Theme.of(context);
+          final semantic = context.semantic;
+          final presence = online ? semantic.online : semantic.offline;
           return Row(
             children: [
-              CircleAvatar(
-                radius: 18,
-                backgroundImage: widget.otherUser.photoUrl != null
-                    ? NetworkImage(widget.otherUser.photoUrl!)
-                    : null,
-                child: widget.otherUser.photoUrl == null
-                    ? Text(widget.otherUser.initials)
-                    : null,
+              _PresenceAvatar(
+                user: widget.otherUser,
+                online: online,
+                ringColor: presence,
               ),
-              const SizedBox(width: 10),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    widget.otherUser.displayName,
-                    style: const TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
+              const SizedBox(width: AppSpacing.sm + AppSpacing.xxs),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      widget.otherUser.displayName,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
-                  ),
-                  Text(
-                    online ? 'Online' : 'Offline',
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: online ? Colors.green : Colors.grey,
+                    AnimatedDefaultTextStyle(
+                      duration: AppDuration.normal,
+                      style:
+                          theme.textTheme.labelSmall?.copyWith(
+                            color: presence,
+                            fontWeight: FontWeight.w500,
+                          ) ??
+                          TextStyle(color: presence),
+                      child: Text(online ? 'Online' : 'Offline'),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ],
           );
@@ -241,21 +287,26 @@ class _ThreadScreenState extends State<ThreadScreen> {
     return BlocBuilder<ActiveThreadCubit, ActiveThreadState>(
       builder: (context, state) {
         if (state is ActiveThreadLoading) {
-          return const Center(child: CircularProgressIndicator());
+          return const LoadingView(message: 'Decrypting messages…');
         }
         if (state is ActiveThreadError) {
-          return Center(child: Text(state.message));
+          return ErrorView(message: state.message);
         }
         if (state is! ActiveThreadLoaded) return const SizedBox.shrink();
 
         final msgs = state.visibleMessages;
         if (msgs.isEmpty) {
-          return Center(
-            child: Text(
-              state.searchQuery.isEmpty
-                  ? 'No messages yet. Say hello! 👋'
-                  : 'No messages match "${state.searchQuery}".',
-            ),
+          return EmptyView(
+            icon: state.searchQuery.isEmpty
+                ? Icons.waving_hand_outlined
+                : Icons.search_off_outlined,
+            title: state.searchQuery.isEmpty
+                ? 'No messages yet'
+                : 'No matches',
+            subtitle: state.searchQuery.isEmpty
+                ? 'Say hello to ${widget.otherUser.displayName} — everything you '
+                      'send is end-to-end encrypted.'
+                : 'Nothing in this chat matches "${state.searchQuery}".',
           );
         }
 
@@ -266,16 +317,25 @@ class _ThreadScreenState extends State<ThreadScreen> {
         // spinner is only offered on the unfiltered list.
         final showPagingSpinner = state.hasMore && state.searchQuery.isEmpty;
 
+        // Day dividers are only meaningful on the unfiltered timeline.
+        final items = _buildThreadItems(
+          msgs,
+          withDayDividers: state.searchQuery.isEmpty,
+        );
+
         return ListView.builder(
           controller: _scrollCtrl,
           reverse: true,
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-          itemCount: msgs.length + (showPagingSpinner ? 1 : 0),
+          padding: const EdgeInsets.symmetric(
+            horizontal: AppSpacing.sm,
+            vertical: AppSpacing.sm,
+          ),
+          itemCount: items.length + (showPagingSpinner ? 1 : 0),
           itemBuilder: (context, i) {
-            if (i == msgs.length) {
-              return const Center(
-                child: Padding(
-                  padding: EdgeInsets.all(8),
+            if (i == items.length) {
+              return const Padding(
+                padding: EdgeInsets.all(AppSpacing.sm),
+                child: Center(
                   child: SizedBox(
                     width: 20,
                     height: 20,
@@ -284,7 +344,13 @@ class _ThreadScreenState extends State<ThreadScreen> {
                 ),
               );
             }
-            final msg = msgs[i];
+
+            final item = items[i];
+            if (item.divider != null) {
+              return ChatDayDivider(date: item.divider!);
+            }
+
+            final msg = item.message!;
             final isMine = msg.senderId == myUid;
             return MessageBubble(
               key: ValueKey(msg.messageId),
@@ -295,12 +361,18 @@ class _ThreadScreenState extends State<ThreadScreen> {
               otherIsOnline: state.otherIsOnline,
               mediaLoader: widget.mediaLoader,
               isHighlighted: _highlightedId == msg.messageId,
+              isFirstInGroup: item.isFirstInGroup,
+              isLastInGroup: item.isLastInGroup,
               onReply: () {
                 cubit.setReplyTarget(msg);
                 _inputFocus.requestFocus();
               },
               onReact: (emoji) => cubit.toggleReaction(msg, emoji),
-              onEdit: isMine ? () => _promptEdit(context, msg) : null,
+              onEdit: cubit.canEditMessage(msg) ? () => _promptEdit(context, msg) : null,
+              onCopy: msg.localDecryptedText?.trim().isNotEmpty == true
+                  ? () => _copyMessage(msg.localDecryptedText!)
+                  : null,
+              canReplyFromLeftToRight: true,
               onTapQuote: _jumpToMessage,
               onSaveToVault: msg.isMedia ? () => _saveToVault(msg) : null,
               onForward: () => _promptForward(msg),
@@ -319,6 +391,57 @@ class _ThreadScreenState extends State<ThreadScreen> {
         );
       },
     );
+  }
+
+  /// Longest gap between two messages from the same sender that still reads as
+  /// one continuous run.
+  static const _groupWindow = Duration(minutes: 5);
+
+  /// Flatten [msgs] into renderable rows, newest first to match `reverse: true`.
+  ///
+  /// Because the list is reversed, `index + 1` is the *older* neighbour and
+  /// `index - 1` is the *newer* one — grouping and day dividers both read in
+  /// that direction.
+  List<_ThreadItem> _buildThreadItems(
+    List<ChatMessage> msgs, {
+    required bool withDayDividers,
+  }) {
+    final items = <_ThreadItem>[];
+
+    for (var i = 0; i < msgs.length; i++) {
+      final msg = msgs[i];
+      final older = i + 1 < msgs.length ? msgs[i + 1] : null;
+      final newer = i > 0 ? msgs[i - 1] : null;
+
+      final startsDay = older == null || !_sameDay(older.sentAt, msg.sentAt);
+
+      items.add(
+        _ThreadItem.message(
+          msg,
+          // A day divider always breaks a run.
+          isFirstInGroup: startsDay || !_sameRun(older, msg),
+          isLastInGroup: !_sameRun(msg, newer),
+        ),
+      );
+
+      // Appended *after* the message so the reversed list draws it above.
+      if (withDayDividers && startsDay) {
+        items.add(_ThreadItem.divider(msg.sentAt));
+      }
+    }
+
+    return items;
+  }
+
+  static bool _sameDay(DateTime a, DateTime b) =>
+      a.year == b.year && a.month == b.month && a.day == b.day;
+
+  /// Whether [earlier] and [later] belong to the same visual run.
+  static bool _sameRun(ChatMessage? earlier, ChatMessage? later) {
+    if (earlier == null || later == null) return false;
+    if (earlier.senderId != later.senderId) return false;
+    if (!_sameDay(earlier.sentAt, later.sentAt)) return false;
+    return later.sentAt.difference(earlier.sentAt).abs() <= _groupWindow;
   }
 
   /// Scroll to a quoted message and flash it.
@@ -353,7 +476,73 @@ class _ThreadScreenState extends State<ThreadScreen> {
     });
   }
 
+
+  Future<void> _confirmClearMessages(BuildContext context) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Clear messages'),
+        content: const Text(
+          'Delete every message in this chat but keep the conversation?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Clear'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    final threadList = this.context.read<ThreadListCubit>();
+    final activeThread = this.context.read<ActiveThreadCubit>();
+    await threadList.clearThread(widget.thread.threadId);
+    if (!mounted) return;
+    await activeThread.openThread(
+      thread: widget.thread,
+      otherUser: widget.otherUser,
+    );
+  }
+
+  Future<void> _confirmDeleteThread(BuildContext context) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Delete thread'),
+        content: const Text(
+          'Delete this conversation and all its messages? This cannot be undone.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    final threadList = this.context.read<ThreadListCubit>();
+    final navigator = Navigator.of(this.context);
+    await threadList.deleteThread(widget.thread.threadId);
+    if (!mounted) return;
+    navigator.pop();
+  }
   Future<void> _promptEdit(BuildContext context, ChatMessage msg) async {
+    if (!context.read<ActiveThreadCubit>().canEditMessage(msg)) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('This message can no longer be edited.')),
+      );
+      return;
+    }
     final cubit = context.read<ActiveThreadCubit>();
     final controller = TextEditingController(
       text: msg.localDecryptedText ?? '',
@@ -379,9 +568,10 @@ class _ThreadScreenState extends State<ThreadScreen> {
         ],
       ),
     );
+    final edited = result?.trim();
     controller.dispose();
-    if (result == null) return;
-    await cubit.editMessage(msg, result);
+    if (!mounted || edited == null || edited.isEmpty) return;
+    await cubit.editMessage(msg, edited);
   }
 
   /// Pick a conversation and re-send the message into it.
@@ -458,19 +648,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
         final typing = state is ActiveThreadLoaded
             ? state.otherIsTyping
             : false;
-        if (!typing) return const SizedBox.shrink();
-        return Padding(
-          padding: const EdgeInsets.only(left: 16, bottom: 4),
-          child: Align(
-            alignment: Alignment.centerLeft,
-            child: Text(
-              '${widget.otherUser.displayName} is typing...',
-              style: Theme.of(
-                context,
-              ).textTheme.bodySmall?.copyWith(color: Colors.grey),
-            ),
-          ),
-        );
+        return TypingIndicator(visible: typing);
       },
     );
   }
@@ -488,47 +666,62 @@ class _ThreadScreenState extends State<ThreadScreen> {
         if (target == null) return const SizedBox.shrink();
 
         final cs = Theme.of(context).colorScheme;
+        final textTheme = Theme.of(context).textTheme;
         final myUid = context.read<ActiveThreadCubit>().myUid;
         final preview = target.isMedia
             ? (target.mediaType == MessageType.video ? '🎥 Video' : '📷 Photo')
             : (target.localDecryptedText ?? '');
 
         return Container(
-          margin: const EdgeInsets.fromLTRB(12, 0, 12, 4),
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+          margin: const EdgeInsets.fromLTRB(
+            AppSpacing.sm,
+            AppSpacing.xs,
+            AppSpacing.sm,
+            0,
+          ),
+          padding: const EdgeInsets.only(left: AppSpacing.sm),
+          clipBehavior: Clip.antiAlias,
           decoration: BoxDecoration(
             color: cs.surfaceContainerHighest,
-            borderRadius: BorderRadius.circular(10),
+            borderRadius: AppRadius.all(AppRadius.md),
             border: Border(left: BorderSide(color: cs.primary, width: 3)),
           ),
           child: Row(
             children: [
+              Icon(Icons.reply_rounded, size: 18, color: cs.primary),
+              const SizedBox(width: AppSpacing.sm),
               Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      target.senderId == myUid
-                          ? 'Replying to yourself'
-                          : 'Replying to ${widget.otherUser.displayName}',
-                      style: TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w700,
-                        color: cs.primary,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: AppSpacing.sm),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        target.senderId == myUid
+                            ? 'Replying to yourself'
+                            : 'Replying to ${widget.otherUser.displayName}',
+                        style: textTheme.labelSmall?.copyWith(
+                          color: cs.primary,
+                          fontWeight: FontWeight.w700,
+                        ),
                       ),
-                    ),
-                    Text(
-                      preview,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontSize: 12),
-                    ),
-                  ],
+                      const SizedBox(height: AppSpacing.xxs),
+                      Text(
+                        preview,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: textTheme.bodySmall?.copyWith(
+                          color: cs.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
               IconButton(
-                icon: const Icon(Icons.close, size: 18),
+                icon: const Icon(Icons.close_rounded, size: 18),
+                tooltip: 'Cancel reply',
                 onPressed: () =>
                     context.read<ActiveThreadCubit>().clearReplyTarget(),
               ),
@@ -539,71 +732,113 @@ class _ThreadScreenState extends State<ThreadScreen> {
     );
   }
 
+  /// The composer surface: reply strip + input bar sharing one elevated plane.
+  Widget _buildComposerSurface(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: cs.surface,
+        border: Border(
+          top: BorderSide(color: cs.outlineVariant.withValues(alpha: 0.5)),
+        ),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [_buildReplyPreview(), _buildInputBar(context)],
+      ),
+    );
+  }
+
   Widget _buildInputBar(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
     return SafeArea(
       top: false,
       // The picker supplies its own bottom inset when open.
       bottom: !_showEmojiPicker,
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
+        padding: const EdgeInsets.fromLTRB(
+          AppSpacing.sm,
+          AppSpacing.sm,
+          AppSpacing.sm,
+          AppSpacing.sm,
+        ),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.end,
           children: [
-            IconButton(
-              icon: Icon(
-                _showEmojiPicker
-                    ? Icons.keyboard_outlined
-                    : Icons.emoji_emotions_outlined,
-              ),
-              onPressed: _toggleEmojiPicker,
-            ),
-            IconButton(
-              icon: const Icon(Icons.attach_file),
-              onPressed: () => _pickMedia(context),
-            ),
+            // Emoji, attach and the field share one pill so the composer reads
+            // as a single control rather than three loose widgets.
             Expanded(
-              child: TextField(
-                controller: _textCtrl,
-                focusNode: _inputFocus,
-                maxLines: 5,
-                minLines: 1,
-                textCapitalization: TextCapitalization.sentences,
-                onTap: () {
-                  if (_showEmojiPicker) {
-                    setState(() => _showEmojiPicker = false);
-                  }
-                },
-                decoration: InputDecoration(
-                  hintText: 'Message',
-                  filled: true,
-                  fillColor: Theme.of(
-                    context,
-                  ).colorScheme.surfaceContainerHighest,
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(24),
-                    borderSide: BorderSide.none,
-                  ),
-                  contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 10,
-                  ),
+              child: Container(
+                decoration: BoxDecoration(
+                  color: cs.surfaceContainerHighest,
+                  borderRadius: AppRadius.all(AppRadius.pill),
                 ),
-                onChanged: (v) =>
-                    context.read<ActiveThreadCubit>().onTextChanged(v),
+                padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xxs),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    _ComposerAction(
+                      icon: _showEmojiPicker
+                          ? Icons.keyboard_outlined
+                          : Icons.emoji_emotions_outlined,
+                      tooltip: _showEmojiPicker ? 'Keyboard' : 'Emoji',
+                      onPressed: _toggleEmojiPicker,
+                    ),
+                    Expanded(
+                      child: TextField(
+                        controller: _textCtrl,
+                        focusNode: _inputFocus,
+                        maxLines: 5,
+                        minLines: 1,
+                        textCapitalization: TextCapitalization.sentences,
+                        style: Theme.of(context).textTheme.bodyLarge,
+                        onTap: () {
+                          if (_showEmojiPicker) {
+                            setState(() => _showEmojiPicker = false);
+                          }
+                        },
+                        decoration: InputDecoration(
+                          hintText: 'Message',
+                          filled: false,
+                          border: InputBorder.none,
+                          enabledBorder: InputBorder.none,
+                          focusedBorder: InputBorder.none,
+                          isDense: true,
+                          contentPadding: const EdgeInsets.symmetric(
+                            vertical: AppSpacing.md,
+                          ),
+                          hintStyle: Theme.of(context).textTheme.bodyLarge
+                              ?.copyWith(color: cs.onSurfaceVariant),
+                        ),
+                        onChanged: (v) =>
+                            context.read<ActiveThreadCubit>().onTextChanged(v),
+                      ),
+                    ),
+                    _ComposerAction(
+                      icon: Icons.attach_file_rounded,
+                      tooltip: 'Attach',
+                      onPressed: () => _pickMedia(context),
+                    ),
+                  ],
+                ),
               ),
             ),
-            const SizedBox(width: 8),
-            FloatingActionButton.small(
-              heroTag: 'send_btn',
-              onPressed: _send,
-              child: const Icon(Icons.send),
-            ),
+            const SizedBox(width: AppSpacing.sm),
+            _SendButton(hasText: _hasText, onSend: _send),
           ],
         ),
       ),
     );
   }
 
+
+  Future<void> _copyMessage(String text) async {
+    await Clipboard.setData(ClipboardData(text: text.trim()));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(const SnackBar(content: Text('Message copied')));
+  }
   void _send() {
     final text = _textCtrl.text;
     if (text.trim().isEmpty) return;
@@ -754,5 +989,144 @@ class _ThreadScreenState extends State<ThreadScreen> {
         SnackBar(content: Text('Could not save to vault: $e')),
       );
     }
+  }
+}
+
+/// One renderable row in the thread list: either a message or a day divider.
+class _ThreadItem {
+  const _ThreadItem.message(
+    ChatMessage this.message, {
+    required this.isFirstInGroup,
+    required this.isLastInGroup,
+  }) : divider = null;
+
+  const _ThreadItem.divider(DateTime this.divider)
+      : message = null,
+        isFirstInGroup = false,
+        isLastInGroup = false;
+
+  final ChatMessage? message;
+  final DateTime? divider;
+  final bool isFirstInGroup;
+  final bool isLastInGroup;
+}
+
+/// App-bar avatar with a presence ring, so status reads at a glance.
+class _PresenceAvatar extends StatelessWidget {
+  const _PresenceAvatar({
+    required this.user,
+    required this.online,
+    required this.ringColor,
+  });
+
+  final ChatUser user;
+  final bool online;
+  final Color ringColor;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return SizedBox(
+      width: 40,
+      height: 40,
+      child: Stack(
+        children: [
+          AnimatedContainer(
+            duration: AppDuration.normal,
+            padding: const EdgeInsets.all(2),
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              border: Border.all(
+                color: online ? ringColor : Colors.transparent,
+                width: 2,
+              ),
+            ),
+            child: CircleAvatar(
+              backgroundColor: cs.primaryContainer,
+              foregroundColor: cs.onPrimaryContainer,
+              backgroundImage: user.photoUrl != null
+                  ? NetworkImage(user.photoUrl!)
+                  : null,
+              child: user.photoUrl == null
+                  ? Text(
+                      user.initials,
+                      style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                            color: cs.onPrimaryContainer,
+                            fontWeight: FontWeight.w600,
+                          ),
+                    )
+                  : null,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Compact icon button sized to sit inside the composer pill.
+class _ComposerAction extends StatelessWidget {
+  const _ComposerAction({
+    required this.icon,
+    required this.tooltip,
+    required this.onPressed,
+  });
+
+  final IconData icon;
+  final String tooltip;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return IconButton(
+      icon: Icon(icon, size: 22),
+      tooltip: tooltip,
+      visualDensity: VisualDensity.compact,
+      color: Theme.of(context).colorScheme.onSurfaceVariant,
+      onPressed: onPressed,
+    );
+  }
+}
+
+/// Send button that grows into view only once there is something to send.
+class _SendButton extends StatelessWidget {
+  const _SendButton({required this.hasText, required this.onSend});
+
+  final ValueListenable<bool> hasText;
+  final VoidCallback onSend;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return ValueListenableBuilder<bool>(
+      valueListenable: hasText,
+      builder: (context, enabled, child) {
+        return AnimatedScale(
+          duration: AppDuration.fast,
+          curve: Curves.easeOutBack,
+          scale: enabled ? 1 : 0.85,
+          child: AnimatedOpacity(
+            duration: AppDuration.fast,
+            opacity: enabled ? 1 : 0.45,
+            child: Material(
+              color: enabled ? cs.primary : cs.surfaceContainerHighest,
+              shape: const CircleBorder(),
+              clipBehavior: Clip.antiAlias,
+              child: InkWell(
+                onTap: enabled ? onSend : null,
+                child: Padding(
+                  padding: const EdgeInsets.all(AppSpacing.md),
+                  child: Icon(
+                    Icons.send_rounded,
+                    size: 20,
+                    color: enabled ? cs.onPrimary : cs.onSurfaceVariant,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
   }
 }

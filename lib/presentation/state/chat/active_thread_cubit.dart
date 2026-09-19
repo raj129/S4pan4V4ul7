@@ -523,22 +523,35 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
   ///
   /// Only messages from the other user and not already marked are sent, so a
   /// scroll through a long thread does not rewrite documents needlessly.
+  bool _markingVisibleAsRead = false;
+
   Future<void> markVisibleAsRead() async {
     final threadId = _currentThreadId;
-    if (threadId == null) return;
-    final unread = _buffer.values
+    final current = state;
+    if (threadId == null || current is! ActiveThreadLoaded) return;
+    final unread = current.visibleMessages
         .where((m) => m.senderId != myUid && !m.isReadBy(myUid))
         .map((m) => m.messageId)
         .toList();
-    if (unread.isEmpty) return;
+    if (unread.isEmpty || _markingVisibleAsRead) return;
+    _markingVisibleAsRead = true;
     try {
       await messageRepository.markRead(
         threadId: threadId,
         messageIds: unread,
         uid: myUid,
       );
+      await threadRepository.resetUnread(threadId: threadId, uid: myUid);
+      final nextMessages = current.messages
+          .map((m) => unread.contains(m.messageId)
+              ? m.copyWith(readBy: [...m.readBy, myUid])
+              : m)
+          .toList();
+      emit(current.copyWith(messages: nextMessages));
     } catch (_) {
       // Receipts are best-effort; a failure must not disturb the UI.
+    } finally {
+      _markingVisibleAsRead = false;
     }
   }
 
@@ -547,21 +560,52 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
   // ---------------------------------------------------------------------------
 
   /// Replace the body of an already-sent message.
+  bool canEditMessage(ChatMessage message) {
+    if (message.senderId != myUid || message.isMedia || message.deletedForEveryone) {
+      return false;
+    }
+    final now = DateTime.now().toUtc();
+    final sentAt = message.sentAt.toUtc();
+    final hasBeenRead = message.readBy.any((uid) => uid != myUid);
+    if (!hasBeenRead) return true;
+    return now.difference(sentAt) <= const Duration(minutes: 30);
+  }
+
   Future<void> editMessage(ChatMessage message, String newText) async {
     final threadId = _currentThreadId;
     if (threadId == null) return;
-    if (message.senderId != myUid) return;
+    if (!canEditMessage(message)) {
+      _reportActionError('This message can no longer be edited.');
+      return;
+    }
     final trimmed = newText.trim();
     if (trimmed.isEmpty || trimmed == message.localDecryptedText) return;
     try {
+      final encrypted = await cryptoService.encryptMessage(
+        threadId: threadId,
+        plaintext: trimmed,
+      );
       await messageRepository.editMessage(
         threadId: threadId,
         messageId: message.messageId,
-        encryptedText: await cryptoService.encryptMessage(
-          threadId: threadId,
-          plaintext: trimmed,
-        ),
+        encryptedText: encrypted,
       );
+      final current = state;
+      if (current is ActiveThreadLoaded) {
+        emit(
+          current.copyWith(
+            messages: current.messages
+                .map((m) => m.messageId == message.messageId
+                    ? m.copyWith(
+                        encryptedText: encrypted,
+                        localDecryptedText: trimmed,
+                        editedAt: DateTime.now().toUtc(),
+                      )
+                    : m)
+                .toList(),
+          ),
+        );
+      }
     } catch (e) {
       _reportActionError('Could not edit message: $e');
     }

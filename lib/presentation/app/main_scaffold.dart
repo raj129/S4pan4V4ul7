@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import '../../application/services/import_manager.dart';
 import '../../core/widgets/app_navigation_drawer.dart';
 import '../../core/widgets/main_scaffold_scope.dart';
+import '../theme/app_spacing.dart';
 
 /// Hosts the four top-level tabs (Chat, Photos, Bin, Files) behind a single
 /// shared [Scaffold] + drawer.
@@ -63,13 +64,27 @@ class _MainScaffoldState extends State<MainScaffold> {
                   listenable: widget.importManager,
                   builder: (context, _) {
                     final progress = widget.importManager.progress;
-                    if (progress.status == ImportJobStatus.running) {
-                      return LinearProgressIndicator(
-                        value: progress.ratio,
-                        backgroundColor: Colors.transparent,
-                      );
-                    }
-                    return const SizedBox.shrink();
+                    final running = progress.status == ImportJobStatus.running;
+                    return AnimatedSlide(
+                      duration: AppDuration.fast,
+                      offset: running ? Offset.zero : const Offset(0, -1),
+                      child: AnimatedOpacity(
+                        duration: AppDuration.fast,
+                        opacity: running ? 1 : 0,
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: AppSpacing.lg,
+                            vertical: AppSpacing.sm,
+                          ),
+                          child: ClipRRect(
+                            borderRadius: AppRadius.all(AppRadius.pill),
+                            child: LinearProgressIndicator(
+                              value: progress.ratio,
+                            ),
+                          ),
+                        ),
+                      ),
+                    );
                   },
                 ),
               ),

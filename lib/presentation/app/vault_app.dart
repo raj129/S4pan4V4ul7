@@ -9,6 +9,7 @@ import '../../core/app/app_session.dart';
 import '../../core/di/app_dependencies.dart';
 import '../../core/routing/app_router.dart';
 import '../state/onboarding/onboarding_cubit.dart';
+import '../theme/app_theme.dart';
 
 /// App root: owns the dependency container, session state, and router.
 ///
@@ -137,17 +138,9 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
     return MaterialApp.router(
       title: 'Calculator',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF4A6CF7)),
-        useMaterial3: true,
-      ),
-      darkTheme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF4A6CF7),
-          brightness: Brightness.dark,
-        ),
-        useMaterial3: true,
-      ),
+      theme: AppTheme.light,
+      darkTheme: AppTheme.dark,
+      themeMode: ThemeMode.system,
       routerConfig: _router,
     );
   }

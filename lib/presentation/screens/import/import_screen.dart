@@ -5,6 +5,8 @@ import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../../../application/services/import_manager.dart';
+import '../../../core/widgets/app_surfaces.dart';
+import '../../theme/app_spacing.dart';
 
 Future<void> showImportBottomSheet(
   BuildContext context, {
@@ -67,9 +69,45 @@ class _ImportBottomSheetLauncherScreenState
 
   @override
   Widget build(BuildContext context) {
-    return const Scaffold(
-      backgroundColor: Colors.transparent,
-      body: SizedBox.shrink(),
+    return Scaffold(
+      backgroundColor: Theme.of(
+        context,
+      ).colorScheme.surface.withValues(alpha: 0),
+      body: const SizedBox.shrink(),
+    );
+  }
+}
+
+class _ImportTile extends StatelessWidget {
+  const _ImportTile({required this.file});
+
+  final XFile file;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return ClipRRect(
+      borderRadius: AppRadius.all(AppRadius.md),
+      clipBehavior: Clip.antiAlias,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          Image.file(
+            File(file.path),
+            fit: BoxFit.cover,
+            errorBuilder: (_, _, _) => ColoredBox(
+              color: scheme.surfaceContainerHighest,
+              child: const Icon(Icons.image_outlined),
+            ),
+          ),
+          DecoratedBox(
+            decoration: BoxDecoration(
+              borderRadius: AppRadius.all(AppRadius.md),
+              border: Border.all(color: scheme.outlineVariant),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -192,12 +230,17 @@ class _ImportScreenState extends State<ImportScreen> {
     final hasSelection = _selectedFiles.isNotEmpty && _selectedSource != null;
     final bottomInset = MediaQuery.of(context).viewInsets.bottom;
     return AnimatedPadding(
-      duration: const Duration(milliseconds: 180),
+      duration: AppDuration.fast,
       padding: EdgeInsets.only(bottom: bottomInset),
       child: Material(
         color: theme.colorScheme.surface,
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
+          padding: const EdgeInsets.fromLTRB(
+            AppSpacing.lg,
+            AppSpacing.sm,
+            AppSpacing.lg,
+            AppSpacing.lg,
+          ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -205,7 +248,9 @@ class _ImportScreenState extends State<ImportScreen> {
                 children: [
                   Expanded(
                     child: Text(
-                      hasSelection ? 'Review photos to encrypt' : 'Import photos',
+                      hasSelection
+                          ? 'Review photos to encrypt'
+                          : 'Import photos',
                       style: theme.textTheme.headlineSmall,
                     ),
                   ),
@@ -218,72 +263,81 @@ class _ImportScreenState extends State<ImportScreen> {
                   ),
                 ],
               ),
-              const SizedBox(height: 8),
+              const SizedBox(height: AppSpacing.sm),
               Text(
                 hasSelection
                     ? 'Review your photos below and hit Encrypt to secure them in your vault.'
                     : 'Choose photos to encrypt and add to your vault.',
                 style: theme.textTheme.bodyMedium,
               ),
-              const SizedBox(height: 20),
+              const SizedBox(height: AppSpacing.lg),
               if (!hasSelection) ...[
-                FilledButton.icon(
-                  onPressed: _isPicking ? null : _pickFromGallery,
-                  icon: const Icon(Icons.photo_library_outlined),
-                  label: Text(
-                    _isPicking ? 'Opening...' : 'Choose from gallery',
-                  ),
+                const SectionHeader(
+                  'Sources',
+                  padding: EdgeInsets.only(bottom: AppSpacing.sm),
                 ),
-                const SizedBox(height: 12),
-                FilledButton.icon(
-                  onPressed: _isPicking ? null : _pickFromCamera,
-                  icon: const Icon(Icons.photo_camera_outlined),
-                  label: const Text('Open camera'),
+                SettingsCard(
+                  margin: EdgeInsets.zero,
+                  children: [
+                    ListTile(
+                      leading: const Icon(Icons.photo_library_outlined),
+                      title: Text(
+                        _isPicking ? 'Opening...' : 'Choose from gallery',
+                      ),
+                      subtitle: const Text(
+                        'Select one or more existing photos.',
+                      ),
+                      trailing: const Icon(Icons.chevron_right),
+                      onTap: _isPicking ? null : _pickFromGallery,
+                    ),
+                    ListTile(
+                      leading: const Icon(Icons.photo_camera_outlined),
+                      title: const Text('Open camera'),
+                      subtitle: const Text(
+                        'Capture a new photo for the vault.',
+                      ),
+                      trailing: const Icon(Icons.chevron_right),
+                      onTap: _isPicking ? null : _pickFromCamera,
+                    ),
+                  ],
                 ),
               ] else ...[
-                ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  title: Text('${_selectedFiles.length} photo(s) selected'),
-                  subtitle: Text('Source: $_selectedSource'),
-                  trailing: TextButton(
-                    onPressed: () {
-                      setState(() {
-                        _selectedFiles = const [];
-                        _selectedSource = null;
-                        _isQueueing = false;
-                      });
-                      widget.importManager.clearPendingImportSelection();
-                    },
-                    child: const Text('Change'),
-                  ),
+                const SectionHeader(
+                  'Selection',
+                  padding: EdgeInsets.only(bottom: AppSpacing.sm),
                 ),
+                SettingsCard(
+                  margin: EdgeInsets.zero,
+                  children: [
+                    ListTile(
+                      title: Text('${_selectedFiles.length} photo(s) selected'),
+                      subtitle: Text('Source: $_selectedSource'),
+                      trailing: TextButton(
+                        onPressed: () {
+                          setState(() {
+                            _selectedFiles = const [];
+                            _selectedSource = null;
+                            _isQueueing = false;
+                          });
+                          widget.importManager.clearPendingImportSelection();
+                        },
+                        child: const Text('Change'),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: AppSpacing.md),
                 Expanded(
-                  child: GridView.builder(
+                  child: MediaGrid(
                     padding: EdgeInsets.zero,
-                    gridDelegate:
-                        const SliverGridDelegateWithFixedCrossAxisCount(
-                          crossAxisCount: 3,
-                          mainAxisSpacing: 8,
-                          crossAxisSpacing: 8,
-                        ),
                     itemCount: _selectedFiles.length,
                     itemBuilder: (context, index) {
-                      return ClipRRect(
-                        borderRadius: BorderRadius.circular(12),
-                        child: Image.file(
-                          File(_selectedFiles[index].path),
-                          fit: BoxFit.cover,
-                          errorBuilder: (_, _, _) => Container(
-                            color: theme.colorScheme.surfaceContainerHighest,
-                            child: const Icon(Icons.image_outlined),
-                          ),
-                        ),
-                      );
+                      return _ImportTile(file: _selectedFiles[index]);
                     },
                   ),
                 ),
               ],
-              const SizedBox(height: 16),
+              const SizedBox(height: AppSpacing.lg),
               AnimatedBuilder(
                 animation: widget.importManager,
                 builder: (context, _) {
@@ -295,9 +349,12 @@ class _ImportScreenState extends State<ImportScreen> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       LinearProgressIndicator(value: p.ratio),
-                      const SizedBox(height: 8),
-                      Text('Importing ${p.completed}/${p.total} photo(s)...'),
-                      const SizedBox(height: 12),
+                      const SizedBox(height: AppSpacing.sm),
+                      Text(
+                        'Importing ${p.completed}/${p.total} photo(s)...',
+                        style: theme.textTheme.bodySmall,
+                      ),
+                      const SizedBox(height: AppSpacing.md),
                     ],
                   );
                 },
@@ -319,7 +376,7 @@ class _ImportScreenState extends State<ImportScreen> {
                           child: const Text('Cancel'),
                         ),
                       ),
-                      const SizedBox(width: 12),
+                      const SizedBox(width: AppSpacing.md),
                       Expanded(
                         child: FilledButton(
                           onPressed: _isQueueing ? null : _startImport,

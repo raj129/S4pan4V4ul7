@@ -91,6 +91,18 @@ class FirestoreThreadRepository implements ThreadRepository {
     await _threads.doc(threadId).update({'unreadCounts.$uid': 0});
   }
 
+
+  @override
+  Future<void> clearThreadPreview({
+    required String threadId,
+    required DateTime clearedAt,
+  }) async {
+    await _threads.doc(threadId).update({
+      'lastMessage': '',
+      'lastMessageAt': clearedAt.toUtc().millisecondsSinceEpoch,
+      'unreadCounts': <String, int>{},
+    });
+  }
   @override
   Future<void> deleteThread(String threadId) async {
     // Firestore does not recursively delete subcollections from the client.

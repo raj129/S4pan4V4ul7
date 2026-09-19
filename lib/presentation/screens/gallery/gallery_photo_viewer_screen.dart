@@ -8,8 +8,12 @@ import '../../../application/usecases/unlock_vault_usecase.dart';
 import '../../../application/services/import_manager.dart';
 import '../../../application/services/pin_validator.dart';
 import '../../../application/services/vault_session.dart';
+import '../../../core/widgets/app_state_views.dart';
+import '../../../core/widgets/app_surfaces.dart';
 import '../../../domain/entities/vault_photo.dart';
 import '../../../domain/repositories/photo_repository.dart';
+import '../../theme/app_colors.dart';
+import '../../theme/app_spacing.dart';
 import '../../widgets/confirm_dialog.dart';
 import '../../widgets/pin_reauth_dialog.dart';
 
@@ -95,104 +99,113 @@ class _GalleryPhotoViewerScreenState extends State<GalleryPhotoViewerScreen> {
 
   @override
   Widget build(BuildContext context) {
-    if (_error != null && _error!.contains('locked')) {
-      return Scaffold(
-        appBar: AppBar(
-          leading: IconButton(
-            icon: const Icon(Icons.arrow_back),
-            onPressed: () => context.pop(),
-          ),
-        ),
-        body: Center(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.lock_outline, size: 64, color: Colors.grey),
-              const SizedBox(height: 16),
-              Text(_error!),
-            ],
-          ),
-        ),
-      );
-    }
+    final viewerTheme = _darkViewerTheme(context);
+    return Theme(
+      data: viewerTheme,
+      child: Builder(
+        builder: (context) {
+          final scheme = Theme.of(context).colorScheme;
+          if (_error != null && _error!.contains('locked')) {
+            return Scaffold(
+              appBar: AppBar(
+                leading: IconButton(
+                  icon: const Icon(Icons.arrow_back),
+                  onPressed: () => context.pop(),
+                ),
+              ),
+              body: ErrorView(
+                title: 'Vault locked',
+                message: _error!,
+                onRetry: _loadPhoto,
+              ),
+            );
+          }
 
-    return Scaffold(
-      backgroundColor: Colors.black,
-      appBar: AppBar(
-        backgroundColor: Colors.black.withValues(alpha: 0.5),
-        foregroundColor: Colors.white,
-        elevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
-          onPressed: () => context.pop(),
-        ),
-        actions: [
-          if (widget.isTrashPreview) ...[
-            IconButton(
-              icon: const Icon(Icons.restore_outlined),
-              onPressed: () => _restoreFromTrash(context),
-              tooltip: 'Restore',
+          return Scaffold(
+            backgroundColor: scheme.scrim,
+            appBar: AppBar(
+              backgroundColor: scheme.scrim.withValues(alpha: 0.50),
+              foregroundColor: scheme.onInverseSurface,
+              elevation: 0,
+              leading: IconButton(
+                icon: const Icon(Icons.arrow_back),
+                onPressed: () => context.pop(),
+              ),
+              actions: [
+                if (widget.isTrashPreview) ...[
+                  IconButton(
+                    icon: const Icon(Icons.restore_outlined),
+                    onPressed: () => _restoreFromTrash(context),
+                    tooltip: 'Restore',
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.delete_forever_outlined),
+                    onPressed: () => _permanentlyDeleteFromTrash(context),
+                    tooltip: 'Delete permanently',
+                  ),
+                ] else ...[
+                  IconButton(
+                    icon: const Icon(Icons.file_download_outlined),
+                    onPressed: () => _exportPhoto(context),
+                    tooltip: 'Export to Downloads',
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.info_outlined),
+                    onPressed: () => _showPhotoInfo(context),
+                    tooltip: 'Photo info',
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.delete_outline),
+                    onPressed: () => _confirmDelete(context),
+                    tooltip: 'Delete',
+                  ),
+                ],
+              ],
             ),
-            IconButton(
-              icon: const Icon(Icons.delete_forever_outlined),
-              onPressed: () => _permanentlyDeleteFromTrash(context),
-              tooltip: 'Delete permanently',
-            ),
-          ] else ...[
-            IconButton(
-              icon: const Icon(Icons.file_download_outlined),
-              onPressed: () => _exportPhoto(context),
-              tooltip: 'Export to Downloads',
-            ),
-            IconButton(
-              icon: const Icon(Icons.info_outlined),
-              onPressed: () => _showPhotoInfo(context),
-              tooltip: 'Photo info',
-            ),
-            IconButton(
-              icon: const Icon(Icons.delete_outline),
-              onPressed: () => _confirmDelete(context),
-              tooltip: 'Delete',
-            ),
-          ],
-        ],
+            extendBodyBehindAppBar: true,
+            body: _buildBody(context),
+          );
+        },
       ),
-      extendBodyBehindAppBar: true,
-      body: _buildBody(),
     );
   }
 
-  Widget _buildBody() {
+  ThemeData _darkViewerTheme(BuildContext context) {
+    final base = Theme.of(context);
+    final scheme = ColorScheme.fromSeed(
+      seedColor: AppColors.seed,
+      brightness: Brightness.dark,
+    );
+    // Full-bleed media chrome is intentionally dark regardless of app theme.
+    return base.copyWith(
+      brightness: Brightness.dark,
+      colorScheme: scheme,
+      scaffoldBackgroundColor: scheme.scrim,
+      appBarTheme: base.appBarTheme.copyWith(
+        backgroundColor: scheme.scrim.withValues(alpha: 0.50),
+        foregroundColor: scheme.onInverseSurface,
+        elevation: 0,
+      ),
+    );
+  }
+
+  Widget _buildBody(BuildContext context) {
     if (_loading) {
-      return const Center(child: CircularProgressIndicator());
+      return const LoadingView(message: 'Decrypting photo...');
     }
 
     if (_error != null) {
-      return Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(
-              Icons.broken_image_outlined,
-              size: 64,
-              color: Colors.grey,
-            ),
-            const SizedBox(height: 16),
-            Text(
-              _error ?? 'Failed to load photo',
-              textAlign: TextAlign.center,
-              style: Theme.of(
-                context,
-              ).textTheme.bodyMedium?.copyWith(color: Colors.white),
-            ),
-          ],
-        ),
+      return ErrorView(
+        title: 'Unable to load photo',
+        message: _error ?? 'Failed to load photo',
+        onRetry: _loadPhoto,
       );
     }
 
     if (_photoBytes == null) {
-      return const Center(
-        child: Text('No photo data', style: TextStyle(color: Colors.white)),
+      return const EmptyView(
+        icon: Icons.image_not_supported_outlined,
+        title: 'No photo data',
       );
     }
 
@@ -206,7 +219,7 @@ class _GalleryPhotoViewerScreenState extends State<GalleryPhotoViewerScreen> {
             transformationController: _transformationController,
             minScale: 1.0,
             maxScale: 5.0,
-            boundaryMargin: const EdgeInsets.all(0),
+            boundaryMargin: EdgeInsets.zero,
             clipBehavior: Clip.none,
             child: SizedBox(
               width: constraints.maxWidth,
@@ -214,24 +227,9 @@ class _GalleryPhotoViewerScreenState extends State<GalleryPhotoViewerScreen> {
               child: Image.memory(
                 _photoBytes!,
                 fit: BoxFit.contain,
-                errorBuilder: (context, error, stackTrace) => Center(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Icon(
-                        Icons.image_not_supported_outlined,
-                        size: 64,
-                        color: Colors.grey,
-                      ),
-                      const SizedBox(height: 16),
-                      Text(
-                        'Cannot display photo',
-                        style: Theme.of(
-                          context,
-                        ).textTheme.bodyMedium?.copyWith(color: Colors.grey),
-                      ),
-                    ],
-                  ),
+                errorBuilder: (context, error, stackTrace) => const ErrorView(
+                  title: 'Unsupported image',
+                  message: 'Cannot display photo',
                 ),
               ),
             ),
@@ -261,6 +259,7 @@ class _GalleryPhotoViewerScreenState extends State<GalleryPhotoViewerScreen> {
   void _showPhotoInfo(BuildContext context) {
     showModalBottomSheet(
       context: context,
+      showDragHandle: true,
       builder: (context) => _PhotoInfoBottomSheet(photo: widget.photo),
     );
   }
@@ -363,58 +362,41 @@ class _PhotoInfoBottomSheet extends StatelessWidget {
 
     return SingleChildScrollView(
       child: Padding(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.fromLTRB(
+          AppSpacing.lg,
+          AppSpacing.sm,
+          AppSpacing.lg,
+          AppSpacing.xl,
+        ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
           children: [
-            Center(
-              child: Container(
-                width: 40,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: Theme.of(context).colorScheme.outline,
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
-            ),
-            const SizedBox(height: 24),
             Text(
               'Photo Details',
               style: Theme.of(context).textTheme.titleLarge,
             ),
-            const SizedBox(height: 16),
-            _InfoRow(label: 'Filename', value: photo.originalFilename),
-            _InfoRow(label: 'Size', value: sizeStr),
-            _InfoRow(label: 'Type', value: photo.mimeType),
-            _InfoRow(label: 'Created', value: _formatDateTime(createdDate)),
-            _InfoRow(label: 'Imported', value: _formatDateTime(importedDate)),
-            _InfoRow(label: 'ID', value: photo.id),
-            const SizedBox(height: 16),
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Theme.of(context).colorScheme.surfaceContainerLow,
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Row(
-                children: [
-                  Icon(
-                    Icons.lock_outlined,
-                    size: 16,
-                    color: Theme.of(context).colorScheme.primary,
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      'This photo is encrypted with AES-256-GCM',
-                      style: Theme.of(context).textTheme.bodySmall,
-                    ),
-                  ),
-                ],
-              ),
+            const SizedBox(height: AppSpacing.lg),
+            SettingsCard(
+              margin: EdgeInsets.zero,
+              children: [
+                _InfoRow(label: 'Filename', value: photo.originalFilename),
+                _InfoRow(label: 'Size', value: sizeStr),
+                _InfoRow(label: 'Type', value: photo.mimeType),
+                _InfoRow(label: 'Created', value: _formatDateTime(createdDate)),
+                _InfoRow(
+                  label: 'Imported',
+                  value: _formatDateTime(importedDate),
+                ),
+                _InfoRow(label: 'ID', value: photo.id),
+              ],
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: AppSpacing.lg),
+            InfoBanner(
+              icon: Icons.lock_outlined,
+              title: 'Encrypted',
+              message: 'This photo is encrypted with AES-256-GCM.',
+            ),
           ],
         ),
       ),
@@ -442,25 +424,22 @@ class _InfoRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            label,
-            style: Theme.of(context).textTheme.labelSmall?.copyWith(
-              color: Theme.of(context).colorScheme.onSurfaceVariant,
-            ),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            value,
-            style: Theme.of(context).textTheme.bodyMedium,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-          ),
-        ],
+    final theme = Theme.of(context);
+    return ListTile(
+      title: Text(
+        label,
+        style: theme.textTheme.labelSmall?.copyWith(
+          color: theme.colorScheme.onSurfaceVariant,
+        ),
+      ),
+      subtitle: Padding(
+        padding: const EdgeInsets.only(top: AppSpacing.xs),
+        child: Text(
+          value,
+          style: theme.textTheme.bodyMedium,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+        ),
       ),
     );
   }

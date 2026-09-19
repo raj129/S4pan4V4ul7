@@ -90,7 +90,6 @@ class ChatDependencies {
   late final ChatNotificationService notificationService =
       ChatNotificationService(
         threadRepository: threadRepository,
-        userRepository: userRepository,
       );
 
   late final PresenceService presenceService = PresenceService(

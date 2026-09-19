@@ -34,6 +34,12 @@ abstract class ThreadRepository {
     required String uid,
   });
 
+  /// Clear all messages but keep the thread shell for future conversation.
+  Future<void> clearThreadPreview({
+    required String threadId,
+    required DateTime clearedAt,
+  });
+
   /// Delete the entire thread and all its messages.
   Future<void> deleteThread(String threadId);
 }

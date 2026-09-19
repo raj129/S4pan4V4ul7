@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
+import '../../../core/widgets/app_state_views.dart';
 import '../../../domain/entities/user_mode.dart';
 import '../../../presentation/state/onboarding/onboarding_cubit.dart';
 import '../../../presentation/state/onboarding/onboarding_state.dart';
+import '../../theme/app_colors.dart';
+import '../../theme/app_spacing.dart';
 
 /// Screen 7: Vault creation progress screen.
 ///
@@ -15,14 +18,19 @@ class VaultCreationScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
     return Scaffold(
       body: BlocBuilder<OnboardingCubit, OnboardingState>(
         builder: (context, state) {
           if (state is OnboardingError) {
-            return _ErrorView(
+            return ErrorView(
+              title: 'Vault creation failed',
               message: state.message,
-              canRetry: state.canRetry,
-              onRetry: () => context.read<OnboardingCubit>().retry(),
+              onRetry: state.canRetry
+                  ? () => context.read<OnboardingCubit>().retry()
+                  : null,
+              retryLabel: 'Try again',
             );
           }
 
@@ -32,27 +40,60 @@ class VaultCreationScreen extends StatelessWidget {
 
           return SafeArea(
             child: Padding(
-              padding: const EdgeInsets.all(32),
+              padding: const EdgeInsets.all(AppSpacing.xl),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  const Spacer(),
-                  const Center(child: CircularProgressIndicator()),
-                  const SizedBox(height: 32),
-                  Text(
-                    'Creating your encrypted vault…',
-                    textAlign: TextAlign.center,
-                    style: Theme.of(context).textTheme.titleLarge,
-                  ),
-                  const SizedBox(height: 32),
-                  ..._steps.map(
-                    (s) => _StepRow(
-                      label: s.label,
-                      isDone: s.step.index < step.index,
-                      isActive: s.step == step,
+                  Expanded(
+                    child: SingleChildScrollView(
+                      child: Column(
+                        children: [
+                          const SizedBox(height: AppSpacing.huge),
+                          Container(
+                            width: AppSpacing.huge * 2,
+                            height: AppSpacing.huge * 2,
+                            decoration: BoxDecoration(
+                              color: theme.colorScheme.primaryContainer,
+                              borderRadius: AppRadius.all(AppRadius.xl),
+                            ),
+                            child: Icon(
+                              Icons.enhanced_encryption_rounded,
+                              size: AppSpacing.huge,
+                              color: theme.colorScheme.onPrimaryContainer,
+                            ),
+                          ),
+                          const SizedBox(height: AppSpacing.xxl),
+                          Text(
+                            'Creating your encrypted vault…',
+                            textAlign: TextAlign.center,
+                            style: theme.textTheme.headlineSmall,
+                          ),
+                          const SizedBox(height: AppSpacing.md),
+                          Text(
+                            mode == UserMode.googleEnabled
+                                ? 'Setting up local encryption and encrypted Google backup.'
+                                : 'Generating keys and preparing secure local storage.',
+                            textAlign: TextAlign.center,
+                            style: theme.textTheme.bodyLarge?.copyWith(
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                          const SizedBox(height: AppSpacing.xxl),
+                          ..._steps.map(
+                            (s) => _StepRow(
+                              label: s.label,
+                              isDone:
+                                  s.step.index < step.index ||
+                                  step == VaultCreationStep.done,
+                              isActive: s.step == step,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
-                  const Spacer(),
+                  const SizedBox(height: AppSpacing.lg),
+                  const LinearProgressIndicator(),
                 ],
               ),
             ),
@@ -89,79 +130,39 @@ class _StepRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     final color = isDone
-        ? Theme.of(context).colorScheme.primary
+        ? context.semantic.success
         : isActive
-        ? Theme.of(context).colorScheme.secondary
-        : Theme.of(context).colorScheme.outlineVariant;
+        ? theme.colorScheme.primary
+        : theme.colorScheme.outline;
 
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6),
+      padding: const EdgeInsets.symmetric(vertical: AppSpacing.sm),
       child: Row(
         children: [
-          Icon(
-            isDone ? Icons.check_circle_rounded : Icons.radio_button_unchecked,
-            color: color,
-            size: 20,
-          ),
-          const SizedBox(width: 12),
-          Text(
-            label,
-            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+          AnimatedSwitcher(
+            duration: AppDuration.fast,
+            child: Icon(
+              isDone
+                  ? Icons.check_circle_rounded
+                  : Icons.radio_button_unchecked,
+              key: ValueKey('$label-$isDone'),
               color: color,
-              fontWeight: isActive ? FontWeight.bold : FontWeight.normal,
+            ),
+          ),
+          const SizedBox(width: AppSpacing.md),
+          Expanded(
+            child: Text(
+              label,
+              style:
+                  (isActive
+                          ? theme.textTheme.titleSmall
+                          : theme.textTheme.bodyMedium)
+                      ?.copyWith(color: color),
             ),
           ),
         ],
-      ),
-    );
-  }
-}
-
-class _ErrorView extends StatelessWidget {
-  const _ErrorView({
-    required this.message,
-    required this.canRetry,
-    required this.onRetry,
-  });
-
-  final String message;
-  final bool canRetry;
-  final VoidCallback onRetry;
-
-  @override
-  Widget build(BuildContext context) {
-    return SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.all(32),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            const Spacer(),
-            Icon(
-              Icons.error_outline_rounded,
-              size: 72,
-              color: Theme.of(context).colorScheme.error,
-            ),
-            const SizedBox(height: 24),
-            Text(
-              'Vault creation failed',
-              textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.titleLarge,
-            ),
-            const SizedBox(height: 12),
-            Text(
-              message,
-              textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
-              ),
-            ),
-            const Spacer(),
-            if (canRetry)
-              FilledButton(onPressed: onRetry, child: const Text('Try again')),
-          ],
-        ),
       ),
     );
   }
