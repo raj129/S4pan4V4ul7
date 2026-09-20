@@ -92,8 +92,10 @@ class MessageBubble extends StatelessWidget {
     // deletedFor), so a single check keeps both delete paths in sync.
     if (message.isDeletedFor(myUid)) {
       return _TombstoneBubble(
+        messageId: message.messageId,
         isMine: isMine,
         isLastInGroup: isLastInGroup,
+        onReply: onReply,
       );
     }
 
@@ -691,16 +693,23 @@ class _ReactionRow extends StatelessWidget {
 /// The document is kept rather than removed so the message does not silently
 /// vanish from the other side of the conversation.
 class _TombstoneBubble extends StatelessWidget {
-  const _TombstoneBubble({required this.isMine, required this.isLastInGroup});
+  const _TombstoneBubble({
+    required this.messageId,
+    required this.isMine,
+    required this.isLastInGroup,
+    this.onReply,
+  });
 
+  final String messageId;
   final bool isMine;
   final bool isLastInGroup;
+  final VoidCallback? onReply;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
-    return Align(
+    final child = Align(
       alignment: isMine ? Alignment.centerRight : Alignment.centerLeft,
       child: Container(
         margin: EdgeInsets.only(
@@ -737,6 +746,25 @@ class _TombstoneBubble extends StatelessWidget {
           ],
         ),
       ),
+    );
+
+    if (onReply == null) {
+      return child;
+    }
+
+    return Dismissible(
+      key: ValueKey('reply_deleted_$messageId'),
+      direction: DismissDirection.startToEnd,
+      dismissThresholds: const {
+        DismissDirection.startToEnd: 0.25,
+      },
+      confirmDismiss: (_) async {
+        onReply!.call();
+        return false;
+      },
+      background: const _ReplySwipeBackground(alignEnd: false),
+      secondaryBackground: const SizedBox.shrink(),
+      child: child,
     );
   }
 }
