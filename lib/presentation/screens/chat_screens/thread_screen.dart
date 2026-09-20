@@ -848,11 +848,6 @@ class _ThreadScreenState extends State<ThreadScreen> {
             onPressed: _cancelEdit,
             icon: const Icon(Icons.close_rounded),
           ),
-          IconButton(
-            tooltip: 'Update message',
-            onPressed: _commitEdit,
-            icon: const Icon(Icons.check_rounded),
-          ),
         ],
       ),
     );
