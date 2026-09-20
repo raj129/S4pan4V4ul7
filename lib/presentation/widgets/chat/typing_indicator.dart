@@ -19,10 +19,16 @@ class TypingIndicator extends StatefulWidget {
 
 class _TypingIndicatorState extends State<TypingIndicator>
     with SingleTickerProviderStateMixin {
-  late final AnimationController _controller = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 1200),
-  )..repeat();
+  late final AnimationController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1200),
+    )..repeat();
+  }
 
   @override
   void dispose() {

@@ -37,9 +37,24 @@ class ChatDependencies {
     required AuthRepository authRepository,
     required VaultSession vaultSession,
     VaultDatabase? database,
+    UserRepository? userRepository,
+    ThreadRepository? threadRepository,
+    MessageRepository? messageRepository,
+    MediaRepository? mediaRepository,
+    PresenceRepository? presenceRepository,
+    TypingRepository? typingRepository,
+    ChatCryptoService? cryptoService,
   }) : _authRepository = authRepository,
        _vaultSession = vaultSession,
-       _database = database;
+       _database = database {
+    if (userRepository != null) this.userRepository = userRepository;
+    if (threadRepository != null) this.threadRepository = threadRepository;
+    if (messageRepository != null) this.messageRepository = messageRepository;
+    if (mediaRepository != null) this.mediaRepository = mediaRepository;
+    if (presenceRepository != null) this.presenceRepository = presenceRepository;
+    if (typingRepository != null) this.typingRepository = typingRepository;
+    if (cryptoService != null) this.cryptoService = cryptoService;
+  }
 
   final AuthRepository _authRepository;
   final VaultSession _vaultSession;
@@ -47,18 +62,18 @@ class ChatDependencies {
   /// Shared local database, or null in the in-memory test configuration.
   final VaultDatabase? _database;
 
-  late final UserRepository userRepository = FirestoreUserRepository();
-  late final ThreadRepository threadRepository = FirestoreThreadRepository();
-  late final MessageRepository messageRepository =
+  late UserRepository userRepository = FirestoreUserRepository();
+  late ThreadRepository threadRepository = FirestoreThreadRepository();
+  late MessageRepository messageRepository =
       FirestoreMessageRepository();
-  late final MediaRepository mediaRepository = FirebaseMediaRepository();
-  late final ChatCryptoService cryptoService = ChatCryptoService();
+  late MediaRepository mediaRepository = FirebaseMediaRepository();
+  late ChatCryptoService cryptoService = ChatCryptoService();
 
   /// Swap point for presence: replacing these two bindings with Realtime
   /// Database implementations is the whole cost of that migration.
-  late final PresenceRepository presenceRepository =
+  late PresenceRepository presenceRepository =
       FirestorePresenceRepository();
-  late final TypingRepository typingRepository = FirestoreTypingRepository();
+  late TypingRepository typingRepository = FirestoreTypingRepository();
 
   /// Offline message cache. Falls back to a no-op when no local database is
   /// available, so the chat still works (online-only) in tests.

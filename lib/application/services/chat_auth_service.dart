@@ -95,10 +95,22 @@ class ChatAuthService {
   }
 
   /// Returns the currently signed-in Firebase UID, or null.
-  String? get currentUid => FirebaseAuth.instance.currentUser?.uid;
+  String? get currentUid {
+    try {
+      return FirebaseAuth.instance.currentUser?.uid;
+    } catch (_) {
+      return null;
+    }
+  }
 
   /// Returns true if a Firebase session is active.
-  bool get isSignedIn => FirebaseAuth.instance.currentUser != null;
+  bool get isSignedIn {
+    try {
+      return FirebaseAuth.instance.currentUser != null;
+    } catch (_) {
+      return false;
+    }
+  }
 
   /// Retries the identity restore with an explicitly supplied PIN.
   ///

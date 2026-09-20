@@ -1,6 +1,7 @@
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 
 import '../../../application/services/chat_notification_service.dart';
@@ -132,30 +133,19 @@ class _ChatListScreenState extends State<ChatListScreen> {
   }
 
   void _openNewChat(BuildContext context) {
-    // Carry the chat providers across the root navigator boundary.
-    final userLookup = context.read<UserLookupCubit>();
-    final activeThread = context.read<ActiveThreadCubit>();
-    final mediaLoader = context.read<ChatMediaLoader>();
-    final vaultBridge = context.read<ChatVaultBridge>();
-    final notifications = context.read<ChatNotificationService>();
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => MultiRepositoryProvider(
-          providers: [
-            RepositoryProvider<ChatMediaLoader>.value(value: mediaLoader),
-            RepositoryProvider<ChatVaultBridge>.value(value: vaultBridge),
-            RepositoryProvider<ChatNotificationService>.value(
-              value: notifications,
-            ),
-          ],
-          child: MultiBlocProvider(
-            providers: [
-              BlocProvider.value(value: userLookup),
-              BlocProvider.value(value: activeThread),
-            ],
-            child: const NewChatScreen(),
-          ),
-        ),
+    UserLookupCubit? userLookup;
+    ActiveThreadCubit? activeThread;
+    try {
+      userLookup = context.read<UserLookupCubit>();
+    } catch (_) {}
+    try {
+      activeThread = context.read<ActiveThreadCubit>();
+    } catch (_) {}
+    context.push(
+      '/chat/new',
+      extra: NewChatArgs(
+        userLookupCubit: userLookup,
+        activeThreadCubit: activeThread,
       ),
     );
   }

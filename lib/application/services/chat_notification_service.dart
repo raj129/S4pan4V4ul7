@@ -95,7 +95,11 @@ class ChatNotificationService {
     _activeThreadId = threadId;
     if (threadId != null) {
       _lastUnread[threadId] = 0;
-      await _plugin.cancel(id: threadId.hashCode);
+      if (_initialised) {
+        try {
+          await _plugin.cancel(id: threadId.hashCode);
+        } catch (_) {}
+      }
     }
   }
 

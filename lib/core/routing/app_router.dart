@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
@@ -11,6 +12,8 @@ import '../../features/calculator/calculator.dart';
 import '../../presentation/app/chat_app.dart';
 import '../../presentation/app/main_scaffold.dart';
 import '../../presentation/features/utility_shell/utility_shell.dart';
+import '../../presentation/screens/chat_screens/new_chat_screen.dart';
+import '../../presentation/screens/chat_screens/thread_screen.dart';
 import '../../presentation/screens/files/files_screen.dart';
 import '../../presentation/screens/gallery/gallery_home_screen.dart';
 import '../../presentation/screens/gallery/gallery_photo_viewer_screen.dart';
@@ -24,6 +27,8 @@ import '../../presentation/screens/restore/restore_flow_screen.dart';
 import '../../presentation/screens/settings/change_pin_screen.dart';
 import '../../presentation/screens/settings/settings_screen.dart';
 import '../../presentation/screens/trash/trash_screen.dart';
+import '../../presentation/state/chat/active_thread_cubit.dart';
+import '../../presentation/state/chat/user_lookup_cubit.dart';
 import '../../presentation/state/onboarding/onboarding_cubit.dart';
 import '../../presentation/state/onboarding/onboarding_state.dart';
 import '../app/app_session.dart';
@@ -73,9 +78,11 @@ GoRouter buildAppRouter({
         ),
       ),
       StatefulShellRoute.indexedStack(
-        builder: (context, state, navigationShell) => MainScaffold(
-          navigationShell: navigationShell,
-          importManager: deps.importManager,
+        pageBuilder: (context, state, navigationShell) => NoTransitionPage(
+          child: MainScaffold(
+            navigationShell: navigationShell,
+            importManager: deps.importManager,
+          ),
         ),
         branches: [
           StatefulShellBranch(routes: [_chatRoute(deps, session)]),
@@ -126,7 +133,16 @@ Future<String?> _redirect(
     return '/lock?returnTo=$encoded';
   }
 
-  if (isLockRoute || isOnboarding) {
+  if (isLockRoute) {
+    final returnTo = state.uri.queryParameters['returnTo'];
+    if (returnTo != null && returnTo.isNotEmpty) {
+      final decoded = Uri.decodeComponent(returnTo);
+      return decoded == '/chat/thread' ? '/chat' : decoded;
+    }
+    return '/chat';
+  }
+
+  if (isOnboarding) {
     return '/chat';
   }
 
@@ -220,6 +236,100 @@ GoRoute _chatRoute(AppDependencies deps, AppSessionState session) {
       vaultBridge: deps.chatVaultBridge,
       userMode: session.mode,
     ),
+    routes: [
+      GoRoute(
+        path: 'new',
+        builder: (context, state) {
+          final extra = state.extra as NewChatArgs?;
+          final userLookup = extra?.userLookupCubit;
+          final activeThread = extra?.activeThreadCubit;
+
+          Widget buildContent() => const NewChatScreen();
+
+          Widget withActiveThread(Widget child) {
+            if (activeThread != null) {
+              return BlocProvider.value(value: activeThread, child: child);
+            }
+            return BlocProvider<ActiveThreadCubit>(
+              create: (_) => ActiveThreadCubit(
+                messageRepository: deps.chatDependencies.messageRepository,
+                threadRepository: deps.chatDependencies.threadRepository,
+                userRepository: deps.chatDependencies.userRepository,
+                typingRepository: deps.chatDependencies.typingRepository,
+                presenceRepository: deps.chatDependencies.presenceRepository,
+                mediaRepository: deps.chatDependencies.mediaRepository,
+                messageCache: deps.chatDependencies.messageCache,
+                outbox: deps.chatDependencies.outbox,
+                cryptoService: deps.chatDependencies.cryptoService,
+                myUid: deps.chatDependencies.authService.currentUid ?? '',
+                connectivityStream: Connectivity().onConnectivityChanged,
+              ),
+              child: child,
+            );
+          }
+
+          Widget withUserLookup(Widget child) {
+            if (userLookup != null) {
+              return BlocProvider.value(value: userLookup, child: child);
+            }
+            return BlocProvider<UserLookupCubit>(
+              create: (_) => UserLookupCubit(
+                userRepository: deps.chatDependencies.userRepository,
+                threadRepository: deps.chatDependencies.threadRepository,
+                myUid: deps.chatDependencies.authService.currentUid ?? '',
+              ),
+              child: child,
+            );
+          }
+
+          return withUserLookup(withActiveThread(buildContent()));
+        },
+      ),
+      GoRoute(
+        path: 'thread',
+        builder: (context, state) {
+          final args = state.extra as ChatThreadArgs?;
+          if (args == null) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (context.mounted) context.go('/chat');
+            });
+            return const Scaffold(
+              body: Center(child: CircularProgressIndicator()),
+            );
+          }
+          final screen = ThreadScreen(
+            thread: args.thread,
+            otherUser: args.otherUser,
+            mediaLoader: deps.chatDependencies.mediaLoader,
+            vaultBridge: deps.chatVaultBridge,
+            notificationService: deps.chatDependencies.notificationService,
+          );
+          final providedCubit = args.activeThreadCubit;
+          if (providedCubit != null) {
+            return BlocProvider.value(
+              value: providedCubit,
+              child: screen,
+            );
+          }
+          return BlocProvider<ActiveThreadCubit>(
+            create: (_) => ActiveThreadCubit(
+              messageRepository: deps.chatDependencies.messageRepository,
+              threadRepository: deps.chatDependencies.threadRepository,
+              userRepository: deps.chatDependencies.userRepository,
+              typingRepository: deps.chatDependencies.typingRepository,
+              presenceRepository: deps.chatDependencies.presenceRepository,
+              mediaRepository: deps.chatDependencies.mediaRepository,
+              messageCache: deps.chatDependencies.messageCache,
+              outbox: deps.chatDependencies.outbox,
+              cryptoService: deps.chatDependencies.cryptoService,
+              myUid: deps.chatDependencies.authService.currentUid ?? '',
+              connectivityStream: Connectivity().onConnectivityChanged,
+            ),
+            child: screen,
+          );
+        },
+      ),
+    ],
   );
 }
 
@@ -304,24 +414,26 @@ GoRoute _settingsRoute(
 GoRoute _lockRoute(AppDependencies deps, AppSessionState session) {
   return GoRoute(
     path: '/lock',
-    builder: (context, state) {
+    pageBuilder: (context, state) {
       final returnTo = state.uri.queryParameters['returnTo'];
       final decodedReturnTo = returnTo == null
           ? '/chat'
           : Uri.decodeComponent(returnTo);
-      return LockScreen(
-        unlockVaultUseCase: deps.unlockVaultUseCase,
-        pinValidator: deps.pinValidator,
-        title: 'Calculator',
-        subtitle: 'Enter your vault passcode to leave calculator mode.',
-        onUnlocked: () {
-          session.unlock();
-          unawaited(deps.importManager.reconcileVaultFiles());
-          final importTarget = deps.importManager.hasPendingShareFiles
-              ? '/import/share-intent'
-              : null;
-          context.go(importTarget ?? decodedReturnTo);
-        },
+      return NoTransitionPage(
+        child: LockScreen(
+          unlockVaultUseCase: deps.unlockVaultUseCase,
+          pinValidator: deps.pinValidator,
+          title: 'Calculator',
+          subtitle: 'Enter your vault passcode to leave calculator mode.',
+          onUnlocked: () {
+            session.unlock();
+            unawaited(deps.importManager.reconcileVaultFiles());
+            final target = deps.importManager.hasPendingShareFiles
+                ? '/import/share-intent'
+                : (decodedReturnTo == '/chat/thread' ? '/chat' : decodedReturnTo);
+            context.go(target);
+          },
+        ),
       );
     },
   );

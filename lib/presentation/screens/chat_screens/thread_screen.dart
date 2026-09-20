@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:uuid/uuid.dart';
 
@@ -24,35 +25,41 @@ import '../../widgets/chat/message_bubble.dart';
 import '../../widgets/chat/typing_indicator.dart';
 import '../../widgets/chat/vault_picker_sheet.dart';
 
-/// Push the thread screen, carrying the chat providers across the navigator.
-///
-/// Routes are pushed onto the root navigator, which sits *above* the chat
-/// providers, so the cubit and media loader have to be re-provided explicitly
-/// rather than inherited from [context].
+/// Arguments needed to build [ThreadScreen].
+class ChatThreadArgs {
+  const ChatThreadArgs({
+    required this.thread,
+    required this.otherUser,
+    this.activeThreadCubit,
+  });
+
+  final ChatThread thread;
+  final ChatUser otherUser;
+  final ActiveThreadCubit? activeThreadCubit;
+}
+
+/// Push the thread screen via declarative routing.
 Future<void> openThreadScreen(
   BuildContext context, {
   required ChatThread thread,
   required ChatUser otherUser,
   bool replace = false,
 }) {
-  final activeThread = context.read<ActiveThreadCubit>();
-  final mediaLoader = context.read<ChatMediaLoader>();
-  final vaultBridge = context.read<ChatVaultBridge>();
-  final notifications = context.read<ChatNotificationService>();
-  final route = MaterialPageRoute<void>(
-    builder: (_) => BlocProvider.value(
-      value: activeThread,
-      child: ThreadScreen(
-        thread: thread,
-        otherUser: otherUser,
-        mediaLoader: mediaLoader,
-        vaultBridge: vaultBridge,
-        notificationService: notifications,
-      ),
-    ),
+  ActiveThreadCubit? activeThread;
+  try {
+    activeThread = context.read<ActiveThreadCubit>();
+  } catch (_) {}
+  final args = ChatThreadArgs(
+    thread: thread,
+    otherUser: otherUser,
+    activeThreadCubit: activeThread,
   );
-  final navigator = Navigator.of(context);
-  return replace ? navigator.pushReplacement(route) : navigator.push(route);
+  if (replace) {
+    context.pushReplacement('/chat/thread', extra: args);
+    return Future<void>.value();
+  } else {
+    return context.push('/chat/thread', extra: args);
+  }
 }
 
 /// The 1:1 chat thread screen.

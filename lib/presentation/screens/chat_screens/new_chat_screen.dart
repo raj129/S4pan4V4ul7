@@ -1,10 +1,23 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../../core/widgets/app_surfaces.dart';
+import '../../state/chat/active_thread_cubit.dart';
 import '../../state/chat/user_lookup_cubit.dart';
 import '../../theme/app_spacing.dart';
 import 'thread_screen.dart';
+
+/// Arguments for the new chat screen.
+class NewChatArgs {
+  const NewChatArgs({
+    this.userLookupCubit,
+    this.activeThreadCubit,
+  });
+
+  final UserLookupCubit? userLookupCubit;
+  final ActiveThreadCubit? activeThreadCubit;
+}
 
 /// Screen for starting a chat by entering an email only.
 class NewChatScreen extends StatefulWidget {
@@ -29,7 +42,7 @@ class _NewChatScreenState extends State<NewChatScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('New Chat'),
-        leading: BackButton(onPressed: () => Navigator.of(context).pop()),
+        leading: BackButton(onPressed: () => context.pop()),
       ),
       body: BlocListener<UserLookupCubit, UserLookupState>(
         listener: (context, state) {

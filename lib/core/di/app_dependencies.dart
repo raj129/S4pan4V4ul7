@@ -188,9 +188,11 @@ class AppDependencies {
   );
 
   bool _chatInitialised = false;
+  ChatDependencies? chatOverride;
 
   /// Touches [chat] and records that it now needs disposing.
   ChatDependencies get chatDependencies {
+    if (chatOverride != null) return chatOverride!;
     _chatInitialised = true;
     return chat;
   }
