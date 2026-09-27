@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:photo_vault/crypto/services/chat_crypto_service.dart';
 import 'package:photo_vault/domain/entities/chat_message.dart';
@@ -238,8 +239,11 @@ void main() {
   late _FakeThreadRepository threads;
   late _MemoryOutbox outbox;
   late ActiveThreadCubit cubit;
+  late StreamController<List<ConnectivityResult>> connectivity;
 
-  ActiveThreadCubit build() => ActiveThreadCubit(
+  ActiveThreadCubit build({
+    Stream<List<ConnectivityResult>>? connectivityStream,
+  }) => ActiveThreadCubit(
     messageRepository: messages,
     threadRepository: threads,
     userRepository: _FakeUserRepository(),
@@ -250,16 +254,21 @@ void main() {
     outbox: outbox,
     cryptoService: _PassThroughCrypto(),
     myUid: 'me',
+    connectivityStream: connectivityStream,
   );
 
   setUp(() {
     messages = _FakeMessageRepository();
     threads = _FakeThreadRepository();
     outbox = _MemoryOutbox();
+    connectivity = StreamController<List<ConnectivityResult>>.broadcast();
     cubit = build();
   });
 
-  tearDown(() => cubit.close());
+  tearDown(() async {
+    await cubit.close();
+    await connectivity.close();
+  });
 
   Future<void> open() async {
     await cubit.openThread(thread: _thread, otherUser: _other);
@@ -281,10 +290,7 @@ void main() {
       await Future<void>.delayed(Duration.zero);
 
       final state = cubit.state as ActiveThreadLoaded;
-      expect(
-        state.messages.map((m) => m.messageId).toList(),
-        ['new', 'old'],
-      );
+      expect(state.messages.map((m) => m.messageId).toList(), ['new', 'old']);
     });
 
     test('orders newest first', () async {
@@ -316,11 +322,7 @@ void main() {
   group('search', () {
     setUp(() async {
       await open();
-      messages.emitLive([
-        _msg('a', 1),
-        _msg('b', 2),
-        _msg('c', 3),
-      ]);
+      messages.emitLive([_msg('a', 1), _msg('b', 2), _msg('c', 3)]);
       await Future<void>.delayed(Duration.zero);
     });
 
@@ -351,6 +353,10 @@ void main() {
       expect(outbox.items, isEmpty);
       expect(messages.sent.single.encryptedText, 'hello');
       expect(threads.unreadBumps, ['other']);
+      expect(
+        (cubit.state as ActiveThreadLoaded).messages.single.status,
+        MessageStatus.sent,
+      );
     });
 
     test('a failed send stays queued and shows as failed', () async {
@@ -379,18 +385,20 @@ void main() {
       expect(messages.sent.single.messageId, queuedId);
     });
 
-    test('discard drops a failed message from the queue and the list',
-        () async {
-      await open();
-      messages.failNextSend = StateError('offline');
-      await cubit.sendText('hello');
-      final queuedId = outbox.items.keys.single;
+    test(
+      'discard drops a failed message from the queue and the list',
+      () async {
+        await open();
+        messages.failNextSend = StateError('offline');
+        await cubit.sendText('hello');
+        final queuedId = outbox.items.keys.single;
 
-      await cubit.discardMessage(queuedId);
+        await cubit.discardMessage(queuedId);
 
-      expect(outbox.items, isEmpty);
-      expect((cubit.state as ActiveThreadLoaded).messages, isEmpty);
-    });
+        expect(outbox.items, isEmpty);
+        expect((cubit.state as ActiveThreadLoaded).messages, isEmpty);
+      },
+    );
 
     test('the delivered message replaces its optimistic copy', () async {
       await open();
@@ -421,6 +429,35 @@ void main() {
       expect(outbox.items, isEmpty);
       expect(messages.sent.single.encryptedText, 'queued while offline');
     });
+
+    test(
+      'reconnect flushes queued messages and clears offline state',
+      () async {
+        await cubit.close();
+        cubit = build(connectivityStream: connectivity.stream);
+        await open();
+        messages.emitLive(const []);
+        await Future<void>.delayed(Duration.zero);
+
+        connectivity.add(const [ConnectivityResult.none]);
+        await Future<void>.delayed(Duration.zero);
+        expect((cubit.state as ActiveThreadLoaded).isOffline, isTrue);
+
+        messages.failNextSend = StateError('offline');
+        await cubit.sendText('queued while offline');
+        expect(outbox.items, hasLength(1));
+
+        connectivity.add(const [ConnectivityResult.wifi]);
+        await Future<void>.delayed(Duration.zero);
+        await Future<void>.delayed(Duration.zero);
+
+        final state = cubit.state as ActiveThreadLoaded;
+        expect(state.isOffline, isFalse);
+        expect(outbox.items, isEmpty);
+        expect(messages.sent.single.encryptedText, 'queued while offline');
+        expect(state.messages.single.status, MessageStatus.sent);
+      },
+    );
 
     test('an empty message is not queued', () async {
       await open();

@@ -33,9 +33,6 @@ dependencies:
 
   cupertino_icons: ^1.0.9
 
-  # App-wide Inter typography
-  google_fonts: ^6.2.1
-
   # Cryptography primitives — AES-256-GCM, PBKDF2, HKDF
   cryptography: ^2.9.0
 

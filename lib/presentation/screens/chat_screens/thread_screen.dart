@@ -181,11 +181,54 @@ class _ThreadScreenState extends State<ThreadScreen> {
                 ),
               ),
             ),
+            _buildOfflineBanner(),
             _buildComposerSurface(context),
             _buildEmojiPicker(),
           ],
         ),
       ),
+    );
+  }
+
+  Widget _buildOfflineBanner() {
+    return BlocBuilder<ActiveThreadCubit, ActiveThreadState>(
+      buildWhen: (previous, current) =>
+          previous is ActiveThreadLoaded &&
+          current is ActiveThreadLoaded &&
+          previous.isOffline != current.isOffline,
+      builder: (context, state) {
+        final isOffline = state is ActiveThreadLoaded ? state.isOffline : false;
+        return AnimatedSize(
+          duration: AppDuration.normal,
+          curve: Curves.easeOut,
+          child: isOffline
+              ? Container(
+                  width: double.infinity,
+                  color: Theme.of(context).colorScheme.surfaceContainerHigh,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: AppSpacing.lg,
+                    vertical: AppSpacing.sm,
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.cloud_off_rounded,
+                        size: 18,
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
+                      const SizedBox(width: AppSpacing.sm),
+                      Expanded(
+                        child: Text(
+                          'You are offline. Messages will send when connected.',
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                      ),
+                    ],
+                  ),
+                )
+              : const SizedBox.shrink(),
+        );
+      },
     );
   }
 
@@ -203,8 +246,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
             hintText: 'Search this chat',
             border: InputBorder.none,
           ),
-          onChanged: (v) =>
-              context.read<ActiveThreadCubit>().setSearchQuery(v),
+          onChanged: (v) => context.read<ActiveThreadCubit>().setSearchQuery(v),
         ),
         actions: [
           IconButton(
@@ -335,9 +377,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
             icon: state.searchQuery.isEmpty
                 ? Icons.waving_hand_outlined
                 : Icons.search_off_outlined,
-            title: state.searchQuery.isEmpty
-                ? 'No messages yet'
-                : 'No matches',
+            title: state.searchQuery.isEmpty ? 'No messages yet' : 'No matches',
             subtitle: state.searchQuery.isEmpty
                 ? 'Say hello to ${widget.otherUser.displayName} — everything you '
                       'send is end-to-end encrypted.'
@@ -516,7 +556,6 @@ class _ThreadScreenState extends State<ThreadScreen> {
     });
   }
 
-
   Future<void> _confirmClearMessages(BuildContext context) async {
     final ok = await showDialog<bool>(
       context: context,
@@ -576,6 +615,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
     if (!mounted) return;
     navigator.pop();
   }
+
   Future<void> _promptEdit(ChatMessage msg) async {
     final cubit = context.read<ActiveThreadCubit>();
     final messenger = ScaffoldMessenger.of(context);
@@ -966,7 +1006,6 @@ class _ThreadScreenState extends State<ThreadScreen> {
     );
   }
 
-
   Future<void> _copyMessage(String text) async {
     await Clipboard.setData(ClipboardData(text: text.trim()));
     if (!mounted) return;
@@ -974,6 +1013,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
       ..hideCurrentSnackBar()
       ..showSnackBar(const SnackBar(content: Text('Message copied')));
   }
+
   void _send() {
     final text = _textCtrl.text;
     if (text.trim().isEmpty) return;
@@ -1097,9 +1137,9 @@ class _ThreadScreenState extends State<ThreadScreen> {
       );
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Could not read vault photo: $e')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Could not read vault photo: $e')));
     }
   }
 
@@ -1116,9 +1156,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
         bytes: bytes,
         filename: '${message.messageId}.$extension',
       );
-      messenger.showSnackBar(
-        const SnackBar(content: Text('Saved to vault.')),
-      );
+      messenger.showSnackBar(const SnackBar(content: Text('Saved to vault.')));
     } catch (e) {
       messenger.showSnackBar(
         SnackBar(content: Text('Could not save to vault: $e')),
@@ -1136,9 +1174,9 @@ class _ThreadItem {
   }) : divider = null;
 
   const _ThreadItem.divider(DateTime this.divider)
-      : message = null,
-        isFirstInGroup = false,
-        isLastInGroup = false;
+    : message = null,
+      isFirstInGroup = false,
+      isLastInGroup = false;
 
   final ChatMessage? message;
   final DateTime? divider;
@@ -1186,9 +1224,9 @@ class _PresenceAvatar extends StatelessWidget {
                   ? Text(
                       user.initials,
                       style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                            color: cs.onPrimaryContainer,
-                            fontWeight: FontWeight.w600,
-                          ),
+                        color: cs.onPrimaryContainer,
+                        fontWeight: FontWeight.w600,
+                      ),
                     )
                   : null,
             ),

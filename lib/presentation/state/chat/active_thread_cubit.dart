@@ -38,6 +38,7 @@ class ActiveThreadLoaded extends ActiveThreadState {
     required this.messages,
     required this.otherIsTyping,
     this.otherIsOnline = false,
+    this.isOffline = false,
     this.hasMore = true,
     this.loadingOlder = false,
     this.actionError,
@@ -52,6 +53,7 @@ class ActiveThreadLoaded extends ActiveThreadState {
   /// Sourced from [PresenceRepository], not from [otherUser] — presence is
   /// deliberately not part of the user entity.
   final bool otherIsOnline;
+  final bool isOffline;
   final bool hasMore;
   final bool loadingOlder;
 
@@ -89,6 +91,7 @@ class ActiveThreadLoaded extends ActiveThreadState {
     List<ChatMessage>? messages,
     bool? otherIsTyping,
     bool? otherIsOnline,
+    bool? isOffline,
     bool? hasMore,
     bool? loadingOlder,
     String? actionError,
@@ -96,34 +99,34 @@ class ActiveThreadLoaded extends ActiveThreadState {
     ChatMessage? replyTarget,
     bool clearReplyTarget = false,
     String? searchQuery,
-  }) =>
-      ActiveThreadLoaded(
-        thread: thread,
-        otherUser: otherUser,
-        messages: messages ?? this.messages,
-        otherIsTyping: otherIsTyping ?? this.otherIsTyping,
-        otherIsOnline: otherIsOnline ?? this.otherIsOnline,
-        hasMore: hasMore ?? this.hasMore,
-        loadingOlder: loadingOlder ?? this.loadingOlder,
-        actionError: clearActionError ? null : (actionError ?? this.actionError),
-        replyTarget:
-            clearReplyTarget ? null : (replyTarget ?? this.replyTarget),
-        searchQuery: searchQuery ?? this.searchQuery,
-      );
+  }) => ActiveThreadLoaded(
+    thread: thread,
+    otherUser: otherUser,
+    messages: messages ?? this.messages,
+    otherIsTyping: otherIsTyping ?? this.otherIsTyping,
+    otherIsOnline: otherIsOnline ?? this.otherIsOnline,
+    isOffline: isOffline ?? this.isOffline,
+    hasMore: hasMore ?? this.hasMore,
+    loadingOlder: loadingOlder ?? this.loadingOlder,
+    actionError: clearActionError ? null : (actionError ?? this.actionError),
+    replyTarget: clearReplyTarget ? null : (replyTarget ?? this.replyTarget),
+    searchQuery: searchQuery ?? this.searchQuery,
+  );
 
   @override
   List<Object?> get props => [
-        thread,
-        otherUser,
-        messages,
-        otherIsTyping,
-        otherIsOnline,
-        hasMore,
-        loadingOlder,
-        actionError,
-        replyTarget,
-        searchQuery,
-      ];
+    thread,
+    otherUser,
+    messages,
+    otherIsTyping,
+    otherIsOnline,
+    isOffline,
+    hasMore,
+    loadingOlder,
+    actionError,
+    replyTarget,
+    searchQuery,
+  ];
 }
 
 class ActiveThreadError extends ActiveThreadState {
@@ -170,14 +173,7 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
     // nothing, since `drainOutbox()` still runs on every `openThread()`.
     if (connectivityStream != null) {
       _connectivitySub = connectivityStream.listen(
-        (results) {
-          final isOffline = results.isEmpty ||
-              results.every((r) => r == ConnectivityResult.none);
-          if (_wasOffline && !isOffline) {
-            unawaited(drainOutbox());
-          }
-          _wasOffline = isOffline;
-        },
+        _updateConnectivity,
         onError: (_) {},
       );
     }
@@ -206,6 +202,7 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
   Timer? _openTimeoutTimer;
   StreamSubscription<List<ConnectivityResult>>? _connectivitySub;
   bool _wasOffline = false;
+  bool _isOffline = false;
   String? _currentThreadId;
   ChatThread? _thread;
   ChatUser? _otherUser;
@@ -301,10 +298,7 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
     // to leave the screen stuck on the loading spinner forever because the
     // message-stream subscription below was never reached.
     try {
-      await threadRepository.resetUnread(
-        threadId: thread.threadId,
-        uid: myUid,
-      );
+      await threadRepository.resetUnread(threadId: thread.threadId, uid: myUid);
     } catch (_) {
       // Unread count sync can be retried later; it is not load-blocking.
     }
@@ -323,35 +317,37 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
       }
     });
 
-    _messageSub = messageRepository.watchMessages(thread.threadId).listen(
-      (msgs) async {
-        final decrypted = await _decryptAll(msgs, thread.threadId);
-        _mergeIntoBuffer(_afterClearWatermark(decrypted));
-        _openTimeoutTimer?.cancel();
-        _emitMessages();
-        // Cache ciphertext, not the decrypted copies.
-        unawaited(messageCache.save(msgs).catchError((_) {}));
-      },
-      onError: (e) {
-        _openTimeoutTimer?.cancel();
-        // With a warm cache the conversation is still readable, so degrade to
-        // a banner instead of replacing the screen with an error.
-        if (_buffer.isNotEmpty) {
-          _reportActionError('Offline — showing saved messages.');
-        } else {
-          emit(ActiveThreadError(e.toString()));
-        }
-      },
-    );
+    _messageSub = messageRepository
+        .watchMessages(thread.threadId)
+        .listen(
+          (msgs) async {
+            final decrypted = await _decryptAll(msgs, thread.threadId);
+            _mergeIntoBuffer(_afterClearWatermark(decrypted));
+            _openTimeoutTimer?.cancel();
+            _emitMessages();
+            // Cache ciphertext, not the decrypted copies.
+            unawaited(messageCache.save(msgs).catchError((_) {}));
+          },
+          onError: (e) {
+            _openTimeoutTimer?.cancel();
+            // With a warm cache the conversation is still readable, so degrade to
+            // a banner instead of replacing the screen with an error.
+            if (_buffer.isNotEmpty) {
+              _reportActionError('Offline — showing saved messages.');
+            } else {
+              emit(ActiveThreadError(e.toString()));
+            }
+          },
+        );
 
     _typingSub = typingRepository
         .watchTyping(threadId: thread.threadId, otherUid: otherUser.uid)
         .listen((isTyping) {
-      final current = state;
-      if (current is ActiveThreadLoaded) {
-        emit(current.copyWith(otherIsTyping: isTyping));
-      }
-    });
+          final current = state;
+          if (current is ActiveThreadLoaded) {
+            emit(current.copyWith(otherIsTyping: isTyping));
+          }
+        });
 
     _presenceSub = presenceRepository.watch(otherUser.uid).listen((presence) {
       final current = state;
@@ -442,9 +438,12 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
         threadId: item.threadId,
         recipientUid: item.recipientUid,
       );
-      // The delivered message arrives on the live stream under the same id, so
-      // the optimistic copy is no longer needed.
-      _pending.remove(item.messageId);
+      // Keep a sent local copy until the matching Firestore snapshot arrives.
+      // Removing it here could make a successful message disappear briefly
+      // while the listener is still catching up.
+      _pending[item.messageId] = decryptedPreview == null
+          ? msg
+          : msg.withDecryptedText(decryptedPreview);
       if (item.threadId == _currentThreadId) _emitMessages();
     } catch (e) {
       await outbox.markFailed(item.messageId, e.toString());
@@ -545,7 +544,9 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
         ? (target.mediaType == MessageType.video ? '🎥 Video' : '📷 Photo')
         : (target.localDecryptedText ?? '');
     // Long quotes are truncated: the header only ever renders two lines.
-    final snippet = source.length > 160 ? '${source.substring(0, 160)}…' : source;
+    final snippet = source.length > 160
+        ? '${source.substring(0, 160)}…'
+        : source;
 
     try {
       return MessageReply(
@@ -616,9 +617,11 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
       );
       await threadRepository.resetUnread(threadId: threadId, uid: myUid);
       final nextMessages = current.messages
-          .map((m) => unread.contains(m.messageId)
-              ? m.copyWith(readBy: [...m.readBy, myUid])
-              : m)
+          .map(
+            (m) => unread.contains(m.messageId)
+                ? m.copyWith(readBy: [...m.readBy, myUid])
+                : m,
+          )
           .toList();
       emit(current.copyWith(messages: nextMessages));
     } catch (_) {
@@ -634,7 +637,9 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
 
   /// Replace the body of an already-sent message.
   bool canEditMessage(ChatMessage message) {
-    if (message.senderId != myUid || message.isMedia || message.deletedForEveryone) {
+    if (message.senderId != myUid ||
+        message.isMedia ||
+        message.deletedForEveryone) {
       return false;
     }
     final now = DateTime.now().toUtc();
@@ -668,13 +673,15 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
         emit(
           current.copyWith(
             messages: current.messages
-                .map((m) => m.messageId == message.messageId
-                    ? m.copyWith(
-                        encryptedText: encrypted,
-                        localDecryptedText: trimmed,
-                        editedAt: DateTime.now().toUtc(),
-                      )
-                    : m)
+                .map(
+                  (m) => m.messageId == message.messageId
+                      ? m.copyWith(
+                          encryptedText: encrypted,
+                          localDecryptedText: trimmed,
+                          editedAt: DateTime.now().toUtc(),
+                        )
+                      : m,
+                )
                 .toList(),
           ),
         );
@@ -743,7 +750,8 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
           threadId: sourceThreadId,
           encryptedBytes: encrypted,
         );
-        final forwardedId = '${message.messageId}_fwd_'
+        final forwardedId =
+            '${message.messageId}_fwd_'
             '${DateTime.now().millisecondsSinceEpoch}';
         final reEncrypted = await cryptoService.encryptMedia(
           threadId: targetThreadId,
@@ -918,6 +926,7 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
   void _mergeIntoBuffer(List<ChatMessage> msgs) {
     for (final msg in msgs) {
       _buffer[msg.messageId] = msg;
+      _pending.remove(msg.messageId);
     }
   }
 
@@ -951,23 +960,28 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
     final current = state;
     final messages = _sortedBuffer();
     if (current is ActiveThreadLoaded) {
-      emit(current.copyWith(
-        messages: messages,
-        hasMore: hasMore,
-        loadingOlder: loadingOlder,
-        actionError: actionError,
-        clearActionError: clearActionError,
-      ));
+      emit(
+        current.copyWith(
+          messages: messages,
+          hasMore: hasMore,
+          loadingOlder: loadingOlder,
+          actionError: actionError,
+          clearActionError: clearActionError,
+        ),
+      );
     } else {
-      emit(ActiveThreadLoaded(
-        thread: _thread!,
-        otherUser: _otherUser!,
-        messages: messages,
-        otherIsTyping: false,
-        hasMore: hasMore ?? !_reachedStart,
-        loadingOlder: loadingOlder ?? false,
-        actionError: actionError,
-      ));
+      emit(
+        ActiveThreadLoaded(
+          thread: _thread!,
+          otherUser: _otherUser!,
+          messages: messages,
+          otherIsTyping: false,
+          hasMore: hasMore ?? !_reachedStart,
+          loadingOlder: loadingOlder ?? false,
+          actionError: actionError,
+          isOffline: _isOffline,
+        ),
+      );
     }
   }
 
@@ -986,6 +1000,22 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
     final current = state;
     if (current is ActiveThreadLoaded && current.actionError != null) {
       emit(current.copyWith(clearActionError: true));
+    }
+  }
+
+  void _updateConnectivity(List<ConnectivityResult> results) {
+    final isOffline =
+        results.isEmpty || results.every((r) => r == ConnectivityResult.none);
+    final wasOffline = _wasOffline;
+    _wasOffline = isOffline;
+    _isOffline = isOffline;
+
+    final current = state;
+    if (current is ActiveThreadLoaded && current.isOffline != isOffline) {
+      emit(current.copyWith(isOffline: isOffline));
+    }
+    if (wasOffline && !isOffline) {
+      unawaited(drainOutbox());
     }
   }
 
@@ -1008,7 +1038,10 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
       setTyping(false);
     } else {
       setTyping(true);
-      _typingDebounce = Timer(const Duration(seconds: 3), () => setTyping(false));
+      _typingDebounce = Timer(
+        const Duration(seconds: 3),
+        () => setTyping(false),
+      );
     }
   }
 

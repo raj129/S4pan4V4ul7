@@ -164,17 +164,16 @@ class MessageBubble extends StatelessWidget {
           right: isMine ? AppSpacing.sm : AppSpacing.xxl,
         ),
         child: Column(
-          crossAxisAlignment:
-              isMine ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+          crossAxisAlignment: isMine
+              ? CrossAxisAlignment.end
+              : CrossAxisAlignment.start,
           children: [
             Dismissible(
               key: ValueKey('swipe_${message.messageId}'),
               direction: onReply == null || !canReplyFromLeftToRight
                   ? DismissDirection.none
                   : DismissDirection.startToEnd,
-              dismissThresholds: const {
-                DismissDirection.startToEnd: 0.25,
-              },
+              dismissThresholds: const {DismissDirection.startToEnd: 0.25},
               confirmDismiss: (_) async {
                 onReply?.call();
                 return false;
@@ -200,7 +199,14 @@ class MessageBubble extends StatelessWidget {
                     maxWidth: MediaQuery.of(context).size.width * 0.78,
                     minWidth: 0,
                   ),
-                  child: bubble,
+                  child: _EmojiSendAnimation(
+                    play:
+                        isMine &&
+                        message.isEmojiOnly &&
+                        (message.status == MessageStatus.sending ||
+                            message.status == MessageStatus.sent),
+                    child: bubble,
+                  ),
                 ),
               ),
             ),
@@ -233,10 +239,7 @@ class MessageBubble extends StatelessWidget {
                 ),
               if (onDiscard != null)
                 ListTile(
-                  leading: Icon(
-                    Icons.delete_outline_rounded,
-                    color: cs.error,
-                  ),
+                  leading: Icon(Icons.delete_outline_rounded, color: cs.error),
                   title: Text(
                     'Discard unsent message',
                     style: TextStyle(color: cs.error),
@@ -430,11 +433,7 @@ class _BubbleContent extends StatelessWidget {
         if (text != null && text.isNotEmpty)
           Padding(
             padding: EdgeInsets.only(top: message.isMedia ? AppSpacing.sm : 0),
-            child: _MessageText(
-              text: text,
-              color: textColor,
-              bare: bare,
-            ),
+            child: _MessageText(text: text, color: textColor, bare: bare),
           ),
         const SizedBox(height: AppSpacing.xxs),
         // `Row(mainAxisSize: min)` rather than `Align`: an unconstrained
@@ -532,6 +531,18 @@ class _MetaRow extends StatelessWidget {
           style: AppTypography.bubbleMeta(faded),
         ),
         if (isMine) ...[
+          if (status == MessageStatus.sending || status == MessageStatus.failed)
+            Padding(
+              padding: const EdgeInsets.only(right: AppSpacing.xs),
+              child: Text(
+                status == MessageStatus.sending ? 'Sending' : 'Not sent',
+                style: AppTypography.bubbleMeta(
+                  status == MessageStatus.failed
+                      ? Theme.of(context).colorScheme.error
+                      : faded,
+                ),
+              ),
+            ),
           const SizedBox(width: AppSpacing.xs),
           _StatusTicks(status: status, color: faded),
         ],
@@ -549,28 +560,54 @@ class _StatusTicks extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    switch (status) {
-      case MessageStatus.sending:
-        return Icon(Icons.schedule_rounded, size: 13, color: color);
-      case MessageStatus.failed:
-        return Icon(
-          Icons.error_outline_rounded,
-          size: 14,
-          color: Theme.of(context).colorScheme.error,
-        );
-      case MessageStatus.read:
-        // Only "read" is coloured, so a glance distinguishes it from
-        // "delivered" without having to count ticks.
-        return Icon(
-          Icons.done_all_rounded,
-          size: 15,
-          color: context.chatColors.readTick,
-        );
-      case MessageStatus.delivered:
-        return Icon(Icons.done_all_rounded, size: 15, color: color);
-      case MessageStatus.sent:
-        return Icon(Icons.done_rounded, size: 15, color: color);
-    }
+    final (icon, label, iconColor) = switch (status) {
+      MessageStatus.sending => (Icons.schedule_rounded, 'Sending', color),
+      MessageStatus.failed => (
+        Icons.error_outline_rounded,
+        'Not sent',
+        Theme.of(context).colorScheme.error,
+      ),
+      MessageStatus.read => (
+        Icons.done_all_rounded,
+        'Read',
+        context.chatColors.readTick,
+      ),
+      MessageStatus.delivered => (Icons.done_all_rounded, 'Delivered', color),
+      MessageStatus.sent => (Icons.done_rounded, 'Sent', color),
+    };
+    return Semantics(
+      label: label,
+      child: AnimatedSwitcher(
+        duration: AppDuration.fast,
+        child: Icon(
+          icon,
+          key: ValueKey(status),
+          size: status == MessageStatus.failed ? 14 : 15,
+          color: iconColor,
+        ),
+      ),
+    );
+  }
+}
+
+/// Gives a locally-sent emoji-only message a brief WhatsApp-style pop.
+class _EmojiSendAnimation extends StatelessWidget {
+  const _EmojiSendAnimation({required this.play, required this.child});
+
+  final bool play;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!play) return child;
+    return TweenAnimationBuilder<double>(
+      duration: const Duration(milliseconds: 420),
+      curve: Curves.elasticOut,
+      tween: Tween(begin: 0.72, end: 1),
+      child: child,
+      builder: (context, scale, child) =>
+          Transform.scale(scale: scale, child: child),
+    );
   }
 }
 
@@ -730,11 +767,7 @@ class _TombstoneBubble extends StatelessWidget {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(
-              Icons.block_rounded,
-              size: 15,
-              color: cs.onSurfaceVariant,
-            ),
+            Icon(Icons.block_rounded, size: 15, color: cs.onSurfaceVariant),
             const SizedBox(width: AppSpacing.sm),
             Text(
               'This message was deleted',
@@ -755,9 +788,7 @@ class _TombstoneBubble extends StatelessWidget {
     return Dismissible(
       key: ValueKey('reply_deleted_$messageId'),
       direction: DismissDirection.startToEnd,
-      dismissThresholds: const {
-        DismissDirection.startToEnd: 0.25,
-      },
+      dismissThresholds: const {DismissDirection.startToEnd: 0.25},
       confirmDismiss: (_) async {
         onReply!.call();
         return false;
@@ -822,17 +853,19 @@ class _MessageText extends StatelessWidget {
           alignment: PlaceholderAlignment.baseline,
           baseline: TextBaseline.alphabetic,
           child: GestureDetector(
-            onTap: () => launchUrl(Uri.parse(raw), mode: LaunchMode.externalApplication),
+            onTap: () =>
+                launchUrl(Uri.parse(raw), mode: LaunchMode.externalApplication),
             child: Text(
               raw,
-              style: (bare
-                      ? const TextStyle(fontSize: 44, height: 1.1)
-                      : theme.textTheme.bodyLarge)
-                  ?.copyWith(
-                    color: color,
-                    decoration: TextDecoration.underline,
-                    decorationColor: color.withValues(alpha: 0.8),
-                  ),
+              style:
+                  (bare
+                          ? const TextStyle(fontSize: 44, height: 1.1)
+                          : theme.textTheme.bodyLarge)
+                      ?.copyWith(
+                        color: color,
+                        decoration: TextDecoration.underline,
+                        decorationColor: color.withValues(alpha: 0.8),
+                      ),
             ),
           ),
         ),
