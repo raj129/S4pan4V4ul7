@@ -60,7 +60,9 @@ class UserLookupCubit extends Cubit<UserLookupState> {
   Future<void> lookupByEmail(String email) async {
     emit(const UserLookupLoading());
     try {
-      final target = await userRepository.getUserByEmail(email.trim().toLowerCase());
+      final target = await userRepository.getUserByEmail(
+        email.trim().toLowerCase(),
+      );
       if (target == null) {
         emit(UserLookupNotFound(email.trim()));
         return;

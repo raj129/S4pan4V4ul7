@@ -7,23 +7,23 @@ import 'package:photo_vault/presentation/state/trash/trash_controller.dart';
 import 'package:photo_vault/test_helpers/repositories/in_memory_photo_repository.dart';
 
 VaultPhoto _photo(String id, {bool isTrashed = true}) => VaultPhoto(
-      id: id,
-      originalFilename: '$id.jpg',
-      encryptedFilePath: '/tmp/$id.enc',
-      thumbnailPath: '/tmp/$id.thumb',
-      wrappedDek: 'wrapped',
-      photoNonce: 'nonce',
-      thumbnailNonce: 'thumb-nonce',
-      encryptionVersion: 1,
-      checksumSha256: 'checksum-$id',
-      fileSize: 100,
-      mimeType: 'image/jpeg',
-      createdTimeMs: 0,
-      importedTimeMs: 0,
-      modifiedTimeMs: 0,
-      favorite: false,
-      isTrashed: isTrashed,
-    );
+  id: id,
+  originalFilename: '$id.jpg',
+  encryptedFilePath: '/tmp/$id.enc',
+  thumbnailPath: '/tmp/$id.thumb',
+  wrappedDek: 'wrapped',
+  photoNonce: 'nonce',
+  thumbnailNonce: 'thumb-nonce',
+  encryptionVersion: 1,
+  checksumSha256: 'checksum-$id',
+  fileSize: 100,
+  mimeType: 'image/jpeg',
+  createdTimeMs: 0,
+  importedTimeMs: 0,
+  modifiedTimeMs: 0,
+  favorite: false,
+  isTrashed: isTrashed,
+);
 
 void main() {
   late InMemoryPhotoRepository photoRepository;

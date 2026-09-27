@@ -57,7 +57,8 @@ class FirestorePresenceRepository implements PresenceRepository {
   Future<void> setOnline(String uid) async {
     _heartbeatTimer?.cancel();
     _heartbeatUid = uid;
-    await _publish(uid, isOnline: true);
+    // Armed before the first write, whose acknowledgement never arrives while
+    // offline; otherwise the heartbeat would not start until reconnection.
     _heartbeatTimer = Timer.periodic(_heartbeatInterval, (_) {
       final current = _heartbeatUid;
       if (current == null) return;
@@ -65,6 +66,7 @@ class FirestorePresenceRepository implements PresenceRepository {
       // which is the correct outcome anyway.
       _publish(current, isOnline: true).catchError((_) {});
     });
+    await _publish(uid, isOnline: true);
   }
 
   @override
@@ -84,9 +86,8 @@ class FirestorePresenceRepository implements PresenceRepository {
   }
 
   @override
-  Stream<UserPresence> watch(String uid) => watchMany([
-    uid,
-  ]).map((byUid) => byUid[uid] ?? UserPresence.offline);
+  Stream<UserPresence> watch(String uid) =>
+      watchMany([uid]).map((byUid) => byUid[uid] ?? UserPresence.offline);
 
   @override
   Stream<Map<String, UserPresence>> watchMany(List<String> uids) {

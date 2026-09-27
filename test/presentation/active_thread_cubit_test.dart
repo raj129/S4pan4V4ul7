@@ -120,6 +120,9 @@ class _FakeThreadRepository implements ThreadRepository {
   final List<String> previews = [];
   final List<String> unreadBumps = [];
 
+  /// Simulates an offline write that the server never acknowledges.
+  bool hangResetUnread = false;
+
   @override
   Future<void> updateLastMessage({
     required String threadId,
@@ -134,10 +137,8 @@ class _FakeThreadRepository implements ThreadRepository {
   }) async => unreadBumps.add(recipientUid);
 
   @override
-  Future<void> resetUnread({
-    required String threadId,
-    required String uid,
-  }) async {}
+  Future<void> resetUnread({required String threadId, required String uid}) =>
+      hangResetUnread ? Completer<void>().future : Future<void>.value();
 
   @override
   Stream<List<ChatThread>> watchThreadsForUser(String uid) =>
@@ -273,6 +274,19 @@ void main() {
   Future<void> open() async {
     await cubit.openThread(thread: _thread, otherUser: _other);
   }
+
+  group('offline', () {
+    test('opening a thread does not wait for unacknowledged writes', () async {
+      threads.hangResetUnread = true;
+      await open().timeout(const Duration(seconds: 1));
+
+      messages.emitLive([_msg('cached', 2)]);
+      await Future<void>.delayed(Duration.zero);
+
+      final state = cubit.state as ActiveThreadLoaded;
+      expect(state.messages.map((m) => m.messageId), ['cached']);
+    });
+  });
 
   group('buffer merging', () {
     test('a live snapshot does not discard paged-in history', () async {

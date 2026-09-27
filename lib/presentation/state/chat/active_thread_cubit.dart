@@ -293,15 +293,12 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
       // A cold or corrupt cache must never block opening the thread.
     }
 
-    // Mark as read. Best-effort: if this write fails (e.g. no network and no
-    // offline persistence queue), it must not abort thread setup — that used
-    // to leave the screen stuck on the loading spinner forever because the
-    // message-stream subscription below was never reached.
-    try {
-      await threadRepository.resetUnread(threadId: thread.threadId, uid: myUid);
-    } catch (_) {
-      // Unread count sync can be retried later; it is not load-blocking.
-    }
+    // Mark as read without awaiting: offline, a Firestore write only completes
+    // once the server acknowledges it, and waiting here used to keep the
+    // message subscription below from ever starting.
+    _fireAndForget(
+      () => threadRepository.resetUnread(threadId: thread.threadId, uid: myUid),
+    );
 
     _messageSub?.cancel();
     _typingSub?.cancel();
@@ -610,22 +607,28 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
     if (unread.isEmpty || _markingVisibleAsRead) return;
     _markingVisibleAsRead = true;
     try {
-      await messageRepository.markRead(
-        threadId: threadId,
-        messageIds: unread,
-        uid: myUid,
+      // The writes are queued locally and not awaited: offline they would
+      // never be acknowledged and this guard would stay set for good.
+      _fireAndForget(
+        () => messageRepository.markRead(
+          threadId: threadId,
+          messageIds: unread,
+          uid: myUid,
+        ),
       );
-      await threadRepository.resetUnread(threadId: threadId, uid: myUid);
-      final nextMessages = current.messages
+      _fireAndForget(
+        () => threadRepository.resetUnread(threadId: threadId, uid: myUid),
+      );
+      final latest = state;
+      if (latest is! ActiveThreadLoaded) return;
+      final nextMessages = latest.messages
           .map(
             (m) => unread.contains(m.messageId)
                 ? m.copyWith(readBy: [...m.readBy, myUid])
                 : m,
           )
           .toList();
-      emit(current.copyWith(messages: nextMessages));
-    } catch (_) {
-      // Receipts are best-effort; a failure must not disturb the UI.
+      emit(latest.copyWith(messages: nextMessages));
     } finally {
       _markingVisibleAsRead = false;
     }
@@ -1017,6 +1020,13 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
     if (wasOffline && !isOffline) {
       unawaited(drainOutbox());
     }
+  }
+
+  /// Queues a server write without waiting for it. Offline, Firestore only
+  /// completes writes once the server acknowledges them, so awaiting one on a
+  /// UI path would hang; failures (sync or async) are deliberately dropped.
+  void _fireAndForget(Future<void> Function() write) {
+    unawaited(Future.sync(write).catchError((_) {}));
   }
 
   // ---------------------------------------------------------------------------

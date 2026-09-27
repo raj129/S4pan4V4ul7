@@ -59,8 +59,10 @@ class _FakePresenceRepo implements PresenceRepository {
 
 class _FakeTypingRepo implements TypingRepository {
   @override
-  Stream<bool> watchTyping({required String threadId, required String otherUid}) =>
-      const Stream.empty();
+  Stream<bool> watchTyping({
+    required String threadId,
+    required String otherUid,
+  }) => const Stream.empty();
 
   @override
   Future<void> setTyping({
@@ -84,107 +86,101 @@ class _FakeCryptoService implements ChatCryptoService {
 }
 
 void main() {
-  testWidgets('Auto-lock and unlock while chat thread is open does not throw duplicate GlobalKey error',
-      (WidgetTester tester) async {
-    final deps = AppDependencies(persistentState: false);
-    deps.chatOverride = ChatDependencies(
-      authRepository: deps.authRepository,
-      vaultSession: deps.vaultSession,
-      userRepository: _FakeUserRepo(),
-      threadRepository: _FakeThreadRepo(),
-      messageRepository: _FakeMessageRepo(),
-      mediaRepository: _FakeMediaRepo(),
-      presenceRepository: _FakePresenceRepo(),
-      typingRepository: _FakeTypingRepo(),
-      cryptoService: _FakeCryptoService(),
-    );
+  testWidgets(
+    'Auto-lock and unlock while chat thread is open does not throw duplicate GlobalKey error',
+    (WidgetTester tester) async {
+      final deps = AppDependencies(persistentState: false);
+      deps.chatOverride = ChatDependencies(
+        authRepository: deps.authRepository,
+        vaultSession: deps.vaultSession,
+        userRepository: _FakeUserRepo(),
+        threadRepository: _FakeThreadRepo(),
+        messageRepository: _FakeMessageRepo(),
+        mediaRepository: _FakeMediaRepo(),
+        presenceRepository: _FakePresenceRepo(),
+        typingRepository: _FakeTypingRepo(),
+        cryptoService: _FakeCryptoService(),
+      );
 
-    await deps.initialize();
-    await deps.vaultRepository.initializeVault(
-      vaultId: 'v1',
-      settings: VaultSettings.defaults(mode: UserMode.localOnly),
-    );
+      await deps.initialize();
+      await deps.vaultRepository.initializeVault(
+        vaultId: 'v1',
+        settings: VaultSettings.defaults(mode: UserMode.localOnly),
+      );
 
-    final session = AppSessionState(initialMode: UserMode.localOnly);
-    session.unlock();
+      final session = AppSessionState(initialMode: UserMode.localOnly);
+      session.unlock();
 
-    final onboardingCubit = OnboardingCubit(
-      authRepository: deps.authRepository,
-      createVaultUseCase: deps.createVaultUseCase,
-      pinValidator: deps.pinValidator,
-      restoreFlowService: deps.restoreFlowService,
-    );
+      final onboardingCubit = OnboardingCubit(
+        authRepository: deps.authRepository,
+        createVaultUseCase: deps.createVaultUseCase,
+        pinValidator: deps.pinValidator,
+        restoreFlowService: deps.restoreFlowService,
+      );
 
-    final router = buildAppRouter(
-      deps: deps,
-      session: session,
-      onboardingCubit: onboardingCubit,
-      onSettingsChanged: () async {},
-    );
+      final router = buildAppRouter(
+        deps: deps,
+        session: session,
+        onboardingCubit: onboardingCubit,
+        onSettingsChanged: () async {},
+      );
 
-    await tester.pumpWidget(
-      MaterialApp.router(
-        routerConfig: router,
-      ),
-    );
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 300));
+      await tester.pumpWidget(MaterialApp.router(routerConfig: router));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
 
-    // Navigate to /chat
-    router.go('/chat');
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 300));
+      // Navigate to /chat
+      router.go('/chat');
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
 
-    // Open a thread via openThreadScreen
-    final now = DateTime.now();
-    final thread = ChatThread(
-      threadId: 'test_thread_1',
-      participantIds: const ['me', 'other'],
-      lastMessage: 'Hello',
-      lastMessageAt: now,
-      unreadCounts: const {'me': 0, 'other': 0},
-      createdAt: now,
-    );
-    final otherUser = ChatUser(
-      uid: 'other',
-      email: 'other@example.com',
-      displayName: 'Other User',
-      publicKey: 'dGVzdF9wdWJsaWNfa2V5',
-      createdAt: now,
-    );
+      // Open a thread via openThreadScreen
+      final now = DateTime.now();
+      final thread = ChatThread(
+        threadId: 'test_thread_1',
+        participantIds: const ['me', 'other'],
+        lastMessage: 'Hello',
+        lastMessageAt: now,
+        unreadCounts: const {'me': 0, 'other': 0},
+        createdAt: now,
+      );
+      final otherUser = ChatUser(
+        uid: 'other',
+        email: 'other@example.com',
+        displayName: 'Other User',
+        publicKey: 'dGVzdF9wdWJsaWNfa2V5',
+        createdAt: now,
+      );
 
-    tester.view.physicalSize = const Size(1080, 2400);
-    tester.view.devicePixelRatio = 1.0;
-    addTearDown(tester.view.resetPhysicalSize);
-    addTearDown(tester.view.resetDevicePixelRatio);
+      tester.view.physicalSize = const Size(1080, 2400);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
 
-    final scaffoldContext = tester.element(find.byType(Scaffold).first);
-    openThreadScreen(
-      scaffoldContext,
-      thread: thread,
-      otherUser: otherUser,
-    );
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 100));
+      final scaffoldContext = tester.element(find.byType(Scaffold).first);
+      openThreadScreen(scaffoldContext, thread: thread, otherUser: otherUser);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
 
-    expect(find.byType(ThreadScreen), findsOneWidget);
+      expect(find.byType(ThreadScreen), findsOneWidget);
 
-    // Simulate auto-lock
-    session.lock();
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 100));
+      // Simulate auto-lock
+      session.lock();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
 
-    expect(find.byType(LockScreen), findsOneWidget);
+      expect(find.byType(LockScreen), findsOneWidget);
 
-    // Simulate unlock
-    session.unlock();
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 100));
+      // Simulate unlock
+      session.unlock();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
 
-    // Verify no crash, LockScreen is gone, and MainScaffold is safely displayed
-    expect(find.byType(LockScreen), findsNothing);
-    expect(find.byType(MainScaffold), findsOneWidget);
-    expect(tester.takeException(), isNull);
-    await tester.pump(const Duration(seconds: 10));
-  });
+      // Verify no crash, LockScreen is gone, and MainScaffold is safely displayed
+      expect(find.byType(LockScreen), findsNothing);
+      expect(find.byType(MainScaffold), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await tester.pump(const Duration(seconds: 10));
+    },
+  );
 }

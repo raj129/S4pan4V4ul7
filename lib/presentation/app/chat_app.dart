@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
@@ -40,6 +42,7 @@ class _ChatAppState extends State<ChatApp> with WidgetsBindingObserver {
   late final _chatAuthCubit = ChatAuthCubit(
     authService: _deps.authService,
     presenceService: _deps.presenceService,
+    connectivityStream: Connectivity().onConnectivityChanged,
   );
   bool _didShowLocalModePrompt = false;
 
@@ -56,12 +59,13 @@ class _ChatAppState extends State<ChatApp> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Not awaited: presence writes are only acknowledged once online.
     if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.hidden ||
         state == AppLifecycleState.inactive) {
-      _deps.presenceService.deactivate();
+      unawaited(_deps.presenceService.deactivate().catchError((_) {}));
     } else if (state == AppLifecycleState.resumed) {
-      _deps.presenceService.activate();
+      unawaited(_deps.presenceService.activate().catchError((_) {}));
     }
   }
 
@@ -128,7 +132,9 @@ class _ChatAppState extends State<ChatApp> with WidgetsBindingObserver {
             }
 
             if (authState is! ChatAuthAuthenticated) {
-              return ChatSignInScreen(isLocalMode: widget.userMode == UserMode.localOnly);
+              return ChatSignInScreen(
+                isLocalMode: widget.userMode == UserMode.localOnly,
+              );
             }
 
             final currentUser = authState.user;

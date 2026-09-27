@@ -37,8 +37,10 @@ class ThreadListLoaded extends ThreadListState {
   ThreadListLoaded copyWith({
     List<ThreadListItem>? items,
     Map<String, UserPresence>? presence,
-  }) =>
-      ThreadListLoaded(items ?? this.items, presence: presence ?? this.presence);
+  }) => ThreadListLoaded(
+    items ?? this.items,
+    presence: presence ?? this.presence,
+  );
 
   @override
   List<Object?> get props => [items, presence];
@@ -87,25 +89,39 @@ class ThreadListCubit extends Cubit<ThreadListState> {
   /// when the set of conversation partners actually changes.
   List<String> _watchedUids = const [];
 
+  /// Profiles already resolved this session, so a thread list that re-emits
+  /// while offline can still render partners whose lookup now fails.
+  final Map<String, ChatUser> _userCache = {};
+
   void startWatching() {
     _sub?.cancel();
-    _sub = threadRepository.watchThreadsForUser(myUid).listen(
-      (threads) async {
-        final items = <ThreadListItem>[];
-        for (final t in threads) {
-          final otherUid = t.otherParticipantId(myUid);
-          final user = await userRepository.getUserById(otherUid);
-          if (user != null) items.add(ThreadListItem(thread: t, otherUser: user));
+    _sub = threadRepository.watchThreadsForUser(myUid).listen((threads) async {
+      final items = <ThreadListItem>[];
+      for (final t in threads) {
+        final otherUid = t.otherParticipantId(myUid);
+        // A lookup that throws (offline, profile never cached) must not
+        // escape this async listener: that left the list loading forever.
+        ChatUser? user;
+        try {
+          user = await userRepository.getUserById(otherUid);
+        } catch (_) {
+          user = null;
         }
-        final current = state;
-        emit(ThreadListLoaded(
+        user ??= _userCache[otherUid];
+        if (user == null) continue;
+        _userCache[otherUid] = user;
+        items.add(ThreadListItem(thread: t, otherUser: user));
+      }
+      if (isClosed) return;
+      final current = state;
+      emit(
+        ThreadListLoaded(
           items,
           presence: current is ThreadListLoaded ? current.presence : const {},
-        ));
-        _watchPresenceFor(items.map((i) => i.otherUser.uid).toList());
-      },
-      onError: (e) => emit(ThreadListError(e.toString())),
-    );
+        ),
+      );
+      _watchPresenceFor(items.map((i) => i.otherUser.uid).toList());
+    }, onError: (e) => emit(ThreadListError(e.toString())));
   }
 
   void _watchPresenceFor(List<String> uids) {
@@ -130,7 +146,6 @@ class ThreadListCubit extends Cubit<ThreadListState> {
     return true;
   }
 
-
   /// Local-only "Clear chat": hides history on this device without touching
   /// Firestore or the other participant's copy (mirrors Signal/WhatsApp).
   /// Use [deleteThread] instead for a destructive, shared delete.
@@ -143,6 +158,7 @@ class ThreadListCubit extends Cubit<ThreadListState> {
       emit(ThreadListError('Clear failed: $e'));
     }
   }
+
   Future<void> deleteThread(String threadId) async {
     try {
       await messageRepository.deleteAllMessages(threadId);

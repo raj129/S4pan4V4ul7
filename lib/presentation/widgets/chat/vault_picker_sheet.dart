@@ -61,7 +61,9 @@ class _VaultPickerSheetState extends State<VaultPickerSheet> {
                   return const Center(child: CircularProgressIndicator());
                 }
                 if (snap.hasError) {
-                  return Center(child: Text('Could not open vault: ${snap.error}'));
+                  return Center(
+                    child: Text('Could not open vault: ${snap.error}'),
+                  );
                 }
                 final photos = snap.data ?? const <VaultPhoto>[];
                 if (photos.isEmpty) {
@@ -69,12 +71,11 @@ class _VaultPickerSheetState extends State<VaultPickerSheet> {
                 }
                 return GridView.builder(
                   padding: const EdgeInsets.symmetric(horizontal: 8),
-                  gridDelegate:
-                      const SliverGridDelegateWithFixedCrossAxisCount(
-                        crossAxisCount: 3,
-                        crossAxisSpacing: 4,
-                        mainAxisSpacing: 4,
-                      ),
+                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: 3,
+                    crossAxisSpacing: 4,
+                    mainAxisSpacing: 4,
+                  ),
                   itemCount: photos.length,
                   itemBuilder: (context, i) {
                     final photo = photos[i];

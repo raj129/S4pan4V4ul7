@@ -1,3 +1,4 @@
+import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:intl/intl.dart';
@@ -8,6 +9,7 @@ import '../../../domain/entities/message_reply.dart';
 import '../../theme/app_spacing.dart';
 import '../../theme/app_typography.dart';
 import '../../theme/chat_theme.dart';
+import 'animated_emoji.dart';
 import 'chat_bubble_shape.dart';
 import 'chat_media_preview.dart';
 
@@ -199,14 +201,7 @@ class MessageBubble extends StatelessWidget {
                     maxWidth: MediaQuery.of(context).size.width * 0.78,
                     minWidth: 0,
                   ),
-                  child: _EmojiSendAnimation(
-                    play:
-                        isMine &&
-                        message.isEmojiOnly &&
-                        (message.status == MessageStatus.sending ||
-                            message.status == MessageStatus.sent),
-                    child: bubble,
-                  ),
+                  child: bubble,
                 ),
               ),
             ),
@@ -280,6 +275,17 @@ class MessageBubble extends StatelessWidget {
                             onReact!(emoji);
                           },
                         ),
+                      _MoreReactionsButton(
+                        current:
+                            kQuickReactions.contains(message.reactionOf(myUid))
+                            ? null
+                            : message.reactionOf(myUid),
+                        onTap: () async {
+                          Navigator.pop(sheetContext);
+                          final emoji = await showReactionPicker(context);
+                          if (emoji != null) onReact!(emoji);
+                        },
+                      ),
                     ],
                   ),
                 ),
@@ -433,7 +439,9 @@ class _BubbleContent extends StatelessWidget {
         if (text != null && text.isNotEmpty)
           Padding(
             padding: EdgeInsets.only(top: message.isMedia ? AppSpacing.sm : 0),
-            child: _MessageText(text: text, color: textColor, bare: bare),
+            child: bare
+                ? AnimatedEmojiText(text: text, playbackId: message.messageId)
+                : _MessageText(text: text, color: textColor, bare: false),
           ),
         const SizedBox(height: AppSpacing.xxs),
         // `Row(mainAxisSize: min)` rather than `Align`: an unconstrained
@@ -485,6 +493,65 @@ class _QuickReactionButton extends StatelessWidget {
               : Colors.transparent,
         ),
         child: Text(emoji, style: const TextStyle(fontSize: 26)),
+      ),
+    );
+  }
+}
+
+/// Opens the full emoji picker and resolves to the chosen emoji, or null if
+/// the sheet was dismissed.
+Future<String?> showReactionPicker(BuildContext context) {
+  return showModalBottomSheet<String>(
+    context: context,
+    showDragHandle: true,
+    builder: (pickerContext) => SafeArea(
+      child: SizedBox(
+        height: 320,
+        child: EmojiPicker(
+          onEmojiSelected: (category, emoji) =>
+              Navigator.pop(pickerContext, emoji.emoji),
+          config: const Config(
+            height: 320,
+            checkPlatformCompatibility: true,
+            emojiViewConfig: EmojiViewConfig(columns: 8, emojiSizeMax: 28),
+            categoryViewConfig: CategoryViewConfig(),
+            bottomActionBarConfig: BottomActionBarConfig(enabled: false),
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
+/// Last slot of the quick-reaction bar: opens the full picker. When my current
+/// reaction is not one of the quick ones it is shown here, highlighted.
+class _MoreReactionsButton extends StatelessWidget {
+  const _MoreReactionsButton({required this.current, required this.onTap});
+
+  final String? current;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final custom = current;
+    return Tooltip(
+      message: 'More reactions',
+      child: InkResponse(
+        onTap: onTap,
+        radius: 28,
+        child: Container(
+          padding: const EdgeInsets.all(AppSpacing.sm),
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: custom != null
+                ? cs.primary.withValues(alpha: 0.18)
+                : cs.surfaceContainerHigh,
+          ),
+          child: custom != null
+              ? Text(custom, style: const TextStyle(fontSize: 26))
+              : Icon(Icons.add_rounded, size: 28, color: cs.onSurfaceVariant),
+        ),
       ),
     );
   }
@@ -586,27 +653,6 @@ class _StatusTicks extends StatelessWidget {
           color: iconColor,
         ),
       ),
-    );
-  }
-}
-
-/// Gives a locally-sent emoji-only message a brief WhatsApp-style pop.
-class _EmojiSendAnimation extends StatelessWidget {
-  const _EmojiSendAnimation({required this.play, required this.child});
-
-  final bool play;
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) {
-    if (!play) return child;
-    return TweenAnimationBuilder<double>(
-      duration: const Duration(milliseconds: 420),
-      curve: Curves.elasticOut,
-      tween: Tween(begin: 0.72, end: 1),
-      child: child,
-      builder: (context, scale, child) =>
-          Transform.scale(scale: scale, child: child),
     );
   }
 }

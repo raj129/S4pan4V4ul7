@@ -33,8 +33,10 @@ class ChatMediaLoader {
     if (hit != null) return Future.value(hit);
 
     // Share one download between every widget asking for the same object.
-    return _inFlight[storagePath] ??= _download(threadId, storagePath)
-        .whenComplete(() => _inFlight.remove(storagePath));
+    return _inFlight[storagePath] ??= _download(
+      threadId,
+      storagePath,
+    ).whenComplete(() => _inFlight.remove(storagePath));
   }
 
   Future<Uint8List> _download(String threadId, String storagePath) async {
@@ -145,10 +147,7 @@ class _ChatMediaPreviewState extends State<ChatMediaPreview> {
                     const Center(
                       child: CircleAvatar(
                         backgroundColor: Colors.black54,
-                        child: Icon(
-                          Icons.play_arrow,
-                          color: Colors.white,
-                        ),
+                        child: Icon(Icons.play_arrow, color: Colors.white),
                       ),
                     ),
                 ],
