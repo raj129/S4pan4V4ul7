@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 
+import 'application/services/chat_backup_scheduler.dart';
 import 'firebase_options.dart';
 import 'presentation/app/vault_app.dart';
 import 'presentation/widgets/chat/animated_emoji.dart';
@@ -27,8 +28,7 @@ Future<void> main() async {
   try {
     await GoogleSignIn.instance
         .initialize(
-          serverClientId:
-              '209716874258-p9n2n9jmu87oqqu84703hf9kvuodokdn.apps.googleusercontent.com',
+          serverClientId: googleServerClientId,
         )
         .timeout(const Duration(seconds: 5));
   } catch (e, stack) {
@@ -42,4 +42,11 @@ Future<void> main() async {
   unawaited(AnimatedEmojiRegistry.ensureLoaded());
 
   runApp(const VaultApp());
+
+  // Nightly (~2 AM) chat backup, even while the app is closed.
+  unawaited(
+    scheduleNightlyChatBackup().catchError((Object e, StackTrace s) {
+      FirebaseCrashlytics.instance.recordError(e, s);
+    }),
+  );
 }

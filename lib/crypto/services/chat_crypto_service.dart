@@ -313,6 +313,45 @@ class ChatCryptoService {
   }
 
   // ---------------------------------------------------------------------------
+  // Chat backup encryption
+  // ---------------------------------------------------------------------------
+
+  static const _backupHkdfContext = 'photo_vault/chat/backup/v1';
+
+  /// Key for chat backups, derived from the identity private key so a backup
+  /// is only readable once that identity has been restored with the PIN.
+  Future<SecretKey> _deriveBackupKey() async {
+    final privB64 = await _storage.read(key: _privateKeyStorageKey);
+    if (privB64 == null) {
+      throw StateError('No identity key for chat backup.');
+    }
+    final hkdf = Hkdf(hmac: Hmac.sha256(), outputLength: 32);
+    return hkdf.deriveKey(
+      secretKey: SecretKey(base64.decode(privB64)),
+      nonce: const <int>[],
+      info: utf8.encode(_backupHkdfContext),
+    );
+  }
+
+  /// Encrypts a backup blob: nonce(12) + ciphertext + mac(16).
+  Future<Uint8List> encryptBackup(List<int> plain) async {
+    final key = await _deriveBackupKey();
+    final nonce = _generateNonce();
+    final box = await _aesGcm.encrypt(plain, secretKey: key, nonce: nonce);
+    return _concat(nonce, box.cipherText, box.mac.bytes);
+  }
+
+  /// Decrypts a blob produced by [encryptBackup]. Throws on a wrong identity.
+  Future<Uint8List> decryptBackup(List<int> encrypted) async {
+    final key = await _deriveBackupKey();
+    final plain = await _aesGcm.decrypt(
+      _splitSecretBox(encrypted),
+      secretKey: key,
+    );
+    return Uint8List.fromList(plain);
+  }
+
+  // ---------------------------------------------------------------------------
   // Helpers
   // ---------------------------------------------------------------------------
 

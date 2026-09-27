@@ -28,6 +28,7 @@ import '../../presentation/screens/settings/change_pin_screen.dart';
 import '../../presentation/screens/settings/settings_screen.dart';
 import '../../presentation/screens/trash/trash_screen.dart';
 import '../../presentation/state/chat/active_thread_cubit.dart';
+import '../../presentation/state/chat/thread_list_cubit.dart';
 import '../../presentation/state/chat/user_lookup_cubit.dart';
 import '../../presentation/state/onboarding/onboarding_cubit.dart';
 import '../../presentation/state/onboarding/onboarding_state.dart';
@@ -305,13 +306,34 @@ GoRoute _chatRoute(AppDependencies deps, AppSessionState session) {
             notificationService: deps.chatDependencies.notificationService,
           );
           final providedCubit = args.activeThreadCubit;
-          if (providedCubit != null) {
-            return BlocProvider.value(
-              value: providedCubit,
-              child: screen,
+          Widget withThreadList(Widget child) {
+            final list = args.threadListCubit;
+            if (list != null) {
+              return BlocProvider<ThreadListCubit>.value(
+                value: list,
+                child: child,
+              );
+            }
+            return BlocProvider<ThreadListCubit>(
+              create: (_) => ThreadListCubit(
+                threadRepository: deps.chatDependencies.threadRepository,
+                userRepository: deps.chatDependencies.userRepository,
+                messageRepository: deps.chatDependencies.messageRepository,
+                mediaRepository: deps.chatDependencies.mediaRepository,
+                presenceRepository: deps.chatDependencies.presenceRepository,
+                messageCache: deps.chatDependencies.messageCache,
+                myUid: deps.chatDependencies.authService.currentUid ?? '',
+              ),
+              child: child,
             );
           }
-          return BlocProvider<ActiveThreadCubit>(
+
+          if (providedCubit != null) {
+            return withThreadList(
+              BlocProvider.value(value: providedCubit, child: screen),
+            );
+          }
+          return withThreadList(BlocProvider<ActiveThreadCubit>(
             create: (_) => ActiveThreadCubit(
               messageRepository: deps.chatDependencies.messageRepository,
               threadRepository: deps.chatDependencies.threadRepository,
@@ -326,7 +348,7 @@ GoRoute _chatRoute(AppDependencies deps, AppSessionState session) {
               connectivityStream: Connectivity().onConnectivityChanged,
             ),
             child: screen,
-          );
+          ));
         },
       ),
     ],
@@ -390,6 +412,9 @@ GoRoute _settingsRoute(
       unlockVaultUseCase: deps.unlockVaultUseCase,
       pinValidator: deps.pinValidator,
       onSettingsChanged: onSettingsChanged,
+      chatBackupService: session.mode == UserMode.googleEnabled
+          ? () => deps.chatDependencies.backupService
+          : null,
     ),
     routes: [
       GoRoute(

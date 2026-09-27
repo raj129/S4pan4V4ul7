@@ -31,11 +31,16 @@ class ChatThreadArgs {
     required this.thread,
     required this.otherUser,
     this.activeThreadCubit,
+    this.threadListCubit,
   });
 
   final ChatThread thread;
   final ChatUser otherUser;
   final ActiveThreadCubit? activeThreadCubit;
+
+  /// The `/chat/thread` route sits outside ChatApp's providers, so the list
+  /// cubit (needed by Clear / Delete) is handed over explicitly.
+  final ThreadListCubit? threadListCubit;
 }
 
 /// Push the thread screen via declarative routing.
@@ -49,10 +54,15 @@ Future<void> openThreadScreen(
   try {
     activeThread = context.read<ActiveThreadCubit>();
   } catch (_) {}
+  ThreadListCubit? threadList;
+  try {
+    threadList = context.read<ThreadListCubit>();
+  } catch (_) {}
   final args = ChatThreadArgs(
     thread: thread,
     otherUser: otherUser,
     activeThreadCubit: activeThread,
+    threadListCubit: threadList,
   );
   if (replace) {
     context.pushReplacement('/chat/thread', extra: args);

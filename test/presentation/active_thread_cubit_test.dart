@@ -18,6 +18,8 @@ import 'package:photo_vault/domain/repositories/typing_repository.dart';
 import 'package:photo_vault/domain/repositories/user_repository.dart';
 import 'package:photo_vault/presentation/state/chat/active_thread_cubit.dart';
 
+import '../helpers/memory_message_cache.dart';
+
 // ---------------------------------------------------------------------------
 // Fakes
 // ---------------------------------------------------------------------------
@@ -244,6 +246,7 @@ void main() {
 
   ActiveThreadCubit build({
     Stream<List<ConnectivityResult>>? connectivityStream,
+    MessageCacheRepository messageCache = const NoopMessageCacheRepository(),
   }) => ActiveThreadCubit(
     messageRepository: messages,
     threadRepository: threads,
@@ -251,7 +254,7 @@ void main() {
     typingRepository: _FakeTypingRepository(),
     presenceRepository: _FakePresenceRepository(),
     mediaRepository: _FakeMediaRepository(),
-    messageCache: const NoopMessageCacheRepository(),
+    messageCache: messageCache,
     outbox: outbox,
     cryptoService: _PassThroughCrypto(),
     myUid: 'me',
@@ -330,6 +333,66 @@ void main() {
       final before = messages.loadBeforeCalls;
       await cubit.loadOlderMessages();
       expect(messages.loadBeforeCalls, before);
+    });
+  });
+
+  group('history visibility', () {
+    late MemoryMessageCache cache;
+
+    setUp(() async {
+      cache = MemoryMessageCache();
+      await cubit.close();
+      cubit = build(messageCache: cache);
+    });
+
+    Future<List<String>> shownAfter(List<ChatMessage> live) async {
+      await open();
+      messages.emitLive(live);
+      await Future<void>.delayed(Duration.zero);
+      return (cubit.state as ActiveThreadLoaded).messages
+          .map((m) => m.messageId)
+          .toList();
+    }
+
+    test('cleared messages stay hidden and are not re-cached', () async {
+      cache.cleared['me_other'] = DateTime.utc(2024, 1, 3);
+
+      final shown = await shownAfter([_msg('old', 2), _msg('new', 4)]);
+
+      expect(shown, ['new']);
+      await Future<void>.delayed(Duration.zero);
+      expect(cache.rows.keys, ['new']);
+    });
+
+    test('server history before the horizon is hidden', () async {
+      cache.horizon = DateTime.utc(2024, 1, 3);
+
+      expect(await shownAfter([_msg('old', 2), _msg('new', 4)]), ['new']);
+    });
+
+    test('restored messages before the horizon stay visible', () async {
+      cache.horizon = DateTime.utc(2024, 1, 3);
+      await cache.save([_msg('restored', 2)]);
+
+      final shown = await shownAfter([
+        _msg('restored', 2),
+        _msg('hidden', 1),
+        _msg('new', 4),
+      ]);
+
+      expect(shown, ['new', 'restored']);
+    });
+
+    test('scrolling up never pages in hidden server history', () async {
+      cache.horizon = DateTime.utc(2024, 1, 3);
+      messages.history = [_msg('hidden', 1)];
+      await shownAfter([_msg('new', 4)]);
+
+      await cubit.loadOlderMessages();
+
+      final state = cubit.state as ActiveThreadLoaded;
+      expect(state.messages.map((m) => m.messageId), ['new']);
+      expect(state.hasMore, isFalse);
     });
   });
 

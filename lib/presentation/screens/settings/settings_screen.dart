@@ -1,6 +1,9 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../application/services/chat_backup_service.dart';
 import '../../../application/services/pin_validator.dart';
 import '../../../application/usecases/unlock_vault_usecase.dart';
 import '../../../core/widgets/app_surfaces.dart';
@@ -17,6 +20,7 @@ class SettingsScreen extends StatefulWidget {
     required this.unlockVaultUseCase,
     required this.pinValidator,
     required this.onSettingsChanged,
+    this.chatBackupService,
     super.key,
   });
   final UserMode mode;
@@ -24,6 +28,10 @@ class SettingsScreen extends StatefulWidget {
   final UnlockVaultUseCase unlockVaultUseCase;
   final PinValidator pinValidator;
   final Future<void> Function() onSettingsChanged;
+
+  /// Lazily resolves the chat backup service (it touches Firebase), or null
+  /// when chat is unavailable (local mode).
+  final ChatBackupService Function()? chatBackupService;
 
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
@@ -62,6 +70,114 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _externalStorageMirrorEnabled = externalMirror;
       _driveEncryptedBackupEnabled = driveBackup;
     });
+    await _loadChatBackupInfo();
+  }
+
+  ChatBackupService? _chatBackup() {
+    try {
+      return widget.chatBackupService?.call();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  DateTime? _lastChatBackup;
+  bool _chatBackupBusy = false;
+
+  Future<void> _loadChatBackupInfo() async {
+    final backup = _chatBackup();
+    if (backup == null) return;
+    try {
+      final last = await backup.lastBackupAt();
+      final wifiOnly = await backup.isWifiOnly();
+      if (!mounted) return;
+      setState(() {
+        _lastChatBackup = last;
+        _wifiOnlyBackup = wifiOnly;
+      });
+    } catch (_) {}
+  }
+
+  static String _formatTime(DateTime at) {
+    final l = at.toLocal();
+    String two(int v) => v.toString().padLeft(2, '0');
+    return '${l.year}-${two(l.month)}-${two(l.day)} ${two(l.hour)}:${two(l.minute)}';
+  }
+
+  Future<void> _backUpChatNow() async {
+    final backup = _chatBackup();
+    if (backup == null || _chatBackupBusy) return;
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() => _chatBackupBusy = true);
+    try {
+      final result = await backup.backupNow(interactive: true);
+      final skipped = result.skipped.entries
+          .map((e) => '${e.key}: ${e.value}')
+          .join('; ');
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            'Backed up ${result.messageCount} messages to '
+            '${result.savedTo.join(' and ')}.'
+            '${skipped.isEmpty ? '' : ' Skipped $skipped'}',
+          ),
+        ),
+      );
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text('Chat backup failed: $e')));
+    } finally {
+      if (mounted) setState(() => _chatBackupBusy = false);
+      await _loadChatBackupInfo();
+    }
+  }
+
+  Future<void> _restoreChatBackup() async {
+    final backup = _chatBackup();
+    if (backup == null || _chatBackupBusy) return;
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() => _chatBackupBusy = true);
+    try {
+      final snapshot = await backup.findLatestBackup(interactive: true);
+      if (!mounted) return;
+      if (snapshot == null) {
+        messenger.showSnackBar(
+          const SnackBar(content: Text('No chat backup found.')),
+        );
+        return;
+      }
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Restore chat backup?'),
+          content: Text(
+            'Backup from ${_formatTime(snapshot.backupAt)} on '
+            '${snapshot.source} with ${snapshot.messageCount} messages. '
+            'Messages already on this device are kept.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: const Text('Restore'),
+            ),
+          ],
+        ),
+      );
+      if (ok != true) return;
+      await backup.restore(snapshot);
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text('Restored ${snapshot.messageCount} messages.'),
+        ),
+      );
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text('Restore failed: $e')));
+    } finally {
+      if (mounted) setState(() => _chatBackupBusy = false);
+    }
   }
 
   @override
@@ -169,7 +285,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 title: 'Backup on Wi-Fi only',
                 subtitle: 'Avoid mobile data when backup jobs run.',
                 value: _wifiOnlyBackup,
-                onChanged: (v) => setState(() => _wifiOnlyBackup = v),
+                onChanged: (v) {
+                  setState(() => _wifiOnlyBackup = v);
+                  final backup = _chatBackup();
+                  if (backup != null) unawaited(backup.setWifiOnly(v));
+                },
               ),
               _SettingsSwitch(
                 icon: Icons.battery_charging_full_rounded,
@@ -190,6 +310,39 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ],
           ),
+          if (widget.chatBackupService != null) ...[
+            const SectionHeader('Chat backup'),
+            SettingsCard(
+              children: [
+                ListTile(
+                  leading: const Icon(Icons.backup_outlined),
+                  title: const Text('Back up chats now'),
+                  subtitle: Text(
+                    _lastChatBackup == null
+                        ? 'Never backed up. Runs nightly around 2 AM to this '
+                              'device and Google Drive.'
+                        : 'Last backup ${_formatTime(_lastChatBackup!)}. '
+                              'Runs nightly around 2 AM.',
+                  ),
+                  trailing: _chatBackupBusy
+                      ? const SizedBox.square(
+                          dimension: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : null,
+                  onTap: _chatBackupBusy ? null : _backUpChatNow,
+                ),
+                ListTile(
+                  leading: const Icon(Icons.restore_rounded),
+                  title: const Text('Restore chat backup'),
+                  subtitle: const Text(
+                    'Bring back messages from this device or Google Drive.',
+                  ),
+                  onTap: _chatBackupBusy ? null : _restoreChatBackup,
+                ),
+              ],
+            ),
+          ],
           const SectionHeader('Import & privacy'),
           SettingsCard(
             children: [

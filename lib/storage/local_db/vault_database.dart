@@ -681,6 +681,16 @@ class VaultDatabase extends _$VaultDatabase {
         .get();
   }
 
+  /// Every cached message across all threads, for chat backups.
+  Future<List<CachedChatMessage>> getEveryCachedMessage() {
+    return select(chatMessages).get();
+  }
+
+  /// Settings rows whose key starts with [prefix].
+  Future<List<AppSettingEntry>> getAppSettingsWithPrefix(String prefix) {
+    return (select(appSettings)..where((s) => s.key.like('$prefix%'))).get();
+  }
+
   // =========================================================================
   // OUTBOX QUERIES
   // =========================================================================

@@ -27,5 +27,6 @@ class StubAuthRepository implements AuthRepository {
   Future<void> signOut() async {}
 
   @override
-  Future<http.Client?> getAuthenticatedClient() async => null;
+  Future<http.Client?> getAuthenticatedClient({bool interactive = false}) async =>
+      null;
 }

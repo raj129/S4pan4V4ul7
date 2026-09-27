@@ -88,14 +88,14 @@ class FirebaseAuthRepository implements AuthRepository {
   }
 
   @override
-  Future<http.Client?> getAuthenticatedClient() async {
+  Future<http.Client?> getAuthenticatedClient({bool interactive = false}) async {
     final account = await _googleSignIn.attemptLightweightAuthentication();
     if (account == null) return null;
 
     try {
       final allScopes = [..._authScopes, ..._driveScopes];
-      final authHeaders =
-          await account.authorizationClient.authorizationHeaders(allScopes);
+      final authHeaders = await account.authorizationClient
+          .authorizationHeaders(allScopes, promptIfNecessary: interactive);
       if (authHeaders == null) return null;
       return _AuthenticatedClient(authHeaders);
     } catch (_) {

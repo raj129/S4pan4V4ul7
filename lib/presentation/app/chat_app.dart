@@ -46,6 +46,97 @@ class _ChatAppState extends State<ChatApp> with WidgetsBindingObserver {
   );
   bool _didShowLocalModePrompt = false;
 
+  /// True once the fresh-install check has run for this session; the chat
+  /// list waits for it so no server history is cached before the horizon.
+  bool _sessionPrepared = false;
+  bool _preparing = false;
+  bool _restoreOfferInFlight = false;
+
+  /// Bumped after a restore so the chat cubits are rebuilt from the cache.
+  int _restoreGeneration = 0;
+
+  Future<void> _ensurePrepared() async {
+    if (_sessionPrepared || _preparing) return;
+    _preparing = true;
+    try {
+      await _deps.backupService.prepareForSession();
+    } catch (_) {
+      // A failed check must never lock the user out of chat.
+    }
+    if (!mounted) return;
+    setState(() => _sessionPrepared = true);
+    _preparing = false;
+    final state = _chatAuthCubit.state;
+    if (state is ChatAuthAuthenticated) unawaited(_maybeOfferRestore(state));
+  }
+
+  /// Offers to restore a backup after a fresh install, once the identity key
+  /// (needed to decrypt the backup) has been synced.
+  Future<void> _maybeOfferRestore(ChatAuthAuthenticated auth) async {
+    if (!_sessionPrepared || _restoreOfferInFlight) return;
+    _restoreOfferInFlight = true;
+    try {
+      final backup = _deps.backupService;
+      final pending = await backup.prepareForSession();
+      if (!pending) {
+        unawaited(backup.backupIfDue().then((_) {}, onError: (_) {}));
+        return;
+      }
+      if (auth.historyLocked) return;
+      final snapshot = await backup.findLatestBackup();
+      if (snapshot == null) {
+        // Identity synced and still nothing readable: there is no backup.
+        if (auth.identitySync != null) await backup.dismissRestoreOffer();
+        return;
+      }
+      if (!mounted) return;
+      final restore = await showDialog<bool>(
+        context: context,
+        barrierDismissible: false,
+        builder: (dialogContext) => AlertDialog(
+          icon: const Icon(Icons.restore_rounded),
+          title: const Text('Restore chat backup?'),
+          content: Text(
+            'A backup from ${_formatBackupTime(snapshot.backupAt)} was found '
+            'on ${snapshot.source} with ${snapshot.messageCount} messages.\n\n'
+            'If you skip, earlier messages stay hidden and the next backup '
+            'replaces this one.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('Skip'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('Restore'),
+            ),
+          ],
+        ),
+      );
+      if (restore == true) {
+        await backup.restore(snapshot);
+        if (!mounted) return;
+        setState(() => _restoreGeneration++);
+        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+          SnackBar(content: Text('Restored ${snapshot.messageCount} messages.')),
+        );
+      } else if (restore == false) {
+        await backup.dismissRestoreOffer();
+      }
+    } catch (_) {
+      // Restore is best-effort; chat keeps working without it.
+    } finally {
+      _restoreOfferInFlight = false;
+    }
+  }
+
+  static String _formatBackupTime(DateTime at) {
+    final l = at.toLocal();
+    String two(int v) => v.toString().padLeft(2, '0');
+    return '${l.year}-${two(l.month)}-${two(l.day)} ${two(l.hour)}:${two(l.minute)}';
+  }
+
   @override
   void initState() {
     super.initState();
@@ -81,6 +172,19 @@ class _ChatAppState extends State<ChatApp> with WidgetsBindingObserver {
     return BlocProvider.value(
       value: _chatAuthCubit,
       child: BlocListener<ChatAuthCubit, ChatAuthState>(
+        listenWhen: (prev, next) =>
+            next is ChatAuthAuthenticated &&
+            (prev is! ChatAuthAuthenticated ||
+                prev.identitySync != next.identitySync),
+        listener: (context, authState) {
+          if (authState is! ChatAuthAuthenticated) return;
+          if (_sessionPrepared) {
+            unawaited(_maybeOfferRestore(authState));
+          } else {
+            unawaited(_ensurePrepared());
+          }
+        },
+        child: BlocListener<ChatAuthCubit, ChatAuthState>(
         listenWhen: (prev, next) => prev.runtimeType != next.runtimeType,
         listener: (context, authState) {
           // Notifications follow the signed-in session, not the widget tree, so
@@ -139,7 +243,17 @@ class _ChatAppState extends State<ChatApp> with WidgetsBindingObserver {
 
             final currentUser = authState.user;
 
+            if (!_sessionPrepared) {
+              WidgetsBinding.instance.addPostFrameCallback(
+                (_) => unawaited(_ensurePrepared()),
+              );
+              return const Scaffold(
+                body: Center(child: CircularProgressIndicator()),
+              );
+            }
+
             return MultiRepositoryProvider(
+              key: ValueKey(_restoreGeneration),
               providers: [
                 RepositoryProvider<ChatMediaLoader>.value(
                   value: _deps.mediaLoader,
@@ -192,6 +306,7 @@ class _ChatAppState extends State<ChatApp> with WidgetsBindingObserver {
             );
           },
         ),
+      ),
       ),
     );
   }

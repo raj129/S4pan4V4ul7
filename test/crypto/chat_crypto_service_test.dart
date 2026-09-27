@@ -117,6 +117,24 @@ void main() {
     });
   });
 
+  group('backup encryption', () {
+    test('round-trips under the same identity', () async {
+      await crypto.getOrCreatePublicKey();
+      final blob = await crypto.encryptBackup(utf8.encode('history'));
+
+      expect(utf8.decode(await crypto.decryptBackup(blob)), 'history');
+    });
+
+    test('another identity cannot read the backup', () async {
+      await crypto.getOrCreatePublicKey();
+      final blob = await crypto.encryptBackup(utf8.encode('history'));
+      final other = ChatCryptoService(storage: _FakeSecureStorage());
+      await other.getOrCreatePublicKey();
+
+      expect(other.decryptBackup(blob), throwsA(anything));
+    });
+  });
+
   group('thread key', () {
     test('two users derive the same key from each other\'s public key',
         () async {

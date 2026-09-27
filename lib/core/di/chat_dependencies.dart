@@ -1,4 +1,5 @@
 import '../../application/services/chat_auth_service.dart';
+import '../../application/services/chat_backup_service.dart';
 import '../../application/services/chat_identity_service.dart';
 import '../../application/services/chat_notification_service.dart';
 import '../../application/services/contact_discovery_service.dart';
@@ -7,6 +8,8 @@ import '../../application/services/vault_session.dart';
 import '../../crypto/services/chat_crypto_service.dart';
 import '../../data/repositories_impl/drift_message_cache_repository.dart';
 import '../../data/repositories_impl/drift_outbox_repository.dart';
+import '../../data/repositories_impl/google_drive_chat_backup_store.dart';
+import '../../data/repositories_impl/local_chat_backup_store.dart';
 import '../../data/repositories_impl/firestore_message_repository.dart';
 import '../../data/repositories_impl/firestore_presence_repository.dart';
 import '../../data/repositories_impl/firestore_thread_repository.dart';
@@ -123,6 +126,17 @@ class ChatDependencies {
     cryptoService: cryptoService,
     identityService: identityService,
     readPin: () => _vaultSession.pin,
+  );
+
+  /// Nightly / manual chat backup to this device and Google Drive.
+  late final ChatBackupService backupService = ChatBackupService(
+    cache: messageCache,
+    crypto: cryptoService,
+    stores: [
+      LocalChatBackupStore(),
+      GoogleDriveChatBackupStore(authRepository: _authRepository),
+    ],
+    currentUid: () => authService.currentUid,
   );
 
   void dispose() {

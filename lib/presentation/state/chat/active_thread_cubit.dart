@@ -234,10 +234,48 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
   /// server / for the other participant.
   DateTime? _clearedBefore;
 
+  /// Device-wide history horizon (see [MessageCacheRepository.getHistoryHorizon]).
+  DateTime? _horizon;
+
+  /// Set once a server page contained a hidden message: everything older is
+  /// hidden too, so further history can only come from the local cache.
+  bool _serverHistoryHidden = false;
+
   List<ChatMessage> _afterClearWatermark(List<ChatMessage> msgs) {
     final cutoff = _clearedBefore;
     if (cutoff == null) return msgs;
     return msgs.where((m) => m.sentAt.isAfter(cutoff)).toList();
+  }
+
+  /// Server messages this device may show: after the clear watermark and
+  /// either after the history horizon or already present from the cache
+  /// (i.e. restored from a backup).
+  List<ChatMessage> _visibleFromServer(List<ChatMessage> msgs) {
+    final horizon = _horizon;
+    final visible = <ChatMessage>[];
+    for (final m in _afterClearWatermark(msgs)) {
+      if (horizon == null ||
+          m.sentAt.isAfter(horizon) ||
+          _buffer.containsKey(m.messageId)) {
+        visible.add(m);
+      } else {
+        _serverHistoryHidden = true;
+      }
+    }
+    if (visible.length < msgs.length && _clearedBefore != null) {
+      _serverHistoryHidden = true;
+    }
+    return visible;
+  }
+
+  /// Ciphertext originals of [visible], so hidden history never reaches the
+  /// cache (and therefore never reaches a backup).
+  static List<ChatMessage> _originalsOf(
+    List<ChatMessage> originals,
+    List<ChatMessage> visible,
+  ) {
+    final ids = {for (final m in visible) m.messageId};
+    return originals.where((m) => ids.contains(m.messageId)).toList();
   }
 
   // ---------------------------------------------------------------------------
@@ -254,6 +292,7 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
     _buffer.clear();
     _pending.clear();
     _reachedStart = false;
+    _serverHistoryHidden = false;
 
     emit(const ActiveThreadLoading());
 
@@ -261,6 +300,11 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
       _clearedBefore = await messageCache.getClearedBefore(thread.threadId);
     } catch (_) {
       _clearedBefore = null;
+    }
+    try {
+      _horizon = await messageCache.getHistoryHorizon();
+    } catch (_) {
+      _horizon = null;
     }
 
     // Ensure thread key is derived if not already stored.
@@ -319,11 +363,14 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
         .listen(
           (msgs) async {
             final decrypted = await _decryptAll(msgs, thread.threadId);
-            _mergeIntoBuffer(_afterClearWatermark(decrypted));
+            final visible = _visibleFromServer(decrypted);
+            _mergeIntoBuffer(visible);
             _openTimeoutTimer?.cancel();
             _emitMessages();
             // Cache ciphertext, not the decrypted copies.
-            unawaited(messageCache.save(msgs).catchError((_) {}));
+            unawaited(
+              messageCache.save(_originalsOf(msgs, visible)).catchError((_) {}),
+            );
           },
           onError: (e) {
             _openTimeoutTimer?.cancel();
@@ -877,6 +924,12 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
 
     // The buffer is newest-first, so the cursor is the tail.
     final oldest = _sortedBuffer().last.sentAt;
+    if (_serverHistoryHidden) {
+      // Older server history is hidden on this device; only restored or
+      // previously cached messages can extend the scroll.
+      await _loadOlderFromCache(threadId, oldest);
+      return;
+    }
     try {
       final older = await messageRepository.loadBefore(
         threadId: threadId,
@@ -889,8 +942,15 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
         return;
       }
       final decrypted = await _decryptAll(older, threadId);
-      _mergeIntoBuffer(decrypted);
-      unawaited(messageCache.save(older).catchError((_) {}));
+      final visible = _visibleFromServer(decrypted);
+      _mergeIntoBuffer(visible);
+      unawaited(
+        messageCache.save(_originalsOf(older, visible)).catchError((_) {}),
+      );
+      if (_serverHistoryHidden) {
+        await _loadOlderFromCache(threadId, oldest);
+        return;
+      }
       // A short page means the query ran out of documents, not that the page
       // size happened to divide evenly.
       _reachedStart = older.length < _pageSize;
@@ -911,7 +971,9 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
           );
           return;
         }
-        _mergeIntoBuffer(await _decryptAll(cached, threadId));
+        _mergeIntoBuffer(
+          _afterClearWatermark(await _decryptAll(cached, threadId)),
+        );
         _emitMessages(loadingOlder: false);
       } catch (_) {
         _emitMessages(
@@ -919,6 +981,26 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
           actionError: 'Could not load older messages: $e',
         );
       }
+    }
+  }
+
+  Future<void> _loadOlderFromCache(String threadId, DateTime before) async {
+    try {
+      final cached = await messageCache.load(
+        threadId: threadId,
+        limit: _pageSize,
+        before: before,
+      );
+      _mergeIntoBuffer(
+        _afterClearWatermark(await _decryptAll(cached, threadId)),
+      );
+      _reachedStart = cached.length < _pageSize;
+      _emitMessages(hasMore: !_reachedStart, loadingOlder: false);
+    } catch (e) {
+      _emitMessages(
+        loadingOlder: false,
+        actionError: 'Could not load older messages: $e',
+      );
     }
   }
 

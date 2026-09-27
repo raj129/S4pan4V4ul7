@@ -110,7 +110,9 @@ class ThreadListCubit extends Cubit<ThreadListState> {
         user ??= _userCache[otherUid];
         if (user == null) continue;
         _userCache[otherUid] = user;
-        items.add(ThreadListItem(thread: t, otherUser: user));
+        items.add(
+          ThreadListItem(thread: await _maskHiddenPreview(t), otherUser: user),
+        );
       }
       if (isClosed) return;
       final current = state;
@@ -122,6 +124,26 @@ class ThreadListCubit extends Cubit<ThreadListState> {
       );
       _watchPresenceFor(items.map((i) => i.otherUser.uid).toList());
     }, onError: (e) => emit(ThreadListError(e.toString())));
+  }
+
+  /// Blanks the preview when the last message is hidden on this device (the
+  /// chat was cleared, or it predates the restore/install horizon).
+  Future<ChatThread> _maskHiddenPreview(ChatThread t) async {
+    try {
+      final cleared = await messageCache.getClearedBefore(t.threadId);
+      final horizon = await messageCache.getHistoryHorizon();
+      final clearedHides =
+          cleared != null && !t.lastMessageAt.isAfter(cleared);
+      final horizonHides =
+          horizon != null && !t.lastMessageAt.isAfter(horizon);
+      if (clearedHides) return t.copyWith(lastMessage: '');
+      if (!horizonHides) return t;
+      // Restored history keeps its preview.
+      final cached = await messageCache.load(threadId: t.threadId, limit: 1);
+      return cached.isNotEmpty ? t : t.copyWith(lastMessage: '');
+    } catch (_) {
+      return t;
+    }
   }
 
   void _watchPresenceFor(List<String> uids) {

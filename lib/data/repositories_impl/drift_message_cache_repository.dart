@@ -62,7 +62,82 @@ class DriftMessageCacheRepository implements MessageCacheRepository {
 
   @override
   Future<DateTime?> getClearedBefore(String threadId) async {
-    final raw = await _db.getAppSetting(_clearedBeforeKey(threadId));
+    return _parseMs(await _db.getAppSetting(_clearedBeforeKey(threadId)));
+  }
+
+  static const _clearedPrefix = 'chat_cleared_before_';
+  static const _horizonKey = 'chat_history_horizon';
+
+  @override
+  Future<Map<String, DateTime>> getAllClearedBefore() async {
+    final rows = await _db.getAppSettingsWithPrefix(_clearedPrefix);
+    return {
+      for (final row in rows)
+        if (_parseMs(row.value) case final DateTime at)
+          row.key.substring(_clearedPrefix.length): at,
+    };
+  }
+
+  @override
+  Future<DateTime?> getHistoryHorizon() async =>
+      _parseMs(await _db.getAppSetting(_horizonKey));
+
+  @override
+  Future<void> setHistoryHorizon(DateTime? at) async {
+    if (at == null) {
+      await _db.deleteAppSetting(_horizonKey);
+    } else {
+      await _db.upsertAppSetting(
+        _horizonKey,
+        at.toUtc().millisecondsSinceEpoch.toString(),
+      );
+    }
+  }
+
+  @override
+  Future<List<CachedMessageRecord>> exportAll() async {
+    final rows = await _db.getEveryCachedMessage();
+    return [
+      for (final r in rows)
+        CachedMessageRecord(
+          messageId: r.messageId,
+          threadId: r.threadId,
+          senderId: r.senderId,
+          encryptedText: r.encryptedText,
+          sentAtMs: r.sentAtMs,
+          payloadJson: r.payloadJson,
+        ),
+    ];
+  }
+
+  @override
+  Future<void> importAll(List<CachedMessageRecord> records) {
+    return _db.upsertCachedMessages([
+      for (final r in records)
+        CachedChatMessage(
+          messageId: r.messageId,
+          threadId: r.threadId,
+          senderId: r.senderId,
+          encryptedText: r.encryptedText,
+          sentAtMs: r.sentAtMs,
+          payloadJson: r.payloadJson,
+        ),
+    ]);
+  }
+
+  @override
+  Future<String?> readSetting(String key) => _db.getAppSetting(key);
+
+  @override
+  Future<void> writeSetting(String key, String? value) async {
+    if (value == null) {
+      await _db.deleteAppSetting(key);
+    } else {
+      await _db.upsertAppSetting(key, value);
+    }
+  }
+
+  static DateTime? _parseMs(String? raw) {
     if (raw == null) return null;
     final ms = int.tryParse(raw);
     if (ms == null) return null;

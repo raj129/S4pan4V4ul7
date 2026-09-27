@@ -22,8 +22,9 @@ abstract class AuthRepository {
   /// Sign out and revoke the current Google session.
   Future<void> signOut();
 
-  /// Returns an authenticated HTTP client for Google APIs.
-  Future<http.Client?> getAuthenticatedClient();
+  /// Returns an authenticated HTTP client for Google APIs. With
+  /// [interactive], the user may be prompted to grant missing scopes.
+  Future<http.Client?> getAuthenticatedClient({bool interactive = false});
 }
 
 class AuthException implements Exception {

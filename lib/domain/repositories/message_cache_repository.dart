@@ -35,6 +35,72 @@ abstract class MessageCacheRepository {
 
   /// The local "cleared before" watermark for [threadId], if any.
   Future<DateTime?> getClearedBefore(String threadId);
+
+  /// Every thread's "cleared before" watermark, for chat backups.
+  Future<Map<String, DateTime>> getAllClearedBefore();
+
+  /// Device-wide history horizon: server messages sent at or before it are
+  /// hidden unless they were restored into this cache from a backup. Set on a
+  /// fresh install (or cleared data) so history only returns via restore.
+  Future<DateTime?> getHistoryHorizon();
+
+  Future<void> setHistoryHorizon(DateTime? at);
+
+  /// Every cached row across all threads, verbatim, for chat backups.
+  Future<List<CachedMessageRecord>> exportAll();
+
+  /// Insert rows produced by [exportAll] (typically from a backup file).
+  Future<void> importAll(List<CachedMessageRecord> records);
+
+  /// Small per-device key/value flags used by the backup feature.
+  Future<String?> readSetting(String key);
+
+  Future<void> writeSetting(String key, String? value);
+}
+
+/// A raw cache row, ciphertext only. Used to move history in and out of
+/// chat backups without decrypting it.
+class CachedMessageRecord {
+  const CachedMessageRecord({
+    required this.messageId,
+    required this.threadId,
+    required this.senderId,
+    required this.encryptedText,
+    required this.sentAtMs,
+    required this.payloadJson,
+  });
+
+  final String messageId;
+  final String threadId;
+  final String senderId;
+  final String encryptedText;
+  final int sentAtMs;
+  final String payloadJson;
+
+  Map<String, dynamic> toJson() => {
+    'id': messageId,
+    't': threadId,
+    's': senderId,
+    'e': encryptedText,
+    'at': sentAtMs,
+    'p': payloadJson,
+  };
+
+  static CachedMessageRecord? fromJson(Object? json) {
+    if (json is! Map) return null;
+    final id = json['id'], t = json['t'], s = json['s'];
+    final e = json['e'], at = json['at'], p = json['p'];
+    if (id is! String || t is! String || s is! String) return null;
+    if (e is! String || at is! int || p is! String) return null;
+    return CachedMessageRecord(
+      messageId: id,
+      threadId: t,
+      senderId: s,
+      encryptedText: e,
+      sentAtMs: at,
+      payloadJson: p,
+    );
+  }
 }
 
 /// Cache that stores nothing.
@@ -68,6 +134,27 @@ class NoopMessageCacheRepository implements MessageCacheRepository {
 
   @override
   Future<DateTime?> getClearedBefore(String threadId) async => null;
+
+  @override
+  Future<Map<String, DateTime>> getAllClearedBefore() async => const {};
+
+  @override
+  Future<DateTime?> getHistoryHorizon() async => null;
+
+  @override
+  Future<void> setHistoryHorizon(DateTime? at) async {}
+
+  @override
+  Future<List<CachedMessageRecord>> exportAll() async => const [];
+
+  @override
+  Future<void> importAll(List<CachedMessageRecord> records) async {}
+
+  @override
+  Future<String?> readSetting(String key) async => null;
+
+  @override
+  Future<void> writeSetting(String key, String? value) async {}
 }
 
 /// Serialisation shared by the cache implementation.
