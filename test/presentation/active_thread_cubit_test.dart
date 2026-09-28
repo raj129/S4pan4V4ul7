@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -9,6 +10,7 @@ import 'package:photo_vault/domain/entities/chat_user.dart';
 import 'package:photo_vault/domain/entities/message_metadata.dart';
 import 'package:photo_vault/domain/entities/message_reply.dart';
 import 'package:photo_vault/domain/entities/user_presence.dart';
+import 'package:photo_vault/domain/repositories/chat_search_index_repository.dart';
 import 'package:photo_vault/domain/repositories/message_cache_repository.dart';
 import 'package:photo_vault/domain/repositories/message_repository.dart';
 import 'package:photo_vault/domain/repositories/outbox_repository.dart';
@@ -18,6 +20,7 @@ import 'package:photo_vault/domain/repositories/typing_repository.dart';
 import 'package:photo_vault/domain/repositories/user_repository.dart';
 import 'package:photo_vault/presentation/state/chat/active_thread_cubit.dart';
 
+import '../helpers/memory_chat_search_index.dart';
 import '../helpers/memory_message_cache.dart';
 
 // ---------------------------------------------------------------------------
@@ -45,6 +48,10 @@ class _PassThroughCrypto implements ChatCryptoService {
   }) async {}
 
   @override
+  Future<Uint8List> searchKey(String threadId) async =>
+      Uint8List.fromList(List.filled(32, 7));
+
+  @override
   dynamic noSuchMethod(Invocation invocation) =>
       throw UnimplementedError('${invocation.memberName} not needed');
 }
@@ -63,6 +70,10 @@ class _FakeMessageRepository implements MessageRepository {
 
   int loadBeforeCalls = 0;
 
+  /// Every message on the "server", for [loadAfter] catch-up queries.
+  List<ChatMessage> server = const [];
+  int loadAfterCalls = 0;
+
   void emitLive(List<ChatMessage> messages) => _live.add(messages);
 
   @override
@@ -77,6 +88,18 @@ class _FakeMessageRepository implements MessageRepository {
   }) async {
     loadBeforeCalls++;
     return history.where((m) => m.sentAt.isBefore(before)).take(limit).toList();
+  }
+
+  @override
+  Future<List<ChatMessage>> loadAfter({
+    required String threadId,
+    required DateTime after,
+    int limit = 100,
+  }) async {
+    loadAfterCalls++;
+    final newer = server.where((m) => m.sentAt.isAfter(after)).toList()
+      ..sort((a, b) => a.sentAt.compareTo(b.sentAt));
+    return newer.take(limit).toList();
   }
 
   @override
@@ -247,6 +270,8 @@ void main() {
   ActiveThreadCubit build({
     Stream<List<ConnectivityResult>>? connectivityStream,
     MessageCacheRepository messageCache = const NoopMessageCacheRepository(),
+    ChatSearchIndexRepository searchIndex =
+        const NoopChatSearchIndexRepository(),
   }) => ActiveThreadCubit(
     messageRepository: messages,
     threadRepository: threads,
@@ -255,6 +280,7 @@ void main() {
     presenceRepository: _FakePresenceRepository(),
     mediaRepository: _FakeMediaRepository(),
     messageCache: messageCache,
+    searchIndex: searchIndex,
     outbox: outbox,
     cryptoService: _PassThroughCrypto(),
     myUid: 'me',
@@ -397,27 +423,275 @@ void main() {
   });
 
   group('search', () {
-    setUp(() async {
+    late MemoryMessageCache cache;
+    late MemoryChatSearchIndex index;
+
+    Future<void> settle() =>
+        Future<void>.delayed(const Duration(milliseconds: 700));
+
+    ChatMessage at(String id, DateTime sentAt, {String? text}) => ChatMessage(
+      messageId: id,
+      threadId: 'me_other',
+      senderId: 'other',
+      encryptedText: text ?? 'text-$id',
+      sentAt: sentAt,
+      deletedFor: const [],
+    );
+
+    /// A year of history, one message per hour, with a single "needle".
+    List<ChatMessage> history({int count = 400, int needleAt = 100}) => [
+      for (var i = 0; i < count; i++)
+        at(
+          'h$i',
+          DateTime.utc(2023, 1, 1).add(Duration(hours: i)),
+          text: i == needleAt ? 'the blue needle' : 'filler $i',
+        ),
+    ];
+
+    Future<void> openWith(List<ChatMessage> cached) async {
+      await cubit.close();
+      cache = MemoryMessageCache();
+      index = MemoryChatSearchIndex(cache);
+      await cache.save(cached);
+      cubit = build(messageCache: cache, searchIndex: index);
       await open();
       messages.emitLive([_msg('a', 1), _msg('b', 2), _msg('c', 3)]);
-      await Future<void>.delayed(Duration.zero);
-    });
+      await settle();
+    }
 
-    test('filters the decrypted buffer', () {
+    setUp(() => openWith(const []));
+
+    test('highlights matches without filtering the timeline', () async {
       cubit.setSearchQuery('text-b');
+      await settle();
 
       final state = cubit.state as ActiveThreadLoaded;
-      expect(state.visibleMessages.map((m) => m.messageId).toList(), ['b']);
-      // The full buffer is untouched, so clearing restores instantly.
-      expect(state.messages, hasLength(3));
+      expect(state.visibleMessages, hasLength(3));
+      expect(state.searchMatchIds, ['b']);
+      expect(state.currentMatchId, 'b');
     });
 
-    test('is case-insensitive and clears back to everything', () {
+    test('is case-insensitive and clears back to no matches', () async {
       cubit.setSearchQuery('TEXT-C');
-      expect((cubit.state as ActiveThreadLoaded).visibleMessages, hasLength(1));
+      await settle();
+      expect((cubit.state as ActiveThreadLoaded).searchMatchIds, ['c']);
 
       cubit.clearSearch();
-      expect((cubit.state as ActiveThreadLoaded).visibleMessages, hasLength(3));
+      final state = cubit.state as ActiveThreadLoaded;
+      expect(state.searchMatchIds, isEmpty);
+      expect(state.currentMatchId, isNull);
+      expect(state.visibleMessages, hasLength(3));
+    });
+
+    test('matches word prefixes', () async {
+      cubit.setSearchQuery('tex');
+      await settle();
+      expect((cubit.state as ActiveThreadLoaded).searchMatchIds, [
+        'c',
+        'b',
+        'a',
+      ]);
+    });
+
+    test('starts at the newest match and steps within bounds', () async {
+      cubit.setSearchQuery('text');
+      await settle();
+
+      var state = cubit.state as ActiveThreadLoaded;
+      expect(state.searchMatchIds, ['c', 'b', 'a']);
+      expect(state.currentMatchId, 'c');
+
+      await cubit.previousMatch();
+      expect((cubit.state as ActiveThreadLoaded).currentMatchId, 'c');
+
+      await cubit.nextMatch();
+      await cubit.nextMatch();
+      await cubit.nextMatch();
+      state = cubit.state as ActiveThreadLoaded;
+      expect(state.currentMatchId, 'a');
+      expect(state.currentMatchIndex, 2);
+
+      await cubit.previousMatch();
+      expect((cubit.state as ActiveThreadLoaded).currentMatchId, 'b');
+    });
+
+    test('reports no matches without hiding messages', () async {
+      cubit.setSearchQuery('zzz');
+      await settle();
+
+      final state = cubit.state as ActiveThreadLoaded;
+      expect(state.searchMatchIds, isEmpty);
+      expect(state.currentMatchId, isNull);
+      expect(state.searchInProgress, isFalse);
+      expect(state.visibleMessages, hasLength(3));
+    });
+
+    test('never matches messages deleted for me', () async {
+      messages.emitLive([
+        ChatMessage(
+          messageId: 'gone',
+          threadId: 'me_other',
+          senderId: 'other',
+          encryptedText: 'secret words',
+          sentAt: DateTime.utc(2024, 1, 4),
+          deletedFor: const ['me'],
+        ),
+      ]);
+      await settle();
+
+      cubit.setSearchQuery('secret');
+      await settle();
+      expect((cubit.state as ActiveThreadLoaded).searchMatchIds, isEmpty);
+    });
+
+    test('lands on a months-old match that was never loaded', () async {
+      await openWith(history());
+
+      // Only the newest cached page was paged in on open.
+      var state = cubit.state as ActiveThreadLoaded;
+      expect(state.messages.any((m) => m.messageId == 'h100'), isFalse);
+      expect(state.indexingProgress, isNull, reason: 'backfill finished');
+
+      cubit.setSearchQuery('needle');
+      await settle();
+
+      state = cubit.state as ActiveThreadLoaded;
+      expect(state.searchMatchIds, ['h100']);
+      expect(state.currentMatchId, 'h100');
+      expect(state.scrollRequest?.messageId, 'h100');
+      expect(state.isDetached, isTrue);
+      // The match is shown in context, in a bounded window.
+      final ids = state.messages.map((m) => m.messageId).toList();
+      expect(ids, containsAll(['h99', 'h100', 'h101']));
+      expect(ids.length, lessThanOrEqualTo(81));
+      expect(ids, isNot(contains('c')));
+    });
+
+    test('scrolling newer from a jump reattaches to the live chat', () async {
+      await openWith(history());
+      await cubit.jumpToMessage('h100');
+      expect((cubit.state as ActiveThreadLoaded).isDetached, isTrue);
+
+      for (var i = 0; i < 20; i++) {
+        final state = cubit.state as ActiveThreadLoaded;
+        if (!state.isDetached) break;
+        expect(state.messages.length, lessThanOrEqualTo(300));
+        await cubit.loadNewerMessages();
+      }
+
+      final state = cubit.state as ActiveThreadLoaded;
+      expect(state.isDetached, isFalse);
+      expect(state.messages.first.messageId, 'c');
+      expect(state.messages.length, lessThanOrEqualTo(300));
+    });
+
+    test('jump to latest returns to the live chat', () async {
+      await openWith(history());
+      await cubit.jumpToMessage('h100');
+
+      await cubit.jumpToLatest();
+
+      final state = cubit.state as ActiveThreadLoaded;
+      expect(state.isDetached, isFalse);
+      expect(state.messages.first.messageId, 'c');
+      expect(state.scrollRequest?.messageId, isNull);
+    });
+
+    test('counts new arrivals while viewing older history', () async {
+      await openWith(history());
+      await cubit.jumpToMessage('h100');
+
+      messages.emitLive([
+        _msg('a', 1),
+        _msg('b', 2),
+        _msg('c', 3),
+        _msg('d', 4),
+        _msg('mine', 5, sender: 'me'),
+      ]);
+      await Future<void>.delayed(Duration.zero);
+
+      final state = cubit.state as ActiveThreadLoaded;
+      expect(state.newWhileDetached, 1);
+      expect(state.messages.any((m) => m.messageId == 'd'), isFalse);
+    });
+
+    test('jumps to a date and to a scrollbar position', () async {
+      await openWith(history());
+
+      expect(await cubit.jumpToDate(DateTime(2023, 1, 5)), isTrue);
+      var state = cubit.state as ActiveThreadLoaded;
+      final target = state.messages.firstWhere(
+        (m) => m.messageId == state.scrollRequest!.messageId,
+      );
+      expect(target.sentAt.isBefore(DateTime.utc(2023, 1, 4)), isFalse);
+      expect(state.isDetached, isTrue);
+
+      await cubit.jumpToFraction(0);
+      state = cubit.state as ActiveThreadLoaded;
+      expect(state.scrollRequest?.messageId, 'h0');
+
+      await cubit.jumpToFraction(1);
+      state = cubit.state as ActiveThreadLoaded;
+      expect(state.isDetached, isFalse);
+    });
+
+    test('scrolling far back keeps the timeline bounded', () async {
+      messages.history = [
+        for (var i = 0; i < 400; i++)
+          at('s$i', DateTime.utc(2023, 12, 1).subtract(Duration(hours: i))),
+      ];
+      await openWith(const []);
+
+      for (var i = 0; i < 14; i++) {
+        await cubit.loadOlderMessages();
+      }
+
+      final state = cubit.state as ActiveThreadLoaded;
+      expect(state.messages.length, lessThanOrEqualTo(300));
+      expect(state.isDetached, isTrue);
+      expect(state.messages.any((m) => m.messageId == 'c'), isFalse);
+    });
+
+    test('catches the cache up with messages missed while closed', () async {
+      await cubit.close();
+      cache = MemoryMessageCache();
+      index = MemoryChatSearchIndex(cache);
+      await cache.save([at('seen', DateTime.utc(2023, 6, 1))]);
+      messages.server = [
+        for (var i = 0; i < 150; i++)
+          at(
+            'm$i',
+            DateTime.utc(2023, 6, 2).add(Duration(hours: i)),
+            text: i == 42 ? 'missed needle' : 'filler',
+          ),
+      ];
+      cubit = build(messageCache: cache, searchIndex: index);
+      await open();
+      await settle();
+
+      expect(cache.rows.length, 151);
+      expect(messages.loadAfterCalls, 2);
+
+      cubit.setSearchQuery('needle');
+      await settle();
+      expect((cubit.state as ActiveThreadLoaded).searchMatchIds, ['m42']);
+    });
+
+    test('catch-up never pulls in history before the horizon', () async {
+      await cubit.close();
+      cache = MemoryMessageCache();
+      index = MemoryChatSearchIndex(cache);
+      cache.horizon = DateTime.utc(2023, 6, 10);
+      await cache.save([at('restored', DateTime.utc(2023, 6, 1))]);
+      messages.server = [
+        at('hidden', DateTime.utc(2023, 6, 5)),
+        at('visible', DateTime.utc(2023, 6, 11)),
+      ];
+      cubit = build(messageCache: cache, searchIndex: index);
+      await open();
+      await settle();
+
+      expect(cache.rows.keys, unorderedEquals(['restored', 'visible']));
     });
   });
 

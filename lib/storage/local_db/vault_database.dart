@@ -317,12 +317,18 @@ class OutboxMessages extends Table {
 class VaultDatabase extends _$VaultDatabase {
   VaultDatabase() : super(_openConnection());
 
+  /// For tests, e.g. with `NativeDatabase.memory()`.
+  VaultDatabase.forTesting(super.executor);
+
   @override
-  int get schemaVersion => 3;
+  int get schemaVersion => 4;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
-    onCreate: (m) => m.createAll(),
+    onCreate: (m) async {
+      await m.createAll();
+      await _createChatSearchSchema();
+    },
     onUpgrade: (m, from, to) async {
       // v2 introduced the offline chat message cache. It holds only
       // ciphertext, so a failed migration can safely recreate it empty.
@@ -333,8 +339,57 @@ class VaultDatabase extends _$VaultDatabase {
       if (from < 3) {
         await m.createTable(outboxMessages);
       }
+      // v4 introduced the keyed chat search index. Existing cached messages
+      // are indexed lazily the next time their thread is opened.
+      if (from < 4) {
+        await _createChatSearchSchema();
+      }
     },
   );
+
+  /// Tables for the local chat search index.
+  ///
+  /// Declared in SQL rather than as Drift tables because they are accessed
+  /// only through the hand-written queries below.
+  ///
+  /// `chat_search_tokens` holds keyed hashes of word prefixes (see
+  /// `ChatSearchTokenizer`), never words, so — like `chat_messages` — it
+  /// reveals no message content without the in-memory thread key.
+  Future<void> _createChatSearchSchema() async {
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_chat_messages_thread_sent '
+      'ON chat_messages (thread_id, sent_at_ms)',
+    );
+    await customStatement(
+      'CREATE TABLE IF NOT EXISTS chat_search_tokens ('
+      'token TEXT NOT NULL, '
+      'message_id TEXT NOT NULL, '
+      'thread_id TEXT NOT NULL, '
+      'sent_at_ms INTEGER NOT NULL, '
+      'PRIMARY KEY (token, message_id)'
+      ') WITHOUT ROWID',
+    );
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_chat_search_tokens_thread '
+      'ON chat_search_tokens (thread_id, token, sent_at_ms DESC)',
+    );
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_chat_search_tokens_message '
+      'ON chat_search_tokens (message_id)',
+    );
+    await customStatement(
+      'CREATE TABLE IF NOT EXISTS chat_search_state ('
+      'message_id TEXT NOT NULL PRIMARY KEY, '
+      'thread_id TEXT NOT NULL, '
+      'sent_at_ms INTEGER NOT NULL, '
+      'version INTEGER NOT NULL'
+      ') WITHOUT ROWID',
+    );
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_chat_search_state_thread '
+      'ON chat_search_state (thread_id, sent_at_ms)',
+    );
+  }
 
   // =========================================================================
   // PHOTO QUERIES
@@ -656,16 +711,227 @@ class VaultDatabase extends _$VaultDatabase {
 
   /// Drop a single cached message, used when it is deleted for everyone.
   Future<void> deleteCachedMessage(String messageId) async {
-    await (delete(
-      chatMessages,
-    )..where((m) => m.messageId.equals(messageId))).go();
+    await transaction(() async {
+      await (delete(
+        chatMessages,
+      )..where((m) => m.messageId.equals(messageId))).go();
+      await removeFromSearchIndex([messageId]);
+    });
   }
 
   /// Drop an entire thread's cache.
   Future<void> deleteCachedThread(String threadId) async {
-    await (delete(
+    await transaction(() async {
+      await (delete(
+        chatMessages,
+      )..where((m) => m.threadId.equals(threadId))).go();
+      await clearSearchIndexForThread(threadId);
+    });
+  }
+
+  /// A single cached message, if present.
+  Future<CachedChatMessage?> getCachedMessage(String messageId) {
+    return (select(
       chatMessages,
-    )..where((m) => m.threadId.equals(threadId))).go();
+    )..where((m) => m.messageId.equals(messageId))).getSingleOrNull();
+  }
+
+  /// Oldest-first page of cached messages sent at or after [fromSentAtMs].
+  Future<List<CachedChatMessage>> getCachedMessagesFrom(
+    String threadId, {
+    required int fromSentAtMs,
+    int limit = 50,
+  }) {
+    return (select(chatMessages)
+          ..where(
+            (m) =>
+                m.threadId.equals(threadId) &
+                m.sentAtMs.isBiggerOrEqualValue(fromSentAtMs),
+          )
+          ..orderBy([
+            (m) => OrderingTerm(expression: m.sentAtMs),
+            (m) => OrderingTerm(expression: m.messageId),
+          ])
+          ..limit(limit))
+        .get();
+  }
+
+  /// Number of cached messages in a thread, optionally only those strictly
+  /// older than [beforeSentAtMs].
+  Future<int> countCachedMessages(String threadId, {int? beforeSentAtMs}) async {
+    final count = chatMessages.messageId.count();
+    final query = selectOnly(chatMessages)
+      ..addColumns([count])
+      ..where(
+        beforeSentAtMs == null
+            ? chatMessages.threadId.equals(threadId)
+            : chatMessages.threadId.equals(threadId) &
+                  chatMessages.sentAtMs.isSmallerThanValue(beforeSentAtMs),
+      );
+    return (await query.getSingle()).read(count) ?? 0;
+  }
+
+  /// The cached message [offset] positions from the oldest (0 = oldest).
+  Future<CachedChatMessage?> getCachedMessageAtOffset(
+    String threadId,
+    int offset,
+  ) {
+    return (select(chatMessages)
+          ..where((m) => m.threadId.equals(threadId))
+          ..orderBy([
+            (m) => OrderingTerm(expression: m.sentAtMs),
+            (m) => OrderingTerm(expression: m.messageId),
+          ])
+          ..limit(1, offset: offset < 0 ? 0 : offset))
+        .getSingleOrNull();
+  }
+
+  /// Oldest and newest cached send times in a thread, or null if empty.
+  Future<(int, int)?> getCachedTimeBounds(String threadId) async {
+    final min = chatMessages.sentAtMs.min();
+    final max = chatMessages.sentAtMs.max();
+    final row =
+        await (selectOnly(chatMessages)
+              ..addColumns([min, max])
+              ..where(chatMessages.threadId.equals(threadId)))
+            .getSingle();
+    final lo = row.read(min);
+    final hi = row.read(max);
+    if (lo == null || hi == null) return null;
+    return (lo, hi);
+  }
+
+  // =========================================================================
+  // CHAT SEARCH INDEX
+  // =========================================================================
+
+  /// Replace the index entries of each message with its [tokens].
+  Future<void> indexChatMessages(
+    String threadId,
+    List<({String messageId, int sentAtMs, List<String> tokens})> entries, {
+    required int version,
+  }) async {
+    if (entries.isEmpty) return;
+    await transaction(() async {
+      await removeFromSearchIndex([for (final e in entries) e.messageId]);
+      await batch((b) {
+        for (final e in entries) {
+          for (final token in e.tokens) {
+            b.customStatement(
+              'INSERT OR IGNORE INTO chat_search_tokens '
+              '(token, message_id, thread_id, sent_at_ms) VALUES (?, ?, ?, ?)',
+              [token, e.messageId, threadId, e.sentAtMs],
+            );
+          }
+          b.customStatement(
+            'INSERT OR REPLACE INTO chat_search_state '
+            '(message_id, thread_id, sent_at_ms, version) VALUES (?, ?, ?, ?)',
+            [e.messageId, threadId, e.sentAtMs, version],
+          );
+        }
+      });
+    });
+  }
+
+  Future<void> removeFromSearchIndex(List<String> messageIds) async {
+    if (messageIds.isEmpty) return;
+    for (var i = 0; i < messageIds.length; i += 500) {
+      final chunk = messageIds.sublist(
+        i,
+        i + 500 > messageIds.length ? messageIds.length : i + 500,
+      );
+      final marks = List.filled(chunk.length, '?').join(',');
+      await customStatement(
+        'DELETE FROM chat_search_tokens WHERE message_id IN ($marks)',
+        chunk,
+      );
+      await customStatement(
+        'DELETE FROM chat_search_state WHERE message_id IN ($marks)',
+        chunk,
+      );
+    }
+  }
+
+  Future<void> clearSearchIndexForThread(String threadId) async {
+    await customStatement(
+      'DELETE FROM chat_search_tokens WHERE thread_id = ?',
+      [threadId],
+    );
+    await customStatement(
+      'DELETE FROM chat_search_state WHERE thread_id = ?',
+      [threadId],
+    );
+  }
+
+  /// Ids and send times of messages containing *every* token, newest first.
+  Future<List<({String messageId, int sentAtMs})>> searchChatIndex(
+    String threadId,
+    List<String> tokens, {
+    int limit = 10000,
+  }) async {
+    final unique = tokens.toSet().toList();
+    if (unique.isEmpty) return const [];
+    final marks = List.filled(unique.length, '?').join(',');
+    final rows = await customSelect(
+      'SELECT message_id, MAX(sent_at_ms) AS sent_at_ms '
+      'FROM chat_search_tokens '
+      'WHERE thread_id = ? AND token IN ($marks) '
+      'GROUP BY message_id '
+      'HAVING COUNT(DISTINCT token) = ? '
+      'ORDER BY sent_at_ms DESC, message_id DESC '
+      'LIMIT ?',
+      variables: [
+        Variable<String>(threadId),
+        for (final t in unique) Variable<String>(t),
+        Variable<int>(unique.length),
+        Variable<int>(limit),
+      ],
+    ).get();
+    return [
+      for (final r in rows)
+        (
+          messageId: r.read<String>('message_id'),
+          sentAtMs: r.read<int>('sent_at_ms'),
+        ),
+    ];
+  }
+
+  /// Cached messages not yet indexed at [version], newest first.
+  Future<List<CachedChatMessage>> getUnindexedCachedMessages(
+    String threadId, {
+    required int version,
+    int limit = 200,
+  }) async {
+    final rows = await customSelect(
+      'SELECT m.* FROM chat_messages m '
+      'LEFT JOIN chat_search_state s '
+      'ON s.message_id = m.message_id AND s.version >= ? '
+      'WHERE m.thread_id = ? AND s.message_id IS NULL '
+      'ORDER BY m.sent_at_ms DESC LIMIT ?',
+      variables: [
+        Variable<int>(version),
+        Variable<String>(threadId),
+        Variable<int>(limit),
+      ],
+      readsFrom: {chatMessages},
+    ).get();
+    return [for (final r in rows) chatMessages.map(r.data)];
+  }
+
+  /// How many cached messages still need indexing at [version].
+  Future<int> countUnindexedCachedMessages(
+    String threadId, {
+    required int version,
+  }) async {
+    final row = await customSelect(
+      'SELECT COUNT(*) AS c FROM chat_messages m '
+      'LEFT JOIN chat_search_state s '
+      'ON s.message_id = m.message_id AND s.version >= ? '
+      'WHERE m.thread_id = ? AND s.message_id IS NULL',
+      variables: [Variable<int>(version), Variable<String>(threadId)],
+      readsFrom: {chatMessages},
+    ).getSingle();
+    return row.read<int>('c');
   }
 
   /// Every cached message in a thread, oldest-last, for in-chat search.
@@ -776,6 +1042,8 @@ class VaultDatabase extends _$VaultDatabase {
     await delete(appSettings).go();
     await delete(securityEvents).go();
     await delete(chatMessages).go();
+    await customStatement('DELETE FROM chat_search_tokens');
+    await customStatement('DELETE FROM chat_search_state');
   }
 
   static String _jsonEncode(Map<String, dynamic> data) => data.toString();

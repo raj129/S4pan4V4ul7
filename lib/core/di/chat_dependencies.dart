@@ -6,6 +6,7 @@ import '../../application/services/contact_discovery_service.dart';
 import '../../application/services/presence_service.dart';
 import '../../application/services/vault_session.dart';
 import '../../crypto/services/chat_crypto_service.dart';
+import '../../data/repositories_impl/drift_chat_search_index_repository.dart';
 import '../../data/repositories_impl/drift_message_cache_repository.dart';
 import '../../data/repositories_impl/drift_outbox_repository.dart';
 import '../../data/repositories_impl/google_drive_chat_backup_store.dart';
@@ -16,6 +17,7 @@ import '../../data/repositories_impl/firestore_thread_repository.dart';
 import '../../data/repositories_impl/firestore_typing_repository.dart';
 import '../../data/repositories_impl/firestore_user_repository.dart';
 import '../../domain/repositories/auth_repository.dart';
+import '../../domain/repositories/chat_search_index_repository.dart';
 import '../../domain/repositories/message_cache_repository.dart';
 import '../../domain/repositories/outbox_repository.dart';
 import '../../domain/repositories/message_repository.dart';
@@ -57,6 +59,12 @@ class ChatDependencies {
     if (presenceRepository != null) this.presenceRepository = presenceRepository;
     if (typingRepository != null) this.typingRepository = typingRepository;
     if (cryptoService != null) this.cryptoService = cryptoService;
+    _vaultSession.addListener(_onVaultSessionChanged);
+  }
+
+  /// Drop in-memory chat keys as soon as the vault locks.
+  void _onVaultSessionChanged() {
+    if (!_vaultSession.isUnlocked) cryptoService.clearKeyCache();
   }
 
   final AuthRepository _authRepository;
@@ -83,6 +91,12 @@ class ChatDependencies {
   late final MessageCacheRepository messageCache = switch (_database) {
     final VaultDatabase db => DriftMessageCacheRepository(db),
     _ => const NoopMessageCacheRepository(),
+  };
+
+  /// Keyed local search index over the message cache.
+  late final ChatSearchIndexRepository searchIndex = switch (_database) {
+    final VaultDatabase db => DriftChatSearchIndexRepository(db),
+    _ => const NoopChatSearchIndexRepository(),
   };
 
   /// Durable send queue. Falls back to a no-op when no local database is
@@ -140,6 +154,7 @@ class ChatDependencies {
   );
 
   void dispose() {
+    _vaultSession.removeListener(_onVaultSessionChanged);
     presenceService.dispose();
     notificationService.dispose();
     mediaLoader.clear();

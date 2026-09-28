@@ -46,16 +46,22 @@ class ChatBubbleShape extends ShapeBorder {
   Path getOuterPath(Rect rect, {TextDirection? textDirection}) {
     // The body is inset on the tail side so the tail can protrude into the
     // space reserved by [tailInsets].
+    final left = rect.left + (withTail && !isMine ? tailSize : 0);
+    final right = rect.right - (withTail && isMine ? tailSize : 0);
+    // Guard against degenerate sizes during layout transitions: a rect
+    // narrower than the tail must not produce a negative-width body.
     final body = Rect.fromLTRB(
-      rect.left + (withTail && !isMine ? tailSize : 0),
+      math.min(left, right),
       rect.top,
-      rect.right - (withTail && isMine ? tailSize : 0),
-      rect.bottom,
+      math.max(left, right),
+      math.max(rect.top, rect.bottom),
     );
 
-    // Guard against degenerate sizes during layout transitions.
-    final r = math.min(radius, math.min(body.width, body.height) / 2);
-    final tight = math.min(tightRadius, r);
+    final r = math.max(
+      0.0,
+      math.min(radius, math.min(body.width, body.height) / 2),
+    );
+    final tight = math.max(0.0, math.min(tightRadius, r));
 
     final outerTop = withTail ? Radius.zero : Radius.circular(tight);
 

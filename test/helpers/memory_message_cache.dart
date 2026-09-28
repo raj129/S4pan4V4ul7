@@ -9,13 +9,15 @@ class MemoryMessageCache implements MessageCacheRepository {
   DateTime? horizon;
 
   List<ChatMessage> _decoded(String threadId, {DateTime? before}) {
-    final list = [
-      for (final r in rows.values)
-        if (r.threadId == threadId &&
-            (before == null || r.sentAtMs < before.millisecondsSinceEpoch))
-          CachedMessageCodec.decode(r.payloadJson),
-    ].whereType<ChatMessage>().toList()
-      ..sort((a, b) => b.sentAt.compareTo(a.sentAt));
+    final list =
+        [
+          for (final r in rows.values)
+            if (r.threadId == threadId &&
+                (before == null || r.sentAtMs < before.millisecondsSinceEpoch))
+              CachedMessageCodec.decode(r.payloadJson),
+        ].whereType<ChatMessage>().toList()..sort(
+          (a, b) => b.sentAt.compareTo(a.sentAt),
+        );
     return list;
   }
 
@@ -29,6 +31,46 @@ class MemoryMessageCache implements MessageCacheRepository {
   @override
   Future<List<ChatMessage>> loadAll(String threadId) async =>
       _decoded(threadId);
+
+  /// Oldest first, ties broken by id — the order the Drift queries use.
+  List<ChatMessage> _ascending(String threadId) =>
+      _decoded(threadId).reversed.toList()..sort((a, b) {
+        final t = a.sentAt.compareTo(b.sentAt);
+        return t != 0 ? t : a.messageId.compareTo(b.messageId);
+      });
+
+  @override
+  Future<ChatMessage?> loadById(String messageId) async {
+    final r = rows[messageId];
+    return r == null ? null : CachedMessageCodec.decode(r.payloadJson);
+  }
+
+  @override
+  Future<List<ChatMessage>> loadFrom({
+    required String threadId,
+    required DateTime from,
+    int limit = 50,
+  }) async => _ascending(
+    threadId,
+  ).where((m) => !m.sentAt.isBefore(from)).take(limit).toList();
+
+  @override
+  Future<int> count(String threadId, {DateTime? before}) async =>
+      _decoded(threadId, before: before).length;
+
+  @override
+  Future<ChatMessage?> loadAtOffset(String threadId, int offset) async {
+    final all = _ascending(threadId);
+    if (offset < 0 || offset >= all.length) return null;
+    return all[offset];
+  }
+
+  @override
+  Future<(DateTime, DateTime)?> timeBounds(String threadId) async {
+    final all = _ascending(threadId);
+    if (all.isEmpty) return null;
+    return (all.first.sentAt, all.last.sentAt);
+  }
 
   @override
   Future<void> save(List<ChatMessage> messages) async {

@@ -28,6 +28,51 @@ class DriftMessageCacheRepository implements MessageCacheRepository {
   }
 
   @override
+  Future<ChatMessage?> loadById(String messageId) async {
+    final row = await _db.getCachedMessage(messageId);
+    return row == null ? null : CachedMessageCodec.decode(row.payloadJson);
+  }
+
+  @override
+  Future<List<ChatMessage>> loadFrom({
+    required String threadId,
+    required DateTime from,
+    int limit = 50,
+  }) async {
+    return _decodeAll(
+      await _db.getCachedMessagesFrom(
+        threadId,
+        fromSentAtMs: from.toUtc().millisecondsSinceEpoch,
+        limit: limit,
+      ),
+    );
+  }
+
+  @override
+  Future<int> count(String threadId, {DateTime? before}) {
+    return _db.countCachedMessages(
+      threadId,
+      beforeSentAtMs: before?.toUtc().millisecondsSinceEpoch,
+    );
+  }
+
+  @override
+  Future<ChatMessage?> loadAtOffset(String threadId, int offset) async {
+    final row = await _db.getCachedMessageAtOffset(threadId, offset);
+    return row == null ? null : CachedMessageCodec.decode(row.payloadJson);
+  }
+
+  @override
+  Future<(DateTime, DateTime)?> timeBounds(String threadId) async {
+    final bounds = await _db.getCachedTimeBounds(threadId);
+    if (bounds == null) return null;
+    return (
+      DateTime.fromMillisecondsSinceEpoch(bounds.$1, isUtc: true),
+      DateTime.fromMillisecondsSinceEpoch(bounds.$2, isUtc: true),
+    );
+  }
+
+  @override
   Future<void> save(List<ChatMessage> messages) async {
     if (messages.isEmpty) return;
     await _db.upsertCachedMessages([

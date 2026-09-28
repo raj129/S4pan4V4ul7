@@ -31,6 +31,16 @@ abstract class MessageRepository {
     int limit = 30,
   });
 
+  /// Load messages sent strictly after [after], oldest first.
+  ///
+  /// Used to catch the local cache up with everything that arrived while the
+  /// thread was closed, so local search never has gaps.
+  Future<List<ChatMessage>> loadAfter({
+    required String threadId,
+    required DateTime after,
+    int limit = 100,
+  });
+
   /// Fetch a single message, used to jump to the target of a reply.
   Future<ChatMessage?> getMessage({
     required String threadId,

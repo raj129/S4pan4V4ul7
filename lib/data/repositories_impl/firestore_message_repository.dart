@@ -88,6 +88,20 @@ class FirestoreMessageRepository implements MessageRepository {
   }
 
   @override
+  Future<List<ChatMessage>> loadAfter({
+    required String threadId,
+    required DateTime after,
+    int limit = 100,
+  }) async {
+    final snap = await _messages(threadId)
+        .where('sentAt', isGreaterThan: after.toUtc().millisecondsSinceEpoch)
+        .orderBy('sentAt')
+        .limit(limit)
+        .get();
+    return snap.docs.map((d) => ChatMessage.fromFirestore(d.data())).toList();
+  }
+
+  @override
   Future<ChatMessage?> getMessage({
     required String threadId,
     required String messageId,

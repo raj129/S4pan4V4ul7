@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -5,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../../application/services/chat_notification_service.dart';
@@ -20,6 +23,7 @@ import '../../theme/app_colors.dart';
 import '../../theme/app_spacing.dart';
 import '../../widgets/chat/chat_day_divider.dart';
 import '../../widgets/chat/chat_media_preview.dart';
+import '../../widgets/chat/chat_scrollbar.dart';
 import '../../widgets/chat/chat_wallpaper.dart';
 import '../../widgets/chat/message_bubble.dart';
 import '../../widgets/chat/typing_indicator.dart';
@@ -102,7 +106,8 @@ class ThreadScreen extends StatefulWidget {
 
 class _ThreadScreenState extends State<ThreadScreen> {
   final _textCtrl = TextEditingController();
-  final _scrollCtrl = ScrollController();
+  final _itemScrollCtrl = ItemScrollController();
+  final _itemPositions = ItemPositionsListener.create();
   final _picker = ImagePicker();
   final _uuid = const Uuid();
   final _inputFocus = FocusNode();
@@ -117,9 +122,22 @@ class _ThreadScreenState extends State<ThreadScreen> {
   /// Message flashed after jumping to it from a quote.
   String? _highlightedId;
 
+  /// Rows most recently rendered, so a message id can be mapped to an index.
+  List<_ThreadItem> _items = const [];
+
   /// Drives the send button's reveal without rebuilding the whole composer on
   /// every keystroke.
   final _hasText = ValueNotifier<bool>(false);
+
+  /// Viewport position in the whole cached history (0 first .. 1 latest).
+  final _historyPosition = ValueNotifier<double?>(null);
+  final _scrollbarVisible = ValueNotifier<bool>(false);
+  final _showJumpToLatest = ValueNotifier<bool>(false);
+  Timer? _scrollbarHide;
+  Timer? _positionThrottle;
+
+  /// Whether the rows in [_items] were built from a detached window.
+  bool _renderedDetached = false;
 
   @override
   void initState() {
@@ -129,7 +147,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
       thread: widget.thread,
       otherUser: widget.otherUser,
     );
-    _scrollCtrl.addListener(_onScroll);
+    _itemPositions.itemPositions.addListener(_onScroll);
     widget.notificationService?.setActiveThread(widget.thread.threadId);
     // Opening the thread is itself a read: everything already on screen counts.
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -142,41 +160,111 @@ class _ThreadScreenState extends State<ThreadScreen> {
   }
 
   void _onScroll() {
-    if (_scrollCtrl.position.pixels >=
-        _scrollCtrl.position.maxScrollExtent - 200) {
-      context.read<ActiveThreadCubit>().loadOlderMessages();
+    final positions = _itemPositions.itemPositions.value;
+    if (positions.isEmpty) return;
+    final cubit = context.read<ActiveThreadCubit>();
+    final indexes = positions.map((p) => p.index);
+    final furthest = indexes.reduce((a, b) => a > b ? a : b);
+    final nearest = indexes.reduce((a, b) => a < b ? a : b);
+    // The list is reversed, so the highest index is the oldest row on screen.
+    if (furthest >= _items.length - 3) {
+      cubit.loadOlderMessages();
     }
+    final state = cubit.state;
+    final detached = state is ActiveThreadLoaded && state.isDetached;
+    // A detached window pages newer history in as the bottom is approached.
+    if (detached && nearest <= 3) cubit.loadNewerMessages();
+    _showJumpToLatest.value = detached || nearest > 12;
+    _scrollbarVisible.value = true;
+    _scrollbarHide?.cancel();
+    _scrollbarHide = Timer(const Duration(milliseconds: 1500), () {
+      if (mounted) _scrollbarVisible.value = false;
+    });
+    _scheduleHistoryPosition((nearest + furthest) ~/ 2);
     // Scrolling reveals older messages, which are now read too.
-    context.read<ActiveThreadCubit>().markVisibleAsRead();
+    cubit.markVisibleAsRead();
+  }
+
+  /// Refresh the scrollbar thumb from the message around [index], throttled
+  /// because it is a (cheap, indexed) database count.
+  void _scheduleHistoryPosition(int index) {
+    if (_positionThrottle?.isActive ?? false) return;
+    _positionThrottle = Timer(const Duration(milliseconds: 250), () async {
+      if (!mounted || _items.isEmpty) return;
+      ChatMessage? msg;
+      for (var i = index.clamp(0, _items.length - 1); i < _items.length; i++) {
+        msg = _items[i].message;
+        if (msg != null) break;
+      }
+      if (msg == null) return;
+      final pos = await context.read<ActiveThreadCubit>().positionOf(msg);
+      if (mounted && pos != null) _historyPosition.value = pos;
+    });
   }
 
   @override
   void dispose() {
     widget.notificationService?.setActiveThread(null);
     _textCtrl.removeListener(_onTextControllerChanged);
+    _itemPositions.itemPositions.removeListener(_onScroll);
+    _scrollbarHide?.cancel();
+    _positionThrottle?.cancel();
+    _historyPosition.dispose();
+    _scrollbarVisible.dispose();
+    _showJumpToLatest.dispose();
     _hasText.dispose();
     _textCtrl.dispose();
     _searchCtrl.dispose();
-    _scrollCtrl.dispose();
     _inputFocus.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    return BlocListener<ActiveThreadCubit, ActiveThreadState>(
-      listenWhen: (prev, next) {
-        final prevErr = prev is ActiveThreadLoaded ? prev.actionError : null;
-        final nextErr = next is ActiveThreadLoaded ? next.actionError : null;
-        return nextErr != null && nextErr != prevErr;
-      },
-      listener: (context, state) {
-        final message = (state as ActiveThreadLoaded).actionError!;
-        ScaffoldMessenger.of(context)
-          ..hideCurrentSnackBar()
-          ..showSnackBar(SnackBar(content: Text(message)));
-        context.read<ActiveThreadCubit>().clearActionError();
-      },
+    return MultiBlocListener(
+      listeners: [
+        BlocListener<ActiveThreadCubit, ActiveThreadState>(
+          listenWhen: (prev, next) {
+            final prevErr = prev is ActiveThreadLoaded
+                ? prev.actionError
+                : null;
+            final nextErr = next is ActiveThreadLoaded
+                ? next.actionError
+                : null;
+            return nextErr != null && nextErr != prevErr;
+          },
+          listener: (context, state) {
+            final message = (state as ActiveThreadLoaded).actionError!;
+            ScaffoldMessenger.of(context)
+              ..hideCurrentSnackBar()
+              ..showSnackBar(SnackBar(content: Text(message)));
+            context.read<ActiveThreadCubit>().clearActionError();
+          },
+        ),
+        BlocListener<ActiveThreadCubit, ActiveThreadState>(
+          listenWhen: (prev, next) =>
+              next is ActiveThreadLoaded &&
+              next.scrollRequest != null &&
+              (prev is! ActiveThreadLoaded ||
+                  prev.scrollRequest != next.scrollRequest),
+          listener: (context, state) {
+            final request = (state as ActiveThreadLoaded).scrollRequest!;
+            // Wait for the list to rebuild with the window the cubit loaded,
+            // otherwise the target row would not exist yet.
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (mounted) _performScroll(request);
+            });
+          },
+        ),
+        BlocListener<ActiveThreadCubit, ActiveThreadState>(
+          listenWhen: (prev, next) =>
+              prev is ActiveThreadLoaded &&
+              next is ActiveThreadLoaded &&
+              !identical(prev.messages, next.messages) &&
+              prev.scrollRequest == next.scrollRequest,
+          listener: (context, state) => _keepAnchor(),
+        ),
+      ],
       child: Scaffold(
         appBar: _buildAppBar(context),
         body: Column(
@@ -185,7 +273,32 @@ class _ThreadScreenState extends State<ThreadScreen> {
               child: ChatWallpaper(
                 child: Column(
                   children: [
-                    Expanded(child: _buildMessageList()),
+                    Expanded(
+                      child: Stack(
+                        fit: StackFit.expand,
+                        children: [
+                          Positioned.fill(child: _buildMessageList()),
+                          Positioned(
+                            top: AppSpacing.sm,
+                            bottom: AppSpacing.sm,
+                            right: 0,
+                            width: 200,
+                            child: ChatScrollbar(
+                              position: _historyPosition,
+                              visible: _scrollbarVisible,
+                              dateAt: context
+                                  .read<ActiveThreadCubit>()
+                                  .dateAtFraction,
+                              onJump: context
+                                  .read<ActiveThreadCubit>()
+                                  .jumpToFraction,
+                            ),
+                          ),
+                          _buildLoadingNewer(),
+                          _buildJumpToLatest(),
+                        ],
+                      ),
+                    ),
                     _buildTypingBanner(),
                   ],
                 ),
@@ -259,6 +372,64 @@ class _ThreadScreenState extends State<ThreadScreen> {
           onChanged: (v) => context.read<ActiveThreadCubit>().setSearchQuery(v),
         ),
         actions: [
+          BlocBuilder<ActiveThreadCubit, ActiveThreadState>(
+            buildWhen: (prev, next) =>
+                prev is! ActiveThreadLoaded ||
+                next is! ActiveThreadLoaded ||
+                prev.searchMatchIds != next.searchMatchIds ||
+                prev.currentMatchId != next.currentMatchId ||
+                prev.searchInProgress != next.searchInProgress ||
+                prev.indexingProgress != next.indexingProgress ||
+                prev.searchQuery != next.searchQuery,
+            builder: (context, state) {
+              if (state is! ActiveThreadLoaded || !state.isSearching) {
+                return const SizedBox.shrink();
+              }
+              final cubit = context.read<ActiveThreadCubit>();
+              final total = state.searchMatchIds.length;
+              final index = state.currentMatchIndex;
+              final String label;
+              if (state.searchInProgress && index < 0) {
+                label = '…';
+              } else if (total == 0) {
+                label = 'No results';
+              } else {
+                label = '${index + 1} of $total';
+              }
+              final indexing = state.indexingProgress;
+              return Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (indexing != null) ...[
+                    Tooltip(
+                      message: 'Indexing older messages…',
+                      child: SizedBox.square(
+                        dimension: 14,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          value: indexing,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: AppSpacing.sm),
+                  ],
+                  Text(label, style: Theme.of(context).textTheme.labelMedium),
+                  IconButton(
+                    tooltip: 'Older match',
+                    icon: const Icon(Icons.keyboard_arrow_up_rounded),
+                    onPressed: index >= 0 && index < total - 1
+                        ? cubit.nextMatch
+                        : null,
+                  ),
+                  IconButton(
+                    tooltip: 'Newer match',
+                    icon: const Icon(Icons.keyboard_arrow_down_rounded),
+                    onPressed: index > 0 ? cubit.previousMatch : null,
+                  ),
+                ],
+              );
+            },
+          ),
           IconButton(
             icon: const Icon(Icons.close),
             onPressed: () {
@@ -274,13 +445,16 @@ class _ThreadScreenState extends State<ThreadScreen> {
       actions: [
         PopupMenuButton<String>(
           onSelected: (value) {
-            if (value == 'clear') {
+            if (value == 'date') {
+              _pickJumpDate();
+            } else if (value == 'clear') {
               _confirmClearMessages(context);
             } else if (value == 'delete') {
               _confirmDeleteThread(context);
             }
           },
           itemBuilder: (context) => const [
+            PopupMenuItem(value: 'date', child: Text('Jump to date')),
             PopupMenuItem(value: 'clear', child: Text('Clear messages')),
             PopupMenuItem(value: 'delete', child: Text('Delete thread')),
           ],
@@ -383,33 +557,28 @@ class _ThreadScreenState extends State<ThreadScreen> {
 
         final msgs = state.visibleMessages;
         if (msgs.isEmpty) {
+          _items = const [];
           return EmptyView(
-            icon: state.searchQuery.isEmpty
-                ? Icons.waving_hand_outlined
-                : Icons.search_off_outlined,
-            title: state.searchQuery.isEmpty ? 'No messages yet' : 'No matches',
-            subtitle: state.searchQuery.isEmpty
-                ? 'Say hello to ${widget.otherUser.displayName} — everything you '
-                      'send is end-to-end encrypted.'
-                : 'Nothing in this chat matches "${state.searchQuery}".',
+            icon: Icons.waving_hand_outlined,
+            title: 'No messages yet',
+            subtitle:
+                'Say hello to ${widget.otherUser.displayName} — everything you '
+                'send is end-to-end encrypted.',
           );
         }
 
         final cubit = context.read<ActiveThreadCubit>();
         final myUid = cubit.myUid;
 
-        // Paging while filtered would append messages the filter hides, so the
-        // spinner is only offered on the unfiltered list.
-        final showPagingSpinner = state.hasMore && state.searchQuery.isEmpty;
+        final showPagingSpinner = state.hasMore;
+        final items = _buildThreadItems(msgs, withDayDividers: true);
+        _items = items;
+        _renderedDetached = state.isDetached;
+        final matchIds = state.searchMatchIds.toSet();
 
-        // Day dividers are only meaningful on the unfiltered timeline.
-        final items = _buildThreadItems(
-          msgs,
-          withDayDividers: state.searchQuery.isEmpty,
-        );
-
-        return ListView.builder(
-          controller: _scrollCtrl,
+        return ScrollablePositionedList.builder(
+          itemScrollController: _itemScrollCtrl,
+          itemPositionsListener: _itemPositions,
           reverse: true,
           padding: const EdgeInsets.symmetric(
             horizontal: AppSpacing.sm,
@@ -445,7 +614,12 @@ class _ThreadScreenState extends State<ThreadScreen> {
               otherUid: widget.otherUser.uid,
               otherIsOnline: state.otherIsOnline,
               mediaLoader: widget.mediaLoader,
-              isHighlighted: _highlightedId == msg.messageId,
+              isHighlighted:
+                  _highlightedId == msg.messageId ||
+                  state.currentMatchId == msg.messageId,
+              highlightQuery: matchIds.contains(msg.messageId)
+                  ? state.searchQuery
+                  : '',
               isFirstInGroup: item.isFirstInGroup,
               isLastInGroup: item.isLastInGroup,
               onReply: () {
@@ -534,36 +708,177 @@ class _ThreadScreenState extends State<ThreadScreen> {
     return later.sentAt.difference(earlier.sentAt).abs() <= _groupWindow;
   }
 
-  /// Scroll to a quoted message and flash it.
-  ///
-  /// Only messages already paged in can be reached; the alternative would be
-  /// paging backwards an unbounded number of times to find an old quote.
-  void _jumpToMessage(String messageId) {
-    final state = context.read<ActiveThreadCubit>().state;
-    if (state is! ActiveThreadLoaded) return;
-    final index = state.visibleMessages.indexWhere(
-      (m) => m.messageId == messageId,
+  /// Scroll to a quoted message and flash it, loading it (with its
+  /// surrounding conversation) from local history if it is not on screen.
+  Future<void> _jumpToMessage(String messageId) async {
+    final found = await context.read<ActiveThreadCubit>().jumpToMessage(
+      messageId,
     );
-    if (index < 0) {
+    if (!mounted) return;
+    if (!found) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Original message not loaded yet.')),
+        const SnackBar(
+          content: Text('Original message is not on this device.'),
+        ),
       );
       return;
     }
-
-    // The list is reversed, so the index maps directly to distance from the
-    // bottom. An estimated extent is good enough to nudge it into view.
-    _scrollCtrl.animateTo(
-      (index * 72.0).clamp(0.0, _scrollCtrl.position.maxScrollExtent),
-      duration: const Duration(milliseconds: 300),
-      curve: Curves.easeOut,
-    );
     setState(() => _highlightedId = messageId);
     Future<void>.delayed(const Duration(milliseconds: 1200), () {
       if (mounted && _highlightedId == messageId) {
         setState(() => _highlightedId = null);
       }
     });
+  }
+
+  /// Honour a scroll request from the cubit (search match, quote, date,
+  /// scrollbar or jump-to-latest).
+  void _performScroll(ChatScrollRequest request) {
+    if (!_itemScrollCtrl.isAttached) return;
+    final id = request.messageId;
+    if (id == null) {
+      _itemScrollCtrl.jumpTo(index: 0);
+      _showJumpToLatest.value = false;
+      return;
+    }
+    final index = _items.indexWhere((i) => i.message?.messageId == id);
+    if (index < 0) return;
+    final positions = _itemPositions.itemPositions.value;
+    final near = positions.any((p) => (p.index - index).abs() < 30);
+    if (near) {
+      _itemScrollCtrl.scrollTo(
+        index: index,
+        alignment: 0.4,
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeOut,
+      );
+    } else {
+      // Animating across a freshly loaded window would flash every message
+      // in between; land on the target directly instead.
+      _itemScrollCtrl.jumpTo(index: index, alignment: 0.4);
+    }
+  }
+
+  /// Keep the message under the viewport still when rows are inserted or
+  /// dropped below it (newer paging, trimming, arrivals while scrolled up).
+  void _keepAnchor() {
+    if (!_itemScrollCtrl.isAttached) return;
+    final positions = _itemPositions.itemPositions.value.toList()
+      ..sort((a, b) => a.index.compareTo(b.index));
+    if (positions.isEmpty) return;
+    // Pinned to the latest message: let new messages scroll into view.
+    if (positions.first.index == 0 && !_renderedDetached) return;
+    ItemPosition? anchor;
+    String? anchorId;
+    for (final p in positions) {
+      if (p.index < _items.length && _items[p.index].message != null) {
+        anchor = p;
+        anchorId = _items[p.index].message!.messageId;
+        break;
+      }
+    }
+    if (anchor == null || anchorId == null) return;
+    final oldIndex = anchor.index;
+    final leadingEdge = anchor.itemLeadingEdge;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_itemScrollCtrl.isAttached) return;
+      final newIndex = _items.indexWhere(
+        (i) => i.message?.messageId == anchorId,
+      );
+      if (newIndex < 0 || newIndex == oldIndex) return;
+      _itemScrollCtrl.jumpTo(index: newIndex, alignment: leadingEdge);
+    });
+  }
+
+  Future<void> _pickJumpDate() async {
+    final cubit = context.read<ActiveThreadCubit>();
+    final bounds = await cubit.historyBounds();
+    if (!mounted) return;
+    if (bounds == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No messages saved on this device yet.')),
+      );
+      return;
+    }
+    final first = bounds.$1.toLocal();
+    final last = bounds.$2.toLocal();
+    final picked = await showDatePicker(
+      context: context,
+      firstDate: DateTime(first.year, first.month, first.day),
+      lastDate: DateTime(last.year, last.month, last.day),
+      initialDate: DateTime(last.year, last.month, last.day),
+      helpText: 'Jump to date',
+    );
+    if (picked == null || !mounted) return;
+    final found = await cubit.jumpToDate(picked);
+    if (!found && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No messages around that date.')),
+      );
+    }
+  }
+
+  /// Spinner shown while a detached window pages newer messages in.
+  Widget _buildLoadingNewer() {
+    // Always positioned: a non-positioned Stack child would size the Stack.
+    return Positioned(
+      left: 0,
+      right: 0,
+      bottom: 0,
+      child: BlocBuilder<ActiveThreadCubit, ActiveThreadState>(
+        buildWhen: (prev, next) =>
+            prev is! ActiveThreadLoaded ||
+            next is! ActiveThreadLoaded ||
+            prev.loadingNewer != next.loadingNewer,
+        builder: (context, state) {
+          final loading = state is ActiveThreadLoaded && state.loadingNewer;
+          if (!loading) return const SizedBox.shrink();
+          return const LinearProgressIndicator(minHeight: 2);
+        },
+      ),
+    );
+  }
+
+  /// WhatsApp-style "scroll to latest" button with a badge for messages
+  /// that arrived while viewing older history.
+  Widget _buildJumpToLatest() {
+    return Positioned(
+      right: AppSpacing.md,
+      bottom: AppSpacing.md,
+      child: BlocBuilder<ActiveThreadCubit, ActiveThreadState>(
+        buildWhen: (prev, next) =>
+            prev is! ActiveThreadLoaded ||
+            next is! ActiveThreadLoaded ||
+            prev.isDetached != next.isDetached ||
+            prev.newWhileDetached != next.newWhileDetached,
+        builder: (context, state) {
+          final loaded = state is ActiveThreadLoaded ? state : null;
+          return ValueListenableBuilder<bool>(
+            valueListenable: _showJumpToLatest,
+            builder: (context, show, _) {
+              final visible = (loaded?.isDetached ?? false) || show;
+              final count = loaded?.newWhileDetached ?? 0;
+              return AnimatedScale(
+                scale: visible ? 1 : 0,
+                duration: AppDuration.normal,
+                child: Badge(
+                  isLabelVisible: count > 0,
+                  label: Text('$count'),
+                  child: FloatingActionButton.small(
+                    heroTag: null,
+                    tooltip: 'Scroll to latest',
+                    onPressed: visible
+                        ? context.read<ActiveThreadCubit>().jumpToLatest
+                        : null,
+                    child: const Icon(Icons.keyboard_double_arrow_down_rounded),
+                  ),
+                ),
+              );
+            },
+          );
+        },
+      ),
+    );
   }
 
   Future<void> _confirmClearMessages(BuildContext context) async {
@@ -588,6 +903,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
       ),
     );
     if (ok != true || !mounted) return;
+    if (_searching) _stopSearch();
     final threadList = this.context.read<ThreadListCubit>();
     final activeThread = this.context.read<ActiveThreadCubit>();
     await threadList.clearThread(widget.thread.threadId);

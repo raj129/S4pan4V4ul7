@@ -6,6 +6,7 @@ import 'package:intl/intl.dart';
 import '../../../domain/entities/chat_message.dart';
 import '../../../domain/entities/message_metadata.dart';
 import '../../../domain/entities/message_reply.dart';
+import '../../../domain/search/chat_search_tokenizer.dart';
 import '../../theme/app_spacing.dart';
 import '../../theme/app_typography.dart';
 import '../../theme/chat_theme.dart';
@@ -41,6 +42,7 @@ class MessageBubble extends StatelessWidget {
     this.onCopy,
     this.canReplyFromLeftToRight = true,
     this.isHighlighted = false,
+    this.highlightQuery = '',
   });
 
   final ChatMessage message;
@@ -83,8 +85,12 @@ class MessageBubble extends StatelessWidget {
   /// Force every reply swipe to use the same left-to-right gesture.
   final bool canReplyFromLeftToRight;
 
-  /// Briefly tinted after the user jumps here from a quote.
+  /// Tinted after the user jumps here from a quote, or while this is the
+  /// current search match.
   final bool isHighlighted;
+
+  /// Search term whose occurrences are marked inside the message text.
+  final String highlightQuery;
 
   @override
   Widget build(BuildContext context) {
@@ -116,17 +122,27 @@ class MessageBubble extends StatelessWidget {
     );
 
     final bubble = bare
-        ? _BubbleContent(
-            message: message,
-            isMine: isMine,
-            myUid: myUid,
-            otherUid: otherUid,
-            otherIsOnline: otherIsOnline,
-            mediaLoader: mediaLoader,
-            onTapQuote: onTapQuote,
-            textColor: cs.onSurface,
-            metaColor: cs.onSurfaceVariant,
-            bare: true,
+        ? AnimatedContainer(
+            duration: AppDuration.normal,
+            decoration: BoxDecoration(
+              color: isHighlighted
+                  ? cs.tertiaryContainer
+                  : cs.tertiaryContainer.withValues(alpha: 0),
+              borderRadius: AppRadius.all(AppRadius.sm),
+            ),
+            child: _BubbleContent(
+              message: message,
+              isMine: isMine,
+              myUid: myUid,
+              otherUid: otherUid,
+              otherIsOnline: otherIsOnline,
+              mediaLoader: mediaLoader,
+              onTapQuote: onTapQuote,
+              textColor: cs.onSurface,
+              metaColor: cs.onSurfaceVariant,
+              bare: true,
+              highlightQuery: highlightQuery,
+            ),
           )
         : Material(
             color: isHighlighted ? cs.tertiaryContainer : bgColor,
@@ -149,9 +165,10 @@ class MessageBubble extends StatelessWidget {
                 otherIsOnline: otherIsOnline,
                 mediaLoader: mediaLoader,
                 onTapQuote: onTapQuote,
-                textColor: textColor,
-                metaColor: textColor,
+                textColor: isHighlighted ? cs.onTertiaryContainer : textColor,
+                metaColor: isHighlighted ? cs.onTertiaryContainer : textColor,
                 bare: false,
+                highlightQuery: highlightQuery,
               ),
             ),
           );
@@ -377,6 +394,7 @@ class _BubbleContent extends StatelessWidget {
     required this.textColor,
     required this.metaColor,
     required this.bare,
+    this.highlightQuery = '',
   });
 
   final ChatMessage message;
@@ -389,6 +407,7 @@ class _BubbleContent extends StatelessWidget {
   final Color textColor;
   final Color metaColor;
   final bool bare;
+  final String highlightQuery;
 
   @override
   Widget build(BuildContext context) {
@@ -441,7 +460,12 @@ class _BubbleContent extends StatelessWidget {
             padding: EdgeInsets.only(top: message.isMedia ? AppSpacing.sm : 0),
             child: bare
                 ? AnimatedEmojiText(text: text, playbackId: message.messageId)
-                : _MessageText(text: text, color: textColor, bare: false),
+                : _MessageText(
+                    text: text,
+                    color: textColor,
+                    bare: false,
+                    highlightQuery: highlightQuery,
+                  ),
           ),
         const SizedBox(height: AppSpacing.xxs),
         // `Row(mainAxisSize: min)` rather than `Align`: an unconstrained
@@ -877,23 +901,59 @@ class _MessageText extends StatelessWidget {
     required this.text,
     required this.color,
     required this.bare,
+    this.highlightQuery = '',
   });
 
   final String text;
   final Color color;
   final bool bare;
+  final String highlightQuery;
+
+  /// Split `text[from, to)` into plain and highlighted spans.
+  static List<InlineSpan> _highlightSpans(
+    String text,
+    int from,
+    int to,
+    List<(int, int)> ranges,
+    TextStyle highlight,
+  ) {
+    final spans = <InlineSpan>[];
+    var pos = from;
+    for (final (rs, re) in ranges) {
+      final s = rs < from ? from : rs;
+      final e = re > to ? to : re;
+      if (e <= s) continue;
+      if (s > pos) spans.add(TextSpan(text: text.substring(pos, s)));
+      spans.add(TextSpan(text: text.substring(s, e), style: highlight));
+      pos = e;
+    }
+    if (pos < to) spans.add(TextSpan(text: text.substring(pos, to)));
+    return spans;
+  }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    final highlight = TextStyle(
+      backgroundColor: cs.tertiary.withValues(alpha: 0.35),
+      fontWeight: FontWeight.w700,
+    );
+    // Word-prefix ranges, matching exactly what the search index matched.
+    final ranges = highlightQuery.trim().isEmpty
+        ? const <(int, int)>[]
+        : ChatSearchTokenizer.highlightRanges(text, highlightQuery);
     final spans = <InlineSpan>[];
     final regex = RegExp(r'(https?:\/\/[^\s]+)', caseSensitive: false);
     var start = 0;
     for (final match in regex.allMatches(text)) {
       if (match.start > start) {
-        spans.add(TextSpan(text: text.substring(start, match.start)));
+        spans.addAll(
+          _highlightSpans(text, start, match.start, ranges, highlight),
+        );
       }
       final raw = match.group(0)!;
+      final linkHit = ranges.any((r) => r.$1 < match.end && r.$2 > match.start);
       spans.add(
         WidgetSpan(
           alignment: PlaceholderAlignment.baseline,
@@ -911,6 +971,9 @@ class _MessageText extends StatelessWidget {
                         color: color,
                         decoration: TextDecoration.underline,
                         decorationColor: color.withValues(alpha: 0.8),
+                        backgroundColor: linkHit
+                            ? highlight.backgroundColor
+                            : null,
                       ),
             ),
           ),
@@ -919,7 +982,9 @@ class _MessageText extends StatelessWidget {
       start = match.end;
     }
     if (start < text.length) {
-      spans.add(TextSpan(text: text.substring(start)));
+      spans.addAll(
+        _highlightSpans(text, start, text.length, ranges, highlight),
+      );
     }
 
     return SelectableText.rich(

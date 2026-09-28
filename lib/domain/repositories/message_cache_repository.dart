@@ -14,8 +14,27 @@ abstract class MessageCacheRepository {
     DateTime? before,
   });
 
-  /// Every cached message in a thread, newest first. Backs in-chat search.
+  /// Every cached message in a thread, newest first.
   Future<List<ChatMessage>> loadAll(String threadId);
+
+  /// A single cached message by id.
+  Future<ChatMessage?> loadById(String messageId);
+
+  /// Oldest-first page of messages sent at or after [from].
+  Future<List<ChatMessage>> loadFrom({
+    required String threadId,
+    required DateTime from,
+    int limit = 50,
+  });
+
+  /// Number of cached messages, optionally only those older than [before].
+  Future<int> count(String threadId, {DateTime? before});
+
+  /// The cached message at [offset] counting from the oldest (0 = oldest).
+  Future<ChatMessage?> loadAtOffset(String threadId, int offset);
+
+  /// Send times of the oldest and newest cached message, or null if empty.
+  Future<(DateTime, DateTime)?> timeBounds(String threadId);
 
   /// Insert or refresh messages.
   Future<void> save(List<ChatMessage> messages);
@@ -119,6 +138,25 @@ class NoopMessageCacheRepository implements MessageCacheRepository {
 
   @override
   Future<List<ChatMessage>> loadAll(String threadId) async => const [];
+
+  @override
+  Future<ChatMessage?> loadById(String messageId) async => null;
+
+  @override
+  Future<List<ChatMessage>> loadFrom({
+    required String threadId,
+    required DateTime from,
+    int limit = 50,
+  }) async => const [];
+
+  @override
+  Future<int> count(String threadId, {DateTime? before}) async => 0;
+
+  @override
+  Future<ChatMessage?> loadAtOffset(String threadId, int offset) async => null;
+
+  @override
+  Future<(DateTime, DateTime)?> timeBounds(String threadId) async => null;
 
   @override
   Future<void> save(List<ChatMessage> messages) async {}

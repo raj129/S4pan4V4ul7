@@ -10,6 +10,8 @@ import '../../../domain/entities/chat_thread.dart';
 import '../../../domain/entities/chat_user.dart';
 import '../../../domain/entities/message_reply.dart';
 import '../../../domain/entities/user_presence.dart';
+import '../../../application/services/chat_search_indexer.dart';
+import '../../../domain/repositories/chat_search_index_repository.dart';
 import '../../../domain/repositories/message_cache_repository.dart';
 import '../../../domain/repositories/message_repository.dart';
 import '../../../domain/repositories/outbox_repository.dart';
@@ -31,6 +33,16 @@ class ActiveThreadLoading extends ActiveThreadState {
   const ActiveThreadLoading();
 }
 
+/// A request for the timeline to scroll to [messageId] (null = the latest
+/// message). [seq] makes repeated requests for the same target distinct.
+class ChatScrollRequest extends Equatable {
+  const ChatScrollRequest({required this.messageId, required this.seq});
+  final String? messageId;
+  final int seq;
+  @override
+  List<Object?> get props => [messageId, seq];
+}
+
 class ActiveThreadLoaded extends ActiveThreadState {
   const ActiveThreadLoaded({
     required this.thread,
@@ -44,6 +56,14 @@ class ActiveThreadLoaded extends ActiveThreadState {
     this.actionError,
     this.replyTarget,
     this.searchQuery = '',
+    this.searchMatchIds = const [],
+    this.currentMatchId,
+    this.searchInProgress = false,
+    this.isDetached = false,
+    this.loadingNewer = false,
+    this.newWhileDetached = 0,
+    this.indexingProgress,
+    this.scrollRequest,
   });
   final ChatThread thread;
   final ChatUser otherUser;
@@ -67,25 +87,48 @@ class ActiveThreadLoaded extends ActiveThreadState {
   /// Message staged for reply, shown as a quote above the composer.
   final ChatMessage? replyTarget;
 
-  /// Active in-thread search term; empty means no filtering.
+  /// Active in-thread search term; empty means no search.
+  ///
+  /// Search never filters the timeline: matches are highlighted in place so
+  /// the surrounding conversation stays readable, as in WhatsApp/Signal.
   final String searchQuery;
 
-  /// The messages actually rendered.
-  ///
-  /// Search runs over the decrypted in-memory buffer rather than the cache,
-  /// because the cache deliberately stores ciphertext only — there is nothing
-  /// there for SQL to match against.
-  List<ChatMessage> get visibleMessages {
-    final q = searchQuery.trim().toLowerCase();
-    if (q.isEmpty) return messages;
-    return messages
-        .where(
-          (m) =>
-              !m.deletedForEveryone &&
-              (m.localDecryptedText ?? '').toLowerCase().contains(q),
-        )
-        .toList();
-  }
+  /// Ids of messages matching [searchQuery], newest first.
+  final List<String> searchMatchIds;
+
+  /// The match the user is currently looking at (one of [searchMatchIds]).
+  final String? currentMatchId;
+
+  /// True while older history is being looked up in the local database.
+  final bool searchInProgress;
+
+  /// True when [messages] is a window into older history that does not
+  /// reach the latest message (after a search jump, jump-to-date or a long
+  /// scroll back). Newer messages page in from the local cache.
+  final bool isDetached;
+
+  /// True while a newer page is loading into a detached window.
+  final bool loadingNewer;
+
+  /// Messages that arrived while detached, shown as a badge on the
+  /// jump-to-latest button.
+  final int newWhileDetached;
+
+  /// 0..1 while older cached history is still being added to the search
+  /// index; null once everything is searchable.
+  final double? indexingProgress;
+
+  /// Latest scroll request for the screen to honour.
+  final ChatScrollRequest? scrollRequest;
+
+  bool get isSearching => searchQuery.trim().isNotEmpty;
+
+  /// Position of [currentMatchId] in [searchMatchIds], or -1.
+  int get currentMatchIndex =>
+      currentMatchId == null ? -1 : searchMatchIds.indexOf(currentMatchId!);
+
+  /// The messages actually rendered: always the full timeline.
+  List<ChatMessage> get visibleMessages => messages;
 
   ActiveThreadLoaded copyWith({
     List<ChatMessage>? messages,
@@ -99,6 +142,16 @@ class ActiveThreadLoaded extends ActiveThreadState {
     ChatMessage? replyTarget,
     bool clearReplyTarget = false,
     String? searchQuery,
+    List<String>? searchMatchIds,
+    String? currentMatchId,
+    bool clearCurrentMatch = false,
+    bool? searchInProgress,
+    bool? isDetached,
+    bool? loadingNewer,
+    int? newWhileDetached,
+    double? indexingProgress,
+    bool clearIndexingProgress = false,
+    ChatScrollRequest? scrollRequest,
   }) => ActiveThreadLoaded(
     thread: thread,
     otherUser: otherUser,
@@ -111,6 +164,18 @@ class ActiveThreadLoaded extends ActiveThreadState {
     actionError: clearActionError ? null : (actionError ?? this.actionError),
     replyTarget: clearReplyTarget ? null : (replyTarget ?? this.replyTarget),
     searchQuery: searchQuery ?? this.searchQuery,
+    searchMatchIds: searchMatchIds ?? this.searchMatchIds,
+    currentMatchId: clearCurrentMatch
+        ? null
+        : (currentMatchId ?? this.currentMatchId),
+    searchInProgress: searchInProgress ?? this.searchInProgress,
+    isDetached: isDetached ?? this.isDetached,
+    loadingNewer: loadingNewer ?? this.loadingNewer,
+    newWhileDetached: newWhileDetached ?? this.newWhileDetached,
+    indexingProgress: clearIndexingProgress
+        ? null
+        : (indexingProgress ?? this.indexingProgress),
+    scrollRequest: scrollRequest ?? this.scrollRequest,
   );
 
   @override
@@ -126,6 +191,14 @@ class ActiveThreadLoaded extends ActiveThreadState {
     actionError,
     replyTarget,
     searchQuery,
+    searchMatchIds,
+    currentMatchId,
+    searchInProgress,
+    isDetached,
+    loadingNewer,
+    newWhileDetached,
+    indexingProgress,
+    scrollRequest,
   ];
 }
 
@@ -159,8 +232,14 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
     required this.outbox,
     required this.cryptoService,
     required this.myUid,
+    ChatSearchIndexRepository searchIndex =
+        const NoopChatSearchIndexRepository(),
     Stream<List<ConnectivityResult>>? connectivityStream,
-  }) : super(const ActiveThreadLoading()) {
+  }) : _indexer = ChatSearchIndexer(
+         index: searchIndex,
+         cryptoService: cryptoService,
+       ),
+       super(const ActiveThreadLoading()) {
     // Auto-drain the outbox the moment connectivity is restored, instead of
     // only retrying the next time the user happens to reopen the thread —
     // this is what makes queued offline messages "send automatically once
@@ -189,6 +268,7 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
   final OutboxRepository outbox;
   final ChatCryptoService cryptoService;
   final String myUid;
+  final ChatSearchIndexer _indexer;
 
   StreamSubscription<List<ChatMessage>>? _messageSub;
   StreamSubscription<bool>? _typingSub;
@@ -217,6 +297,32 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
 
   /// True once [loadOlderMessages] has hit the start of the conversation.
   bool _reachedStart = false;
+
+  /// True while [_buffer] is a window into older history rather than the
+  /// live tail. Live snapshots then only refresh messages already on screen.
+  bool _detached = false;
+
+  /// The newest decrypted live snapshot, merged back in on reattach.
+  List<ChatMessage> _lastLive = const [];
+
+  /// Live messages already counted by the jump-to-latest badge.
+  final Set<String> _knownWhileDetached = {};
+
+  /// Messages kept either side of a jump target.
+  static const _windowRadius = 40;
+
+  /// Upper bound on the in-memory timeline, so scrolling through years of
+  /// history never holds (or lays out) more than a few hundred bubbles.
+  static const _maxBuffer = 300;
+
+  int _scrollSeq = 0;
+
+  /// What is indexed per message (hash of ciphertext + searchability), so
+  /// repeated live snapshots do not re-hash unchanged messages.
+  final Map<String, int> _indexedSig = {};
+
+  /// Bumped on every open so background work for a previous thread stops.
+  int _openGeneration = 0;
 
   static const _pageSize = 30;
 
@@ -293,6 +399,14 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
     _pending.clear();
     _reachedStart = false;
     _serverHistoryHidden = false;
+    _detached = false;
+    _lastLive = const [];
+    _knownWhileDetached.clear();
+    _indexedSig.clear();
+    _searchDebounce?.cancel();
+    _searchRefresh?.cancel();
+    _searchGeneration++;
+    final generation = ++_openGeneration;
 
     emit(const ActiveThreadLoading());
 
@@ -328,14 +442,20 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
         limit: _pageSize,
       );
       if (cached.isNotEmpty) {
-        _mergeIntoBuffer(
-          _afterClearWatermark(await _decryptAll(cached, thread.threadId)),
+        final decrypted = _afterClearWatermark(
+          await _decryptAll(cached, thread.threadId),
         );
+        _mergeIntoBuffer(decrypted);
         _emitMessages();
+        _indexMessages(thread.threadId, decrypted);
       }
     } catch (_) {
       // A cold or corrupt cache must never block opening the thread.
     }
+
+    // Fill the cache with everything that arrived while the thread was
+    // closed, then make the whole cached history searchable.
+    unawaited(_syncLocalHistory(thread.threadId, generation));
 
     // Mark as read without awaiting: offline, a Firestore write only completes
     // once the server acknowledges it, and waiting here used to keep the
@@ -363,14 +483,21 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
         .listen(
           (msgs) async {
             final decrypted = await _decryptAll(msgs, thread.threadId);
+            if (thread.threadId != _currentThreadId) return;
             final visible = _visibleFromServer(decrypted);
-            _mergeIntoBuffer(visible);
+            _lastLive = visible;
             _openTimeoutTimer?.cancel();
-            _emitMessages();
+            if (_detached && state is ActiveThreadLoaded) {
+              _applyLiveWhileDetached(visible);
+            } else {
+              _mergeIntoBuffer(visible);
+              _emitMessages();
+            }
             // Cache ciphertext, not the decrypted copies.
             unawaited(
               messageCache.save(_originalsOf(msgs, visible)).catchError((_) {}),
             );
+            _indexMessages(thread.threadId, visible);
           },
           onError: (e) {
             _openTimeoutTimer?.cancel();
@@ -456,6 +583,7 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
     OutboxItem item, {
     String? decryptedPreview,
   }) async {
+    if (_detached) await jumpToLatest();
     await outbox.enqueue(item);
     _showPending(item, decryptedPreview);
     await _deliver(item, decryptedPreview: decryptedPreview);
@@ -718,6 +846,15 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
         messageId: message.messageId,
         encryptedText: encrypted,
       );
+      final edited = _buffer[message.messageId]?.copyWith(
+        encryptedText: encrypted,
+        localDecryptedText: trimmed,
+        editedAt: DateTime.now().toUtc(),
+      );
+      if (edited != null) {
+        _buffer[message.messageId] = edited;
+        _indexMessages(threadId, [edited]);
+      }
       final current = state;
       if (current is ActiveThreadLoaded) {
         emit(
@@ -745,15 +882,564 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
   // Search
   // ---------------------------------------------------------------------------
 
-  /// Filter the thread to messages containing [query].
+  static const _searchDebounceDuration = Duration(milliseconds: 250);
+
+  /// Placeholder bodies that must never count as a match.
+  static const _unsearchableTexts = {
+    '🚫 Message deleted',
+    '🔒 Encrypted message',
+  };
+
+  Timer? _searchDebounce;
+
+  /// Re-runs the active query after new messages are indexed.
+  Timer? _searchRefresh;
+
+  /// Bumped per query so a slow lookup cannot apply results for stale input.
+  int _searchGeneration = 0;
+
+  /// Search the thread's whole local history for [query] and highlight the
+  /// matches in place, without hiding any messages. Jumps to the newest
+  /// match first.
+  ///
+  /// The lookup runs against the keyed local index, so it is a single
+  /// indexed query however many years of messages the thread holds.
   void setSearchQuery(String query) {
     final current = state;
     if (current is! ActiveThreadLoaded) return;
     if (current.searchQuery == query) return;
-    emit(current.copyWith(searchQuery: query));
+    _searchDebounce?.cancel();
+    _searchRefresh?.cancel();
+    final generation = ++_searchGeneration;
+    final trimmed = query.trim();
+    emit(
+      current.copyWith(
+        searchQuery: query,
+        searchMatchIds: const [],
+        clearCurrentMatch: true,
+        searchInProgress: trimmed.isNotEmpty,
+      ),
+    );
+    if (trimmed.isEmpty) return;
+    _searchDebounce = Timer(
+      _searchDebounceDuration,
+      () => _runSearch(trimmed, generation, jump: true),
+    );
   }
 
   void clearSearch() => setSearchQuery('');
+
+  /// Move to the next *older* match.
+  Future<void> nextMatch() => _stepMatch(1);
+
+  /// Move to the next *newer* match.
+  Future<void> previousMatch() => _stepMatch(-1);
+
+  Future<void> _stepMatch(int delta) async {
+    final current = state;
+    if (current is! ActiveThreadLoaded) return;
+    final ids = current.searchMatchIds;
+    if (ids.isEmpty) return;
+    final index = (current.currentMatchIndex + delta).clamp(0, ids.length - 1);
+    if (ids[index] == current.currentMatchId) return;
+    emit(current.copyWith(currentMatchId: ids[index]));
+    await jumpToMessage(ids[index]);
+  }
+
+  Future<void> _runSearch(
+    String query,
+    int generation, {
+    required bool jump,
+  }) async {
+    final threadId = _currentThreadId;
+    if (threadId == null) return;
+    List<String> ids;
+    try {
+      final hits = await _indexer.search(threadId, query);
+      final cutoff = _clearedBefore;
+      ids = [
+        for (final h in hits)
+          if (cutoff == null || h.sentAt.isAfter(cutoff)) h.messageId,
+      ];
+    } catch (_) {
+      ids = const [];
+    }
+    if (generation != _searchGeneration || threadId != _currentThreadId) {
+      return;
+    }
+    final current = state;
+    if (current is! ActiveThreadLoaded) return;
+    final keep = current.currentMatchId;
+    final String? currentId = keep != null && ids.contains(keep)
+        ? keep
+        : (ids.isEmpty ? null : ids.first);
+    emit(
+      current.copyWith(
+        searchMatchIds: ids,
+        currentMatchId: currentId,
+        clearCurrentMatch: currentId == null,
+        searchInProgress: false,
+      ),
+    );
+    if (jump && currentId != null) await jumpToMessage(currentId);
+  }
+
+  /// Refresh the result list (without moving) once more history is indexed.
+  void _scheduleSearchRefresh() {
+    final current = state;
+    if (current is! ActiveThreadLoaded || !current.isSearching) return;
+    _searchRefresh?.cancel();
+    final generation = _searchGeneration;
+    final query = current.searchQuery.trim();
+    _searchRefresh = Timer(const Duration(milliseconds: 400), () {
+      final latest = state;
+      if (generation != _searchGeneration ||
+          latest is! ActiveThreadLoaded ||
+          latest.searchInProgress) {
+        return;
+      }
+      unawaited(
+        _runSearch(query, generation, jump: latest.currentMatchId == null),
+      );
+    });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Local search index
+  // ---------------------------------------------------------------------------
+
+  /// The text a message contributes to search, or null if it has none.
+  String? _searchableText(ChatMessage m) {
+    if (m.isMedia || m.deletedForEveryone || m.isDeletedFor(myUid)) {
+      return null;
+    }
+    final text = m.localDecryptedText;
+    if (text == null || text.isEmpty || _unsearchableTexts.contains(text)) {
+      return null;
+    }
+    return text;
+  }
+
+  /// Index decrypted messages that changed since they were last indexed.
+  void _indexMessages(String threadId, Iterable<ChatMessage> msgs) {
+    final inputs = <ChatIndexInput>[];
+    for (final m in msgs) {
+      final text = _searchableText(m);
+      final sig = Object.hash(m.encryptedText, text == null);
+      if (_indexedSig[m.messageId] == sig) continue;
+      _indexedSig[m.messageId] = sig;
+      inputs.add((messageId: m.messageId, sentAt: m.sentAt, text: text));
+    }
+    if (inputs.isEmpty) return;
+    unawaited(
+      _indexer
+          .indexTexts(threadId, inputs)
+          .then((_) {
+            if (threadId == _currentThreadId) _scheduleSearchRefresh();
+          })
+          .catchError((Object _) {
+            for (final i in inputs) {
+              _indexedSig.remove(i.messageId);
+            }
+          }),
+    );
+  }
+
+  /// Catch the cache up with the server, then index any cached history that
+  /// is not yet searchable (e.g. restored from a backup, or cached before the
+  /// index existed).
+  Future<void> _syncLocalHistory(String threadId, int generation) async {
+    bool stale() => generation != _openGeneration || isClosed;
+    await _catchUpCache(threadId, stale);
+    if (stale()) return;
+    await _backfillIndex(threadId, stale);
+  }
+
+  static const _catchUpPage = 100;
+
+  /// Save every server message newer than the newest cached one, so local
+  /// search covers the whole conversation and not only what was scrolled.
+  Future<void> _catchUpCache(String threadId, bool Function() stale) async {
+    DateTime? cursor;
+    try {
+      cursor = (await messageCache.timeBounds(threadId))?.$2;
+    } catch (_) {
+      return;
+    }
+    // A cold cache has no gap to fill; live snapshots seed it.
+    if (cursor == null) return;
+    final horizon = _horizon;
+    if (horizon != null && horizon.isAfter(cursor)) cursor = horizon;
+    final cutoff = _clearedBefore;
+    if (cutoff != null && cutoff.isAfter(cursor)) cursor = cutoff;
+
+    while (!stale()) {
+      final List<ChatMessage> page;
+      try {
+        page = await messageRepository.loadAfter(
+          threadId: threadId,
+          after: cursor!,
+          limit: _catchUpPage,
+        );
+      } catch (_) {
+        return; // Offline: the next open retries.
+      }
+      if (page.isEmpty || stale()) return;
+      try {
+        await messageCache.save(page);
+        _indexMessages(threadId, await _decryptAll(page, threadId));
+      } catch (_) {
+        return;
+      }
+      final newest = page
+          .map((m) => m.sentAt)
+          .reduce((a, b) => a.isAfter(b) ? a : b);
+      if (page.length < _catchUpPage || !newest.isAfter(cursor)) return;
+      cursor = newest;
+    }
+  }
+
+  static const _backfillPage = 200;
+
+  Future<void> _backfillIndex(String threadId, bool Function() stale) async {
+    int total;
+    try {
+      total = await _indexer.index.countUnindexed(threadId);
+    } catch (_) {
+      return;
+    }
+    if (total == 0) return;
+    var done = 0;
+    var previousFirst = '';
+    try {
+      while (!stale()) {
+        final batch = await _indexer.index.unindexed(
+          threadId,
+          limit: _backfillPage,
+        );
+        // Guard against a row that can never be indexed looping forever.
+        if (batch.isEmpty || batch.first.messageId == previousFirst) break;
+        previousFirst = batch.first.messageId;
+        final decrypted = await _decryptAll(batch, threadId);
+        await _indexer.indexTexts(threadId, [
+          for (final m in decrypted)
+            (
+              messageId: m.messageId,
+              sentAt: m.sentAt,
+              text: _searchableText(m),
+            ),
+        ]);
+        for (final m in decrypted) {
+          _indexedSig[m.messageId] = Object.hash(
+            m.encryptedText,
+            _searchableText(m) == null,
+          );
+        }
+        done += batch.length;
+        final current = state;
+        if (stale() || current is! ActiveThreadLoaded) break;
+        emit(current.copyWith(indexingProgress: (done / total).clamp(0, 1)));
+        _scheduleSearchRefresh();
+        if (batch.length < _backfillPage) break;
+      }
+    } catch (_) {
+      // Unindexed rows are picked up again on the next open.
+    }
+    final current = state;
+    if (!stale() && current is ActiveThreadLoaded) {
+      emit(current.copyWith(clearIndexingProgress: true));
+      _scheduleSearchRefresh();
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Timeline window (jump to message / date / position, latest)
+  // ---------------------------------------------------------------------------
+
+  void _requestScroll(String? messageId) {
+    final current = state;
+    if (current is! ActiveThreadLoaded) return;
+    emit(
+      current.copyWith(
+        scrollRequest: ChatScrollRequest(
+          messageId: messageId,
+          seq: ++_scrollSeq,
+        ),
+      ),
+    );
+  }
+
+  /// Bring [messageId] into the timeline and scroll to it, loading the
+  /// surrounding conversation from the local cache if it is not in memory.
+  ///
+  /// Returns false if the message is not available locally.
+  Future<bool> jumpToMessage(String messageId) async {
+    final threadId = _currentThreadId;
+    if (threadId == null || state is! ActiveThreadLoaded) return false;
+    if (_buffer.containsKey(messageId) || _pending.containsKey(messageId)) {
+      _requestScroll(messageId);
+      return true;
+    }
+    try {
+      final target = await messageCache.loadById(messageId);
+      if (target == null || target.threadId != threadId) return false;
+      final older = await messageCache.load(
+        threadId: threadId,
+        limit: _windowRadius,
+        before: target.sentAt,
+      );
+      final newer = await messageCache.loadFrom(
+        threadId: threadId,
+        from: target.sentAt,
+        limit: _windowRadius + 1,
+      );
+      final decrypted = _afterClearWatermark(
+        await _decryptAll([...older, ...newer], threadId),
+      );
+      if (threadId != _currentThreadId) return false;
+      final reachesLatest = await _reachesLatest(
+        threadId,
+        newer,
+        _windowRadius + 1,
+      );
+      _replaceWindow(decrypted, reachesLatest: reachesLatest);
+      _reachedStart = false;
+      _emitMessages(hasMore: true, loadingOlder: false, loadingNewer: false);
+      _requestScroll(messageId);
+      _indexMessages(threadId, decrypted);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// True if [page] (oldest first, fetched with [limit]) ends at the newest
+  /// cached message.
+  Future<bool> _reachesLatest(
+    String threadId,
+    List<ChatMessage> page,
+    int limit,
+  ) async {
+    if (page.length < limit) return true;
+    final bounds = await messageCache.timeBounds(threadId);
+    return bounds == null || !page.last.sentAt.isBefore(bounds.$2);
+  }
+
+  /// Scroll to the first message on or after [day] (or the last one before
+  /// it if nothing was sent that day or later).
+  Future<bool> jumpToDate(DateTime day) async {
+    final threadId = _currentThreadId;
+    if (threadId == null) return false;
+    try {
+      final from = DateTime(day.year, day.month, day.day).toUtc();
+      final after = await messageCache.loadFrom(
+        threadId: threadId,
+        from: from,
+        limit: 1,
+      );
+      final target = after.isNotEmpty
+          ? after.first
+          : (await messageCache.load(
+              threadId: threadId,
+              limit: 1,
+              before: from,
+            )).firstOrNull;
+      if (target == null) return false;
+      return jumpToMessage(target.messageId);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Jump to a relative position in the cached history: 0 = the first
+  /// message, 1 = the latest. Backs the draggable scrollbar.
+  Future<void> jumpToFraction(double fraction) async {
+    final threadId = _currentThreadId;
+    if (threadId == null) return;
+    try {
+      final total = await messageCache.count(threadId);
+      if (total == 0) return;
+      final offset = (fraction.clamp(0.0, 1.0) * (total - 1)).round();
+      if (offset >= total - _pageSize) {
+        await jumpToLatest();
+        return;
+      }
+      final target = await messageCache.loadAtOffset(threadId, offset);
+      if (target != null) await jumpToMessage(target.messageId);
+    } catch (_) {}
+  }
+
+  /// Where [message] sits in the cached history, 0 (first) .. 1 (latest),
+  /// for positioning the scrollbar thumb.
+  Future<double?> positionOf(ChatMessage message) async {
+    final threadId = _currentThreadId;
+    if (threadId == null) return null;
+    try {
+      final total = await messageCache.count(threadId);
+      if (total <= 1) return 1;
+      final older = await messageCache.count(threadId, before: message.sentAt);
+      return (older / (total - 1)).clamp(0.0, 1.0);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Send time of the message at [fraction] of the cached history, for the
+  /// scrollbar's date bubble while dragging.
+  Future<DateTime?> dateAtFraction(double fraction) async {
+    final threadId = _currentThreadId;
+    if (threadId == null) return null;
+    try {
+      final total = await messageCache.count(threadId);
+      if (total == 0) return null;
+      final offset = (fraction.clamp(0.0, 1.0) * (total - 1)).round();
+      return (await messageCache.loadAtOffset(threadId, offset))?.sentAt;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// The date range of the cached history, for the jump-to-date picker.
+  Future<(DateTime, DateTime)?> historyBounds() async {
+    final threadId = _currentThreadId;
+    if (threadId == null) return null;
+    try {
+      return await messageCache.timeBounds(threadId);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Leave a detached window and return to the live conversation.
+  Future<void> jumpToLatest() async {
+    final threadId = _currentThreadId;
+    if (threadId == null) return;
+    if (_detached) {
+      _buffer.clear();
+      try {
+        final cached = await messageCache.load(
+          threadId: threadId,
+          limit: _pageSize,
+        );
+        _mergeIntoBuffer(
+          _afterClearWatermark(await _decryptAll(cached, threadId)),
+        );
+      } catch (_) {}
+      _mergeIntoBuffer(_lastLive);
+      _detached = false;
+      _knownWhileDetached.clear();
+      _reachedStart = false;
+      _emitMessages(
+        hasMore: true,
+        loadingOlder: false,
+        loadingNewer: false,
+        newWhileDetached: 0,
+      );
+    }
+    _requestScroll(null);
+  }
+
+  /// Page newer messages into a detached window from the local cache,
+  /// reattaching to the live conversation once the latest is reached.
+  Future<void> loadNewerMessages() async {
+    final current = state;
+    final threadId = _currentThreadId;
+    if (!_detached || threadId == null) return;
+    if (current is! ActiveThreadLoaded || current.loadingNewer) return;
+    if (_buffer.isEmpty) return;
+    emit(current.copyWith(loadingNewer: true));
+    try {
+      final newest = _sortedBuffer().first.sentAt;
+      final page = await messageCache.loadFrom(
+        threadId: threadId,
+        from: newest,
+        limit: _pageSize + 1,
+      );
+      final fresh = page.where((m) => !_buffer.containsKey(m.messageId));
+      final decrypted = _afterClearWatermark(
+        await _decryptAll(fresh.toList(), threadId),
+      );
+      if (threadId != _currentThreadId) return;
+      _mergeIntoBuffer(decrypted);
+      _indexMessages(threadId, decrypted);
+      if (await _reachesLatest(threadId, page, _pageSize + 1)) {
+        // Caught up: resume live updates without moving the viewport.
+        _mergeIntoBuffer(_lastLive);
+        _detached = false;
+        _knownWhileDetached.clear();
+        _trimOldest();
+        _emitMessages(loadingNewer: false, newWhileDetached: 0);
+        return;
+      }
+      _trimOldest();
+      _emitMessages(loadingNewer: false);
+    } catch (_) {
+      _emitMessages(loadingNewer: false);
+    }
+  }
+
+  /// Replace the timeline with [window], detaching from live updates unless
+  /// it already reaches the latest message.
+  void _replaceWindow(List<ChatMessage> window, {required bool reachesLatest}) {
+    _buffer.clear();
+    _mergeIntoBuffer(window);
+    if (reachesLatest) {
+      _mergeIntoBuffer(_lastLive);
+      _detached = false;
+      _knownWhileDetached.clear();
+    } else {
+      _detach();
+    }
+  }
+
+  void _detach() {
+    if (_detached) return;
+    _detached = true;
+    _knownWhileDetached
+      ..clear()
+      ..addAll(_lastLive.map((m) => m.messageId));
+  }
+
+  /// While detached, refresh messages already on screen (reactions, edits,
+  /// deletions) and count genuinely new arrivals for the badge.
+  void _applyLiveWhileDetached(List<ChatMessage> visible) {
+    var arrived = 0;
+    for (final m in visible) {
+      _pending.remove(m.messageId);
+      if (_buffer.containsKey(m.messageId)) {
+        _buffer[m.messageId] = m;
+      } else if (_knownWhileDetached.add(m.messageId) && m.senderId != myUid) {
+        arrived++;
+      }
+    }
+    final current = state;
+    _emitMessages(
+      newWhileDetached: current is ActiveThreadLoaded
+          ? current.newWhileDetached + arrived
+          : arrived,
+    );
+  }
+
+  /// Keep the buffer bounded after paging newer: drop the oldest messages.
+  void _trimOldest() {
+    if (_buffer.length <= _maxBuffer) return;
+    final sorted = _sortedBuffer();
+    for (final m in sorted.skip(_maxBuffer)) {
+      _buffer.remove(m.messageId);
+    }
+    _reachedStart = false;
+  }
+
+  /// Keep the buffer bounded after paging older: drop the newest messages,
+  /// which detaches the timeline from the live tail.
+  void _trimNewest() {
+    if (_buffer.length <= _maxBuffer) return;
+    final sorted = _sortedBuffer();
+    for (final m in sorted.take(sorted.length - _maxBuffer)) {
+      _buffer.remove(m.messageId);
+    }
+    _detach();
+  }
 
   /// Other conversations this message can be forwarded into.
   Future<List<ForwardTarget>> loadForwardTargets() async {
@@ -944,9 +1630,11 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
       final decrypted = await _decryptAll(older, threadId);
       final visible = _visibleFromServer(decrypted);
       _mergeIntoBuffer(visible);
+      _trimNewest();
       unawaited(
         messageCache.save(_originalsOf(older, visible)).catchError((_) {}),
       );
+      _indexMessages(threadId, visible);
       if (_serverHistoryHidden) {
         await _loadOlderFromCache(threadId, oldest);
         return;
@@ -974,6 +1662,7 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
         _mergeIntoBuffer(
           _afterClearWatermark(await _decryptAll(cached, threadId)),
         );
+        _trimNewest();
         _emitMessages(loadingOlder: false);
       } catch (_) {
         _emitMessages(
@@ -994,6 +1683,7 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
       _mergeIntoBuffer(
         _afterClearWatermark(await _decryptAll(cached, threadId)),
       );
+      _trimNewest();
       _reachedStart = cached.length < _pageSize;
       _emitMessages(hasMore: !_reachedStart, loadingOlder: false);
     } catch (e) {
@@ -1023,9 +1713,12 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
     final list = _buffer.values.toList();
     // Queued messages that Firestore has not acknowledged yet. A pending entry
     // is dropped as soon as the real one lands under the same id, so a
-    // delivered message is never shown twice.
-    for (final entry in _pending.entries) {
-      if (!_buffer.containsKey(entry.key)) list.add(entry.value);
+    // delivered message is never shown twice. They belong at the live tail,
+    // so a detached window into older history does not show them.
+    if (!_detached) {
+      for (final entry in _pending.entries) {
+        if (!_buffer.containsKey(entry.key)) list.add(entry.value);
+      }
     }
     list.sort((a, b) {
       final byTime = b.sentAt.compareTo(a.sentAt);
@@ -1038,6 +1731,8 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
   void _emitMessages({
     bool? hasMore,
     bool? loadingOlder,
+    bool? loadingNewer,
+    int? newWhileDetached,
     String? actionError,
     bool clearActionError = false,
   }) {
@@ -1050,6 +1745,9 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
           messages: messages,
           hasMore: hasMore,
           loadingOlder: loadingOlder,
+          loadingNewer: loadingNewer,
+          isDetached: _detached,
+          newWhileDetached: newWhileDetached,
           actionError: actionError,
           clearActionError: clearActionError,
         ),
@@ -1065,6 +1763,7 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
           loadingOlder: loadingOlder ?? false,
           actionError: actionError,
           isOffline: _isOffline,
+          isDetached: _detached,
         ),
       );
     }
@@ -1162,6 +1861,8 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
     // Drop the cached ciphertext too, otherwise the deleted body would still
     // be recoverable from local storage.
     await messageCache.remove(message.messageId);
+    await _indexer.remove([message.messageId]).catchError((_) {});
+    _indexedSig.remove(message.messageId);
   }
 
   // ---------------------------------------------------------------------------
@@ -1216,6 +1917,9 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
     _typingSub?.cancel();
     _presenceSub?.cancel();
     _typingDebounce?.cancel();
+    _searchDebounce?.cancel();
+    _searchRefresh?.cancel();
+    _openGeneration++;
     _openTimeoutTimer?.cancel();
     _connectivitySub?.cancel();
     if (_currentThreadId != null) {

@@ -48,6 +48,18 @@ class ChatCryptoService {
   final _plaintextCache = <String, String>{};
   static const _plaintextCacheLimit = 500;
 
+  /// Thread keys already read from secure storage.
+  ///
+  /// A Keystore read per message made decrypting a long history (search
+  /// indexing, catch-up) take minutes; the key is already in process memory
+  /// while a thread is open, so holding it here adds no new exposure.
+  final _threadKeyCache = <String, SecretKey>{};
+
+  /// Per-thread search index keys, derived from the thread key.
+  final _searchKeyCache = <String, Uint8List>{};
+
+  static const _searchHkdfContext = 'photo_vault/chat/search-key/v1';
+
   // ---------------------------------------------------------------------------
   // Identity key pair
   // ---------------------------------------------------------------------------
@@ -195,16 +207,46 @@ class ChatCryptoService {
   }
 
   Future<SecretKey> _loadThreadKey(String threadId) async {
+    final cached = _threadKeyCache[threadId];
+    if (cached != null) return cached;
     final b64 = await _storage.read(key: '$_threadKeyPrefix$threadId');
     if (b64 == null) {
       throw StateError('No thread key for $threadId. Call deriveAndStoreThreadKey first.');
     }
-    return SecretKey(base64.decode(b64));
+    return _threadKeyCache[threadId] = SecretKey(base64.decode(b64));
+  }
+
+  /// Key for the thread's local search index.
+  ///
+  /// Derived from, but never equal to, the message key, so index tokens
+  /// (keyed hashes of words) cannot be used to attack message ciphertext.
+  Future<Uint8List> searchKey(String threadId) async {
+    final cached = _searchKeyCache[threadId];
+    if (cached != null) return cached;
+    final threadKey = await _loadThreadKey(threadId);
+    final hkdf = Hkdf(hmac: Hmac.sha256(), outputLength: 32);
+    final derived = await hkdf.deriveKey(
+      secretKey: threadKey,
+      nonce: const <int>[],
+      info: utf8.encode('$_searchHkdfContext/$threadId'),
+    );
+    return _searchKeyCache[threadId] = Uint8List.fromList(
+      await derived.extractBytes(),
+    );
+  }
+
+  /// Forget every key held in memory (e.g. when the app locks).
+  void clearKeyCache() {
+    _threadKeyCache.clear();
+    _searchKeyCache.clear();
+    _plaintextCache.clear();
   }
 
   /// Delete the stored thread key (triggers rekeying on next message).
   Future<void> deleteThreadKey(String threadId) async {
     await _storage.delete(key: '$_threadKeyPrefix$threadId');
+    _threadKeyCache.remove(threadId);
+    _searchKeyCache.remove(threadId);
     _plaintextCache.clear();
   }
 
@@ -216,7 +258,7 @@ class ChatCryptoService {
         await _storage.delete(key: key);
       }
     }
-    _plaintextCache.clear();
+    clearKeyCache();
   }
 
   /// Wipes the identity key pair and every derived thread key.
