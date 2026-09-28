@@ -111,9 +111,16 @@ service cloud.firestore {
       match /messages/{messageId} {
         allow read: if isThreadParticipant(threadId);
 
+        // The parent thread must already exist and list the sender, so a
+        // message (and the push it triggers) cannot be written into an
+        // arbitrary "<me>_<victim>" path that was never set up as a thread.
         allow create: if isThreadParticipant(threadId)
                       && request.resource.data.senderId == request.auth.uid
-                      && request.resource.data.threadId == threadId;
+                      && request.resource.data.threadId == threadId
+                      && exists(/databases/$(database)/documents/threads/$(threadId))
+                      && request.auth.uid in
+                         get(/databases/$(database)/documents/threads/$(threadId))
+                           .data.participantIds;
 
         // The sender may edit or tombstone their own message. Everyone else in
         // the thread is limited to reactions, read receipts and delete-for-me,
@@ -135,6 +142,11 @@ service cloud.firestore {
       match /meta/{docId} {
         allow read, write: if isThreadParticipant(threadId);
       }
+    }
+
+    // Push rate-limit bookkeeping, written only by Cloud Functions (Admin SDK).
+    match /pushThrottle/{docId} {
+      allow read, write: if false;
     }
 
     // Anything not matched above is denied.

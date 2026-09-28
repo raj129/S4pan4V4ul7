@@ -84,6 +84,35 @@ class ChatMessage extends Equatable {
 
   bool get isMedia => mediaRef != null;
 
+  bool get isDocument => isMedia && mediaType == MessageType.file;
+
+  /// Thread-list / quote placeholder for an attachment of [type].
+  ///
+  /// Documents carry their file name in the (encrypted) message body rather
+  /// than in clear-text metadata, so the name never reaches the server.
+  static String mediaPreviewFor(MessageType? type, {String? filename}) =>
+      switch (type) {
+        MessageType.video => '🎥 Video',
+        MessageType.file =>
+          filename == null || filename.isEmpty ? '📎 Document' : '📎 $filename',
+        _ => '📷 Photo',
+      };
+
+  /// Placeholder used when quoting or forwarding this attachment.
+  String get mediaPreview => isDocument
+      ? (localDecryptedText?.isNotEmpty == true
+            ? localDecryptedText!
+            : mediaPreviewFor(MessageType.file))
+      : mediaPreviewFor(mediaType);
+
+  /// Original file name of a document attachment, recovered from the body.
+  String? get documentName {
+    if (!isDocument) return null;
+    final text = localDecryptedText;
+    if (text == null || text.isEmpty) return null;
+    return text.startsWith('📎 ') ? text.substring('📎 '.length) : text;
+  }
+
   bool get isEdited => editedAt != null;
 
   bool get isReply => replyTo != null;

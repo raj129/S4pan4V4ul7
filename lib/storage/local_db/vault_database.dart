@@ -282,6 +282,9 @@ class OutboxMessages extends Table {
   /// `MessageReply.toFirestore()` JSON, if this is a reply.
   TextColumn get replyJson => text().nullable()();
 
+  /// `MediaMeta.toFirestore()` JSON for attachments (added in schema v5).
+  TextColumn get mediaMetaJson => text().nullable()();
+
   IntColumn get queuedAtMs => integer()();
   IntColumn get attempts => integer().withDefault(const Constant(0))();
   TextColumn get lastError => text().nullable()();
@@ -321,7 +324,7 @@ class VaultDatabase extends _$VaultDatabase {
   VaultDatabase.forTesting(super.executor);
 
   @override
-  int get schemaVersion => 4;
+  int get schemaVersion => 5;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -343,6 +346,11 @@ class VaultDatabase extends _$VaultDatabase {
       // are indexed lazily the next time their thread is opened.
       if (from < 4) {
         await _createChatSearchSchema();
+      }
+      // v5 added attachment metadata to the outbox. A v3 table is created
+      // with the column already, so only add it to pre-existing tables.
+      if (from >= 3 && from < 5) {
+        await m.addColumn(outboxMessages, outboxMessages.mediaMetaJson);
       }
     },
   );

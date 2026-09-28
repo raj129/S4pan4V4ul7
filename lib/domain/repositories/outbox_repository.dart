@@ -17,6 +17,7 @@ class OutboxItem {
     required this.queuedAt,
     this.mediaType,
     this.mediaRef,
+    this.mediaMeta,
     this.replyTo,
     this.attempts = 0,
     this.lastError,
@@ -38,6 +39,9 @@ class OutboxItem {
   /// Set once the media upload has succeeded, so a retry does not re-upload.
   final String? mediaRef;
 
+  /// Layout hints (dimensions, size) sent alongside the attachment.
+  final MediaMeta? mediaMeta;
+
   final MessageReply? replyTo;
   final DateTime queuedAt;
   final int attempts;
@@ -54,6 +58,7 @@ class OutboxItem {
         queuedAt: queuedAt,
         mediaType: mediaType,
         mediaRef: mediaRef ?? this.mediaRef,
+        mediaMeta: mediaMeta,
         replyTo: replyTo,
         attempts: attempts ?? this.attempts,
         lastError: lastError ?? this.lastError,
@@ -69,6 +74,7 @@ class OutboxItem {
     deletedFor: const [],
     mediaRef: mediaRef,
     mediaType: mediaType,
+    mediaMeta: mediaMeta,
     replyTo: replyTo,
     status: attempts > 0 ? MessageStatus.failed : MessageStatus.sending,
   );

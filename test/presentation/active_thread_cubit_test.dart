@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:image/image.dart' as img;
 import 'package:photo_vault/crypto/services/chat_crypto_service.dart';
 import 'package:photo_vault/domain/entities/chat_message.dart';
 import 'package:photo_vault/domain/entities/chat_thread.dart';
@@ -50,6 +51,12 @@ class _PassThroughCrypto implements ChatCryptoService {
   @override
   Future<Uint8List> searchKey(String threadId) async =>
       Uint8List.fromList(List.filled(32, 7));
+
+  @override
+  Future<Uint8List> encryptMedia({
+    required String threadId,
+    required Uint8List bytes,
+  }) async => bytes;
 
   @override
   dynamic noSuchMethod(Invocation invocation) =>
@@ -128,6 +135,7 @@ class _FakeMessageRepository implements MessageRepository {
       deletedFor: const [],
       mediaRef: mediaRef,
       mediaType: mediaType,
+      mediaMeta: mediaMeta,
       replyTo: replyTo,
       isForwarded: isForwarded,
       status: MessageStatus.sent,
@@ -265,6 +273,7 @@ void main() {
   late _FakeThreadRepository threads;
   late _MemoryOutbox outbox;
   late ActiveThreadCubit cubit;
+  late _FakeMediaRepository media;
   late StreamController<List<ConnectivityResult>> connectivity;
 
   ActiveThreadCubit build({
@@ -278,7 +287,7 @@ void main() {
     userRepository: _FakeUserRepository(),
     typingRepository: _FakeTypingRepository(),
     presenceRepository: _FakePresenceRepository(),
-    mediaRepository: _FakeMediaRepository(),
+    mediaRepository: media,
     messageCache: messageCache,
     searchIndex: searchIndex,
     outbox: outbox,
@@ -291,6 +300,7 @@ void main() {
     messages = _FakeMessageRepository();
     threads = _FakeThreadRepository();
     outbox = _MemoryOutbox();
+    media = _FakeMediaRepository();
     connectivity = StreamController<List<ConnectivityResult>>.broadcast();
     cubit = build();
   });
@@ -818,6 +828,62 @@ void main() {
       expect(messages.sent, isEmpty);
     });
   });
+
+  group('attachments', () {
+    test('a document is sent with its name only in the encrypted body', () async {
+      await open();
+
+      await cubit.sendMedia(
+        messageId: 'doc1',
+        rawBytes: [1, 2, 3],
+        type: MessageType.file,
+        filename: 'report.pdf',
+      );
+
+      final sent = messages.sent.single;
+      expect(sent.mediaType, MessageType.file);
+      expect(sent.encryptedText, '📎 report.pdf');
+      expect(sent.mediaRef, 'chat_media/me_other/doc1/doc1.bin.enc');
+      // The storage object name must not reveal the file type.
+      expect(media.uploadedNames.single, 'doc1.bin.enc');
+      expect(sent.mediaMeta?.sizeBytes, 3);
+      expect(sent.mediaMeta?.filename, isNull);
+      expect(threads.unreadBumps, ['other']);
+      expect(outbox.items, isEmpty);
+    });
+
+    test('an image records its dimensions for the placeholder', () async {
+      await open();
+      final png = img.encodePng(img.Image(width: 4, height: 2));
+
+      await cubit.sendMedia(
+        messageId: 'img1',
+        rawBytes: png,
+        type: MessageType.image,
+      );
+
+      final meta = messages.sent.single.mediaMeta!;
+      expect(meta.width, 4);
+      expect(meta.height, 2);
+      expect(meta.sizeBytes, png.length);
+      expect(media.uploadedNames.single, 'img1.jpg.enc');
+    });
+
+    test('an attachment over the Storage limit is rejected up front', () async {
+      await open();
+
+      await cubit.sendMedia(
+        messageId: 'big',
+        rawBytes: Uint8List(ActiveThreadCubit.maxAttachmentBytes + 1),
+        type: MessageType.file,
+        filename: 'huge.zip',
+      );
+
+      expect(media.uploadedNames, isEmpty);
+      expect(outbox.items, isEmpty);
+      expect(messages.sent, isEmpty);
+    });
+  });
 }
 
 class _FakeUserRepository implements UserRepository {
@@ -827,6 +893,21 @@ class _FakeUserRepository implements UserRepository {
 }
 
 class _FakeMediaRepository implements MediaRepository {
+  /// Storage object names passed to [uploadEncryptedMedia].
+  final List<String> uploadedNames = [];
+
+  @override
+  Future<String> uploadEncryptedMedia({
+    required String threadId,
+    required String messageId,
+    required String filename,
+    required Uint8List encryptedBytes,
+    void Function(double progress)? onProgress,
+  }) async {
+    uploadedNames.add(filename);
+    return 'chat_media/$threadId/$messageId/$filename';
+  }
+
   @override
   dynamic noSuchMethod(Invocation invocation) =>
       throw UnimplementedError('${invocation.memberName} not needed');

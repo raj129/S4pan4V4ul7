@@ -450,12 +450,19 @@ class _BubbleContent extends StatelessWidget {
                 ? null
                 : () => onTapQuote!(message.replyTo!.messageId),
           ),
-        if (message.isMedia)
+        if (message.isDocument)
+          ChatDocumentTile(
+            message: message,
+            loader: mediaLoader,
+            textColor: textColor,
+          )
+        else if (message.isMedia)
           ClipRRect(
             borderRadius: AppRadius.all(AppRadius.sm),
             child: ChatMediaPreview(message: message, loader: mediaLoader),
           ),
-        if (text != null && text.isNotEmpty)
+        // A document's body is its file name, already shown in the tile.
+        if (text != null && text.isNotEmpty && !message.isDocument)
           Padding(
             padding: EdgeInsets.only(top: message.isMedia ? AppSpacing.sm : 0),
             child: bare

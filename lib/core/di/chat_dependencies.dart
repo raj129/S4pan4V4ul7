@@ -4,11 +4,13 @@ import '../../application/services/chat_identity_service.dart';
 import '../../application/services/chat_notification_service.dart';
 import '../../application/services/contact_discovery_service.dart';
 import '../../application/services/presence_service.dart';
+import '../../application/services/push_notification_service.dart';
 import '../../application/services/vault_session.dart';
 import '../../crypto/services/chat_crypto_service.dart';
 import '../../data/repositories_impl/drift_chat_search_index_repository.dart';
 import '../../data/repositories_impl/drift_message_cache_repository.dart';
 import '../../data/repositories_impl/drift_outbox_repository.dart';
+import '../../data/repositories_impl/firestore_push_token_repository.dart';
 import '../../data/repositories_impl/google_drive_chat_backup_store.dart';
 import '../../data/repositories_impl/local_chat_backup_store.dart';
 import '../../data/repositories_impl/firestore_message_repository.dart';
@@ -22,6 +24,7 @@ import '../../domain/repositories/message_cache_repository.dart';
 import '../../domain/repositories/outbox_repository.dart';
 import '../../domain/repositories/message_repository.dart';
 import '../../domain/repositories/presence_repository.dart';
+import '../../domain/repositories/push_token_repository.dart';
 import '../../domain/repositories/thread_repository.dart';
 import '../../domain/repositories/typing_repository.dart';
 import '../../domain/repositories/user_repository.dart';
@@ -49,9 +52,13 @@ class ChatDependencies {
     PresenceRepository? presenceRepository,
     TypingRepository? typingRepository,
     ChatCryptoService? cryptoService,
+    PushTokenRepository? pushTokenRepository,
   }) : _authRepository = authRepository,
        _vaultSession = vaultSession,
        _database = database {
+    if (pushTokenRepository != null) {
+      this.pushTokenRepository = pushTokenRepository;
+    }
     if (userRepository != null) this.userRepository = userRepository;
     if (threadRepository != null) this.threadRepository = threadRepository;
     if (messageRepository != null) this.messageRepository = messageRepository;
@@ -124,6 +131,18 @@ class ChatDependencies {
         threadRepository: threadRepository,
       );
 
+  late PushTokenRepository pushTokenRepository =
+      FirestorePushTokenRepository();
+
+  /// FCM registration, fed by the `onChatMessageCreated` Cloud Function.
+  /// Built on first use so tests without Firebase never touch it.
+  PushNotificationService? _pushService;
+  PushNotificationService get pushService =>
+      _pushService ??= PushNotificationService(
+        tokenRepository: pushTokenRepository,
+        notificationService: notificationService,
+      );
+
   late final PresenceService presenceService = PresenceService(
     presenceRepository: presenceRepository,
   );
@@ -140,6 +159,9 @@ class ChatDependencies {
     cryptoService: cryptoService,
     identityService: identityService,
     readPin: () => _vaultSession.pin,
+    beforeSignOut: () async {
+      await _pushService?.stop();
+    },
   );
 
   /// Nightly / manual chat backup to this device and Google Drive.
@@ -156,6 +178,7 @@ class ChatDependencies {
   void dispose() {
     _vaultSession.removeListener(_onVaultSessionChanged);
     presenceService.dispose();
+    _pushService?.dispose();
     notificationService.dispose();
     mediaLoader.clear();
   }

@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -638,7 +639,9 @@ class _ThreadScreenState extends State<ThreadScreen> {
                   : null,
               canReplyFromLeftToRight: true,
               onTapQuote: _jumpToMessage,
-              onSaveToVault: msg.isMedia ? () => _saveToVault(msg) : null,
+              onSaveToVault: msg.isMedia && !msg.isDocument
+                  ? () => _saveToVault(msg)
+                  : null,
               onForward: () => _promptForward(msg),
               onRetry: msg.status == MessageStatus.failed
                   ? () => cubit.retryMessage(msg.messageId)
@@ -1126,7 +1129,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
         final textTheme = Theme.of(context).textTheme;
         final myUid = context.read<ActiveThreadCubit>().myUid;
         final preview = target.isMedia
-            ? (target.mediaType == MessageType.video ? '🎥 Video' : '📷 Photo')
+            ? target.mediaPreview
             : (target.localDecryptedText ?? '');
 
         return Container(
@@ -1383,6 +1386,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
   Future<void> _pickMedia(BuildContext context) async {
     // Capture before any await to satisfy use_build_context_synchronously.
     final cubit = context.read<ActiveThreadCubit>();
+    final messenger = ScaffoldMessenger.of(context);
     final choice = await showModalBottomSheet<String>(
       context: context,
       builder: (sheetContext) => SafeArea(
@@ -1409,6 +1413,11 @@ class _ThreadScreenState extends State<ThreadScreen> {
               title: const Text('Video from gallery'),
               onTap: () => Navigator.pop(sheetContext, 'video'),
             ),
+            ListTile(
+              leading: const Icon(Icons.insert_drive_file_outlined),
+              title: const Text('Document'),
+              onTap: () => Navigator.pop(sheetContext, 'document'),
+            ),
           ],
         ),
       ),
@@ -1417,6 +1426,10 @@ class _ThreadScreenState extends State<ThreadScreen> {
 
     if (choice == 'vault') {
       await _sendFromVault(cubit);
+      return;
+    }
+    if (choice == 'document') {
+      await _sendDocument(cubit);
       return;
     }
 
@@ -1436,10 +1449,48 @@ class _ThreadScreenState extends State<ThreadScreen> {
 
     if (file == null || type == null || !mounted) return;
 
+    final length = await file.length();
+    if (!mounted) return;
+    if (length > ActiveThreadCubit.maxAttachmentBytes) {
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Attachments must be smaller than 64 MB.')),
+      );
+      return;
+    }
     final bytes = await file.readAsBytes();
     final msgId = _uuid.v4();
     if (!mounted) return;
     await cubit.sendMedia(messageId: msgId, rawBytes: bytes, type: type);
+  }
+
+  /// Attach any file (PDF, Office document, archive…) as an encrypted blob.
+  Future<void> _sendDocument(ActiveThreadCubit cubit) async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final picked = await FilePicker.pickFile();
+      if (picked == null || !mounted) return;
+      final length = await picked.length();
+      if (length != null && length > ActiveThreadCubit.maxAttachmentBytes) {
+        messenger.showSnackBar(
+          const SnackBar(
+            content: Text('Attachments must be smaller than 64 MB.'),
+          ),
+        );
+        return;
+      }
+      final bytes = await picked.readAsBytes();
+      if (!mounted) return;
+      await cubit.sendMedia(
+        messageId: _uuid.v4(),
+        rawBytes: bytes,
+        type: MessageType.file,
+        filename: picked.name,
+      );
+    } catch (e) {
+      messenger.showSnackBar(
+        SnackBar(content: Text('Could not attach file: $e')),
+      );
+    }
   }
 
   /// Attach a photo that already lives in the encrypted vault.

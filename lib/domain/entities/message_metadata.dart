@@ -23,7 +23,8 @@ class MediaMeta extends Equatable {
   /// Video duration in milliseconds.
   final int? durationMs;
 
-  /// Original file name, shown for document attachments.
+  /// Legacy clear-text file name. New document messages leave this null and
+  /// carry the name inside the encrypted body instead, so it is not leaked.
   final String? filename;
 
   /// Aspect ratio for the placeholder, falling back to 4:3 when unknown.

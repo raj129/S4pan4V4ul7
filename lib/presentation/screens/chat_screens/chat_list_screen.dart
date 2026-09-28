@@ -31,14 +31,63 @@ class ChatListScreen extends StatefulWidget {
 }
 
 class _ChatListScreenState extends State<ChatListScreen> {
+  ChatNotificationService? _notifications;
+
   @override
   void initState() {
     super.initState();
     context.read<ThreadListCubit>().startWatching();
+    try {
+      _notifications = context.read<ChatNotificationService>();
+      _notifications!.pendingThreadId.addListener(_openPendingThread);
+    } catch (_) {
+      // Not provided (tests); notification taps simply are not routed.
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) => _openPendingThread());
+  }
+
+  @override
+  void dispose() {
+    _notifications?.pendingThreadId.removeListener(_openPendingThread);
+    super.dispose();
+  }
+
+  /// Open the conversation of a tapped notification.
+  ///
+  /// Runs here rather than at tap time because this screen only exists once
+  /// the vault is unlocked and chat is signed in, so a tap cannot skip the PIN.
+  void _openPendingThread() {
+    if (!mounted) return;
+    final notifications = _notifications;
+    final pending = notifications?.pendingThreadId.value;
+    if (notifications == null || pending == null) return;
+    final state = context.read<ThreadListCubit>().state;
+    if (state is! ThreadListLoaded) return;
+    notifications.takePendingThread();
+    if (notifications.isActiveThread(pending)) return;
+    for (final item in state.items) {
+      if (item.thread.threadId == pending) {
+        openThreadScreen(
+          context,
+          thread: item.thread,
+          otherUser: item.otherUser,
+        );
+        return;
+      }
+    }
   }
 
   @override
   Widget build(BuildContext context) {
+    return BlocListener<ThreadListCubit, ThreadListState>(
+      listenWhen: (prev, next) =>
+          prev is! ThreadListLoaded && next is ThreadListLoaded,
+      listener: (_, _) => _openPendingThread(),
+      child: _buildScaffold(context),
+    );
+  }
+
+  Widget _buildScaffold(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Chats'),

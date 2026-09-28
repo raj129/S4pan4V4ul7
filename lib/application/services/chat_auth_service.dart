@@ -18,7 +18,12 @@ class ChatAuthService {
     required this.cryptoService,
     required this.identityService,
     required this.readPin,
+    this.beforeSignOut,
   });
+
+  /// Runs while the session is still authenticated, e.g. to unregister this
+  /// device's push token (the security rules need the caller signed in).
+  final Future<void> Function()? beforeSignOut;
 
   final AuthRepository authRepository;
   final UserRepository userRepository;
@@ -164,6 +169,11 @@ class ChatAuthService {
 
   /// Mark user offline and sign out.
   Future<void> signOut(String uid) async {
+    try {
+      await beforeSignOut?.call().timeout(networkTimeout);
+    } catch (_) {
+      // Never block sign-out on cleanup.
+    }
     await presenceRepository.setOffline(uid);
     await authRepository.signOut();
   }

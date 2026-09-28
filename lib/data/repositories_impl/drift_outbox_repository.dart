@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:drift/drift.dart' show Value;
 
 import '../../domain/entities/chat_message.dart';
+import '../../domain/entities/message_metadata.dart';
 import '../../domain/entities/message_reply.dart';
 import '../../domain/repositories/outbox_repository.dart';
 import '../../storage/local_db/vault_database.dart';
@@ -29,6 +30,11 @@ class DriftOutboxRepository implements OutboxRepository {
           item.replyTo == null
               ? null
               : jsonEncode(item.replyTo!.toFirestore()),
+        ),
+        mediaMetaJson: Value(
+          item.mediaMeta == null
+              ? null
+              : jsonEncode(item.mediaMeta!.toFirestore()),
         ),
         queuedAtMs: Value(item.queuedAt.toUtc().millisecondsSinceEpoch),
         attempts: Value(item.attempts),
@@ -61,6 +67,7 @@ class DriftOutboxRepository implements OutboxRepository {
     preview: row.preview,
     mediaType: _parseMediaType(row.mediaType),
     mediaRef: row.mediaRef,
+    mediaMeta: _parseMeta(row.mediaMetaJson),
     replyTo: _parseReply(row.replyJson),
     queuedAt: DateTime.fromMillisecondsSinceEpoch(row.queuedAtMs, isUtc: true),
     attempts: row.attempts,
@@ -73,6 +80,18 @@ class DriftOutboxRepository implements OutboxRepository {
       if (type.name == name) return type;
     }
     return null;
+  }
+
+  static MediaMeta? _parseMeta(String? json) {
+    if (json == null) return null;
+    try {
+      final decoded = jsonDecode(json);
+      if (decoded is! Map) return null;
+      return MediaMeta.fromFirestore(decoded.cast<String, dynamic>());
+    } catch (_) {
+      // Metadata is only a layout hint; drop it rather than block delivery.
+      return null;
+    }
   }
 
   static MessageReply? _parseReply(String? json) {

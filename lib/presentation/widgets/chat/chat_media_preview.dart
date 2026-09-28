@@ -1,6 +1,10 @@
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:open_filex/open_filex.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 
 import '../../../crypto/services/chat_crypto_service.dart';
 import '../../../domain/entities/chat_message.dart';
@@ -50,6 +54,21 @@ class ChatMediaLoader {
     }
     _cache[storagePath] = plain;
     return plain;
+  }
+
+  /// Download and decrypt without caching, for documents that are opened once
+  /// and may be far larger than a thumbnail.
+  Future<Uint8List> fetchUncached({
+    required String threadId,
+    required String storagePath,
+  }) async {
+    final hit = _cache[storagePath];
+    if (hit != null) return hit;
+    final encrypted = await mediaRepository.downloadEncryptedMedia(storagePath);
+    return cryptoService.decryptMedia(
+      threadId: threadId,
+      encryptedBytes: encrypted,
+    );
   }
 
   void clear() {
@@ -142,7 +161,16 @@ class _ChatMediaPreviewState extends State<ChatMediaPreview> {
               return Stack(
                 fit: StackFit.expand,
                 children: [
-                  Image.memory(snap.data!, fit: BoxFit.cover),
+                  Image.memory(
+                    snap.data!,
+                    fit: BoxFit.cover,
+                    // Videos have no decodable poster frame yet; show a
+                    // neutral tile under the play button instead.
+                    errorBuilder: (_, _, _) => const ColoredBox(
+                      color: Colors.black54,
+                      child: SizedBox.expand(),
+                    ),
+                  ),
                   if (widget.message.mediaType == MessageType.video)
                     const Center(
                       child: CircleAvatar(
@@ -154,6 +182,126 @@ class _ChatMediaPreviewState extends State<ChatMediaPreview> {
               );
             },
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Renders an encrypted document attachment and opens it on tap.
+///
+/// Opening needs a real file for the external viewer, so the decrypted bytes
+/// are written to a private cache folder that is emptied before every open.
+class ChatDocumentTile extends StatefulWidget {
+  const ChatDocumentTile({
+    super.key,
+    required this.message,
+    required this.loader,
+    required this.textColor,
+  });
+
+  final ChatMessage message;
+  final ChatMediaLoader loader;
+  final Color textColor;
+
+  @override
+  State<ChatDocumentTile> createState() => _ChatDocumentTileState();
+}
+
+class _ChatDocumentTileState extends State<ChatDocumentTile> {
+  bool _opening = false;
+
+  static const _openDirName = 'chat_open';
+
+  Future<void> _open() async {
+    final ref = widget.message.mediaRef;
+    if (ref == null || _opening) return;
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    setState(() => _opening = true);
+    try {
+      final bytes = await widget.loader.fetchUncached(
+        threadId: widget.message.threadId,
+        storagePath: ref,
+      );
+      final tmp = await getTemporaryDirectory();
+      final dir = Directory(p.join(tmp.path, _openDirName));
+      if (await dir.exists()) await dir.delete(recursive: true);
+      await dir.create(recursive: true);
+      final file = File(p.join(dir.path, _safeName()));
+      await file.writeAsBytes(bytes, flush: true);
+      final result = await OpenFilex.open(file.path);
+      if (result.type != ResultType.done) {
+        messenger?.showSnackBar(
+          SnackBar(content: Text('No app can open this file: ${result.message}')),
+        );
+      }
+    } catch (e) {
+      messenger?.showSnackBar(
+        SnackBar(content: Text('Could not open document: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _opening = false);
+    }
+  }
+
+  /// A path-safe file name that keeps the original extension for the viewer.
+  String _safeName() {
+    final raw = widget.message.documentName ?? widget.message.messageId;
+    final cleaned = p.basename(raw).replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
+    return cleaned.isEmpty ? widget.message.messageId : cleaned;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final name = widget.message.documentName ?? 'Document';
+    final size = widget.message.mediaMeta?.readableSize ?? '';
+    final color = widget.textColor;
+    return InkWell(
+      onTap: widget.message.mediaRef == null ? null : _open,
+      borderRadius: BorderRadius.circular(10),
+      child: Container(
+        width: 240,
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.08),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Row(
+          children: [
+            SizedBox(
+              width: 36,
+              height: 36,
+              child: _opening
+                  ? const Padding(
+                      padding: EdgeInsets.all(8),
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : Icon(Icons.insert_drive_file_rounded, color: color, size: 32),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    name,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(color: color, fontWeight: FontWeight.w600),
+                  ),
+                  if (size.isNotEmpty)
+                    Text(
+                      size,
+                      style: TextStyle(
+                        color: color.withValues(alpha: 0.7),
+                        fontSize: 12,
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ],
         ),
       ),
     );

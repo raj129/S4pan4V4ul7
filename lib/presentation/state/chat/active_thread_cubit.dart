@@ -3,11 +3,13 @@ import 'dart:typed_data';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:equatable/equatable.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:image/image.dart' as img;
 import 'package:uuid/uuid.dart';
 
 import '../../../domain/entities/chat_message.dart';
 import '../../../domain/entities/chat_thread.dart';
 import '../../../domain/entities/chat_user.dart';
+import '../../../domain/entities/message_metadata.dart';
 import '../../../domain/entities/message_reply.dart';
 import '../../../domain/entities/user_presence.dart';
 import '../../../application/services/chat_search_indexer.dart';
@@ -598,6 +600,7 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
         messageId: item.messageId,
         mediaRef: item.mediaRef,
         mediaType: item.mediaType,
+        mediaMeta: item.mediaMeta,
         replyTo: item.replyTo,
       );
       await outbox.remove(item.messageId);
@@ -713,7 +716,7 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
     if (target == null) return null;
 
     final source = target.isMedia
-        ? (target.mediaType == MessageType.video ? '🎥 Video' : '📷 Photo')
+        ? target.mediaPreview
         : (target.localDecryptedText ?? '');
     // Long quotes are truncated: the header only ever renders two lines.
     final snippet = source.length > 160
@@ -1493,18 +1496,13 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
           threadId: targetThreadId,
           bytes: plain,
         );
-        final ext = message.mediaType == MessageType.video
-            ? 'mp4.enc'
-            : 'jpg.enc';
         storagePath = await mediaRepository.uploadEncryptedMedia(
           threadId: targetThreadId,
           messageId: forwardedId,
-          filename: '$forwardedId.$ext',
+          filename: '$forwardedId.${_storageExtension(message.mediaType)}',
           encryptedBytes: reEncrypted,
         );
-        preview = message.mediaType == MessageType.video
-            ? '🎥 Video'
-            : '📷 Photo';
+        preview = message.mediaPreview;
       } else {
         final text = message.localDecryptedText;
         if (text == null || text.isEmpty) {
@@ -1523,6 +1521,7 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
         ),
         mediaRef: storagePath,
         mediaType: storagePath == null ? null : message.mediaType,
+        mediaMeta: storagePath == null ? null : message.mediaMeta,
         isForwarded: true,
       );
       await threadRepository.updateLastMessage(
@@ -1543,15 +1542,58 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
   // Send media
   // ---------------------------------------------------------------------------
 
+  /// Largest attachment accepted, kept just under the 64 MB Storage rule so
+  /// the AES-GCM nonce and tag never push an upload over the limit.
+  static const maxAttachmentBytes = 64 * 1024 * 1024 - 1024;
+
+  /// Storage object extension. Documents deliberately use a neutral one so the
+  /// bucket listing does not reveal the file type.
+  static String _storageExtension(MessageType? type) => switch (type) {
+    MessageType.video => 'mp4.enc',
+    MessageType.file => 'bin.enc',
+    _ => 'jpg.enc',
+  };
+
+  /// Clear-text layout hints for an attachment. Best effort: an unreadable
+  /// header only costs the placeholder its exact aspect ratio.
+  static MediaMeta _buildMediaMeta(MessageType type, Uint8List bytes) {
+    int? width;
+    int? height;
+    if (type == MessageType.image) {
+      try {
+        final info = img.findDecoderForData(bytes)?.startDecode(bytes);
+        width = info?.width;
+        height = info?.height;
+      } catch (_) {}
+    }
+    return MediaMeta(width: width, height: height, sizeBytes: bytes.length);
+  }
+
+  /// Encrypt, upload and send an attachment.
+  ///
+  /// For [MessageType.file], [filename] is required: it becomes the encrypted
+  /// message body, so the recipient sees the name but the server never does.
   Future<void> sendMedia({
     required String messageId,
     required List<int> rawBytes,
     required MessageType type,
+    String? filename,
   }) async {
     final threadId = _currentThreadId;
     if (threadId == null) return;
-    final preview = type == MessageType.image ? '📷 Photo' : '🎥 Video';
+    if (rawBytes.isEmpty) {
+      _reportActionError('That file is empty.');
+      return;
+    }
+    if (rawBytes.length > maxAttachmentBytes) {
+      _reportActionError('Attachments must be smaller than 64 MB.');
+      return;
+    }
+    final preview = ChatMessage.mediaPreviewFor(type, filename: filename);
     try {
+      final bytes = rawBytes is Uint8List
+          ? rawBytes
+          : Uint8List.fromList(rawBytes);
       final encryptedText = await cryptoService.encryptMessage(
         threadId: threadId,
         plaintext: preview,
@@ -1567,6 +1609,7 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
         recipientUid: _otherUser!.uid,
         preview: preview,
         mediaType: type,
+        mediaMeta: _buildMediaMeta(type, bytes),
         queuedAt: DateTime.now().toUtc(),
       );
       await outbox.enqueue(item);
@@ -1574,13 +1617,12 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
 
       final encrypted = await cryptoService.encryptMedia(
         threadId: threadId,
-        bytes: Uint8List.fromList(rawBytes),
+        bytes: bytes,
       );
-      final ext = type == MessageType.video ? 'mp4.enc' : 'jpg.enc';
       final storagePath = await mediaRepository.uploadEncryptedMedia(
         threadId: threadId,
         messageId: messageId,
-        filename: '$messageId.$ext',
+        filename: '$messageId.${_storageExtension(type)}',
         encryptedBytes: encrypted,
       );
       // Recorded so a retry reuses the upload instead of repeating it.

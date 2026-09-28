@@ -191,6 +191,11 @@ class _ChatAppState extends State<ChatApp> with WidgetsBindingObserver {
           // they keep working while the user is on another tab.
           if (authState is ChatAuthAuthenticated) {
             _deps.notificationService.start(authState.user.uid);
+            try {
+              unawaited(_deps.pushService.start(authState.user.uid));
+            } catch (_) {
+              // Firebase unavailable (tests); local notifications still work.
+            }
           } else {
             _deps.notificationService.stop();
           }

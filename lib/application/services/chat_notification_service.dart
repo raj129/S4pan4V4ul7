@@ -1,11 +1,19 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
 import '../../domain/entities/chat_thread.dart';
 import '../../domain/repositories/thread_repository.dart';
 
-/// Shows a local notification when an unread count goes up.
+/// Shows a local notification when an unread count goes up, and remembers
+/// which conversation a tapped notification belongs to.
+///
+/// This covers the app while its process is alive. When the process is dead,
+/// the `onChatMessageCreated` Cloud Function delivers an FCM notification
+/// instead. Both use the Android tag = threadId and id = 0 (the id FCM uses
+/// for tagged notifications), so whichever arrives second replaces the first
+/// rather than stacking a duplicate.
 class ChatNotificationService {
   ChatNotificationService({required ThreadRepository threadRepository})
     : _threadRepository = threadRepository;
@@ -13,7 +21,17 @@ class ChatNotificationService {
   final ThreadRepository _threadRepository;
   final _plugin = FlutterLocalNotificationsPlugin();
 
-  static const _channelId = 'chat_messages';
+  /// Must match `android.notification.channelId` in the Cloud Function and the
+  /// default channel declared in AndroidManifest.xml.
+  static const channelId = 'chat_messages';
+
+  /// FCM posts tagged notifications with id 0; reusing it lets them replace.
+  static const _notificationId = 0;
+
+  /// Conversation the user asked to open from a notification. Consumed by the
+  /// chat list once the vault and chat are unlocked, so a tap never bypasses
+  /// the PIN.
+  final ValueNotifier<String?> pendingThreadId = ValueNotifier<String?>(null);
 
   StreamSubscription<List<ChatThread>>? _sub;
   final _lastUnread = <String, int>{};
@@ -28,13 +46,42 @@ class ChatNotificationService {
       settings: const InitializationSettings(
         android: AndroidInitializationSettings('@mipmap/ic_launcher'),
       ),
+      onDidReceiveNotificationResponse: (response) =>
+          openFromNotification(response.payload),
     );
-    await _plugin
+    final android = _plugin
         .resolvePlatformSpecificImplementation<
           AndroidFlutterLocalNotificationsPlugin
-        >()
-        ?.requestNotificationsPermission();
+        >();
+    await android?.createNotificationChannel(
+      const AndroidNotificationChannel(
+        channelId,
+        'Chat messages',
+        description: 'Notifies you about new chat messages.',
+        importance: Importance.high,
+      ),
+    );
+    await android?.requestNotificationsPermission();
+    try {
+      final launch = await _plugin.getNotificationAppLaunchDetails();
+      if (launch?.didNotificationLaunchApp == true) {
+        openFromNotification(launch!.notificationResponse?.payload);
+      }
+    } catch (_) {}
     _initialised = true;
+  }
+
+  /// Record a tapped notification's thread for the chat list to open.
+  void openFromNotification(String? threadId) {
+    if (threadId == null || threadId.isEmpty) return;
+    pendingThreadId.value = threadId;
+  }
+
+  /// Hand over and clear the pending thread, if any.
+  String? takePendingThread() {
+    final id = pendingThreadId.value;
+    pendingThreadId.value = null;
+    return id;
   }
 
   Future<void> start(String myUid) async {
@@ -75,16 +122,17 @@ class ChatNotificationService {
         : 'You have $unread new alerts';
 
     await _plugin.show(
-      id: thread.threadId.hashCode,
+      id: _notificationId,
       title: title,
       body: body,
-      notificationDetails: const NotificationDetails(
+      notificationDetails: NotificationDetails(
         android: AndroidNotificationDetails(
-          _channelId,
+          channelId,
           'Chat messages',
           channelDescription: 'Notifies you about new chat messages.',
           importance: Importance.high,
           priority: Priority.high,
+          tag: thread.threadId,
         ),
       ),
       payload: thread.threadId,
@@ -97,11 +145,15 @@ class ChatNotificationService {
       _lastUnread[threadId] = 0;
       if (_initialised) {
         try {
-          await _plugin.cancel(id: threadId.hashCode);
+          await _plugin.cancel(id: _notificationId, tag: threadId);
         } catch (_) {}
       }
     }
   }
+
+  /// Whether [threadId] is open on screen right now.
+  bool isActiveThread(String? threadId) =>
+      threadId != null && threadId == _activeThreadId;
 
   Future<void> stop() async {
     await _sub?.cancel();
@@ -111,5 +163,8 @@ class ChatNotificationService {
     _primed = false;
   }
 
-  Future<void> dispose() => stop();
+  Future<void> dispose() async {
+    await stop();
+    pendingThreadId.dispose();
+  }
 }
