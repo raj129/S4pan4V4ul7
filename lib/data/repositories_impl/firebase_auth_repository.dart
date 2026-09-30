@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/services.dart';
 import 'package:google_sign_in/google_sign_in.dart';
@@ -34,6 +36,7 @@ class FirebaseAuthRepository implements AuthRepository {
       final GoogleSignInAccount googleUser = await _googleSignIn.authenticate(
         scopeHint: _authScopes,
       );
+      _sessionAccount = googleUser;
 
       final GoogleSignInAuthentication googleAuth = googleUser.authentication;
       final idToken = googleAuth.idToken;
@@ -55,6 +58,10 @@ class FirebaseAuthRepository implements AuthRepository {
       if (user == null) {
         throw const AuthException('Firebase sign-in failed.');
       }
+
+      // The account is already chosen; grant Drive access in the background
+      // once so later Drive calls never re-authenticate.
+      unawaited(warmUpDriveAuthorization(interactive: true));
 
       return AuthResult(
         userId: user.uid,
@@ -83,26 +90,85 @@ class FirebaseAuthRepository implements AuthRepository {
 
   @override
   Future<void> signOut() async {
+    _clearCache();
     await _googleSignIn.signOut();
     await _firebaseAuth.signOut();
   }
 
-  @override
-  Future<http.Client?> getAuthenticatedClient({bool interactive = false}) async {
-    final account = await _googleSignIn.attemptLightweightAuthentication();
-    if (account == null) return null;
+  // Shared across instances so every Drive caller reuses one authorization.
+  static Map<String, String>? _cachedHeaders;
+  static DateTime? _cachedAt;
+  static GoogleSignInAccount? _sessionAccount;
+  static Future<Map<String, String>?>? _inFlight;
+  static bool _inFlightInteractive = false;
+  static const Duration _headerTtl = Duration(minutes: 45);
 
+  static void _clearCache() {
+    _cachedHeaders = null;
+    _cachedAt = null;
+    _sessionAccount = null;
+  }
+
+  @override
+  Future<void> warmUpDriveAuthorization({bool interactive = false}) async {
     try {
+      await _driveHeaders(interactive: interactive);
+    } catch (_) {}
+  }
+
+  Future<Map<String, String>?> _driveHeaders({required bool interactive}) {
+    final cached = _cachedHeaders;
+    final at = _cachedAt;
+    if (cached != null &&
+        at != null &&
+        DateTime.now().difference(at) < _headerTtl) {
+      return Future.value(cached);
+    }
+    final pending = _inFlight;
+    if (pending != null) {
+      if (!interactive || _inFlightInteractive) return pending;
+      // A silent attempt may fail; retry interactively once it settles.
+      return pending.then(
+        (h) => h ?? _driveHeaders(interactive: true),
+      );
+    }
+
+    _inFlightInteractive = interactive;
+    final future = _fetchDriveHeaders(interactive: interactive);
+    _inFlight = future;
+    return future.whenComplete(() {
+      if (identical(_inFlight, future)) _inFlight = null;
+    });
+  }
+
+  Future<Map<String, String>?> _fetchDriveHeaders({
+    required bool interactive,
+  }) async {
+    try {
+      final account = _sessionAccount ??
+          await _googleSignIn.attemptLightweightAuthentication();
+      if (account == null) return null;
+      _sessionAccount = account;
       final allScopes = [..._authScopes, ..._driveScopes];
-      final authHeaders = await account.authorizationClient
+      final headers = await account.authorizationClient
           .authorizationHeaders(allScopes, promptIfNecessary: interactive);
-      if (authHeaders == null) return null;
-      return _AuthenticatedClient(authHeaders);
+      if (headers != null) {
+        _cachedHeaders = headers;
+        _cachedAt = DateTime.now();
+      }
+      return headers;
     } catch (_) {
       // Drive authorization failed (e.g. user did not grant drive scope).
       // Return null so callers fall back gracefully.
       return null;
     }
+  }
+
+  @override
+  Future<http.Client?> getAuthenticatedClient({bool interactive = false}) async {
+    final headers = await _driveHeaders(interactive: interactive);
+    if (headers == null) return null;
+    return _AuthenticatedClient(headers);
   }
 }
 

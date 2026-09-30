@@ -32,4 +32,7 @@ class InMemoryAuthRepository implements AuthRepository {
   @override
   Future<http.Client?> getAuthenticatedClient({bool interactive = false}) async =>
       null;
+
+  @override
+  Future<void> warmUpDriveAuthorization({bool interactive = false}) async {}
 }
