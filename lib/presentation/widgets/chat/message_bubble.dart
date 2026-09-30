@@ -150,6 +150,7 @@ class MessageBubble extends StatelessWidget {
               metaColor: cs.onSurfaceVariant,
               bare: true,
               highlightQuery: highlightQuery,
+              onLongPress: () => _showActionSheet(context),
             ),
           )
         : Material(
@@ -178,6 +179,7 @@ class MessageBubble extends StatelessWidget {
                 metaColor: isHighlighted ? cs.onTertiaryContainer : textColor,
                 bare: false,
                 highlightQuery: highlightQuery,
+                onLongPress: () => _showActionSheet(context),
               ),
             ),
           );
@@ -209,6 +211,7 @@ class MessageBubble extends StatelessWidget {
               background: const _ReplySwipeBackground(alignEnd: false),
               secondaryBackground: const SizedBox.shrink(),
               child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
                 onLongPress: () => _showActionSheet(context),
                 // Signal-style: double-tapping your own message jumps
                 // straight to edit. `onEdit` is only wired up for own
@@ -403,6 +406,7 @@ class _BubbleContent extends StatelessWidget {
     required this.textColor,
     required this.metaColor,
     required this.bare,
+    required this.onLongPress,
     this.highlightQuery = '',
 
     this.sendStatus,
@@ -418,6 +422,7 @@ class _BubbleContent extends StatelessWidget {
   final Color textColor;
   final Color metaColor;
   final bool bare;
+  final VoidCallback onLongPress;
   final String highlightQuery;
 
   /// Send progress of this attachment, null once it is sent.
@@ -491,7 +496,11 @@ class _BubbleContent extends StatelessWidget {
           Padding(
             padding: EdgeInsets.only(top: message.isMedia ? AppSpacing.sm : 0),
             child: bare
-                ? AnimatedEmojiText(text: text, playbackId: message.messageId)
+                ? AnimatedEmojiText(
+                    text: text,
+                    playbackId: message.messageId,
+                    onLongPress: onLongPress,
+                  )
                 : _MessageText(
                     text: text,
                     color: textColor,

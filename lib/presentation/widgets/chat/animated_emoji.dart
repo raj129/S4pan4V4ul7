@@ -86,6 +86,7 @@ class AnimatedEmojiText extends StatefulWidget {
     required this.text,
     required this.playbackId,
     this.size = 48,
+    this.onLongPress,
   });
 
   final String text;
@@ -93,6 +94,7 @@ class AnimatedEmojiText extends StatefulWidget {
   /// Identifies the message so autoplay happens only once per session.
   final String playbackId;
   final double size;
+  final VoidCallback? onLongPress;
 
   static const bounceDuration = Duration(milliseconds: 900);
 
@@ -163,6 +165,7 @@ class _AnimatedEmojiTextState extends State<AnimatedEmojiText>
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
         onTap: _replay,
+        onLongPress: widget.onLongPress,
         child: Wrap(
           spacing: 2,
           runSpacing: 2,
