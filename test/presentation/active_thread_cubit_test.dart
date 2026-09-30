@@ -5,6 +5,7 @@ import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
 import 'package:photo_vault/crypto/services/chat_crypto_service.dart';
+import 'package:photo_vault/application/services/image_compressor.dart';
 import 'package:photo_vault/domain/entities/chat_message.dart';
 import 'package:photo_vault/domain/entities/chat_thread.dart';
 import 'package:photo_vault/domain/entities/chat_user.dart';
@@ -20,6 +21,7 @@ import 'package:photo_vault/domain/repositories/thread_repository.dart';
 import 'package:photo_vault/domain/repositories/typing_repository.dart';
 import 'package:photo_vault/domain/repositories/user_repository.dart';
 import 'package:photo_vault/presentation/state/chat/active_thread_cubit.dart';
+import 'package:photo_vault/presentation/state/chat/media_send_status.dart';
 
 import '../helpers/memory_chat_search_index.dart';
 import '../helpers/memory_message_cache.dart';
@@ -275,6 +277,8 @@ void main() {
   late ActiveThreadCubit cubit;
   late _FakeMediaRepository media;
   late StreamController<List<ConnectivityResult>> connectivity;
+  late Map<String, Uint8List> seeded;
+  late List<MediaSendStatus> progressSeen;
 
   ActiveThreadCubit build({
     Stream<List<ConnectivityResult>>? connectivityStream,
@@ -294,6 +298,7 @@ void main() {
     cryptoService: _PassThroughCrypto(),
     myUid: 'me',
     connectivityStream: connectivityStream,
+    onMediaReady: (path, bytes) => seeded[path] = bytes,
   );
 
   setUp(() {
@@ -301,8 +306,15 @@ void main() {
     threads = _FakeThreadRepository();
     outbox = _MemoryOutbox();
     media = _FakeMediaRepository();
+    seeded = {};
+    progressSeen = [];
     connectivity = StreamController<List<ConnectivityResult>>.broadcast();
     cubit = build();
+    cubit.stream.listen((state) {
+      if (state is ActiveThreadLoaded) {
+        progressSeen.addAll(state.uploadProgress.values);
+      }
+    });
   });
 
   tearDown(() async {
@@ -866,7 +878,165 @@ void main() {
       expect(meta.width, 4);
       expect(meta.height, 2);
       expect(meta.sizeBytes, png.length);
-      expect(media.uploadedNames.single, 'img1.jpg.enc');
+      // The preview is uploaded before the full-size object.
+      expect(media.uploadedNames, ['img1.thumb.enc', 'img1.jpg.enc']);
+      expect(meta.thumbRef, 'chat_media/me_other/img1/img1.thumb.enc');
+    });
+
+    test('a lower quality shrinks what is uploaded', () async {
+      await open();
+      // Detailed enough that JPEG at 800 px is clearly smaller than the PNG.
+      final source = img.Image(width: 2000, height: 1000);
+      for (var y = 0; y < source.height; y++) {
+        for (var x = 0; x < source.width; x++) {
+          source.setPixelRgb(x, y, x % 256, y % 256, (x * y) % 256);
+        }
+      }
+      final png = img.encodePng(source);
+
+      await cubit.sendMedia(
+        messageId: 'img2',
+        rawBytes: png,
+        type: MessageType.image,
+        quality: ImageQuality.low,
+      );
+
+      final meta = messages.sent.single.mediaMeta!;
+      expect(meta.sizeBytes, lessThan(png.length));
+      expect(meta.width, 800);
+      expect(meta.height, 400);
+    });
+
+    test('the sender gets their own bytes without a download', () async {
+      await open();
+      final png = img.encodePng(img.Image(width: 4, height: 2));
+
+      await cubit.sendMedia(
+        messageId: 'img3',
+        rawBytes: png,
+        type: MessageType.image,
+      );
+
+      expect(
+        seeded.keys,
+        containsAll(<String>[
+          'chat_media/me_other/img3/img3.thumb.enc',
+          'chat_media/me_other/img3/img3.jpg.enc',
+        ]),
+      );
+    });
+
+    test('progress is published before compression starts', () async {
+      await open();
+      final png = img.encodePng(img.Image(width: 4, height: 2));
+
+      await cubit.sendMedia(
+        messageId: 'img4',
+        rawBytes: png,
+        type: MessageType.image,
+      );
+
+      // The bubble must exist while the photo is still being prepared,
+      // otherwise tapping send looks like it did nothing.
+      expect(
+        progressSeen.first.phase,
+        MediaSendPhase.preparing,
+        reason: 'the first status must precede compression',
+      );
+    });
+
+    test('progress only ever moves forwards', () async {
+      await open();
+      final png = img.encodePng(img.Image(width: 4, height: 2));
+
+      await cubit.sendMedia(
+        messageId: 'img5',
+        rawBytes: png,
+        type: MessageType.image,
+      );
+
+      final fractions = [for (final s in progressSeen) s.progress];
+      for (var i = 1; i < fractions.length; i++) {
+        expect(
+          fractions[i],
+          greaterThanOrEqualTo(fractions[i - 1]),
+          reason: 'the ring must not rewind between phases',
+        );
+      }
+      expect(fractions.last, 1.0);
+    });
+
+    test('upload progress is published and then cleared', () async {
+      await open();
+
+      await cubit.sendMedia(
+        messageId: 'doc2',
+        rawBytes: [1, 2, 3],
+        type: MessageType.file,
+        filename: 'a.pdf',
+      );
+
+      // Reported while uploading…
+      expect(
+        progressSeen.any((s) => s.phase == MediaSendPhase.uploading),
+        isTrue,
+      );
+      // …and gone once the message is sent.
+      final state = cubit.state as ActiveThreadLoaded;
+      expect(state.uploadProgress, isEmpty);
+    });
+
+    test('an oversized photo takes its own bubble back', () async {
+      await open();
+      // Compresses to something still over the limit, so the rejection
+      // happens after the bubble is already on screen.
+      final huge = Uint8List(ActiveThreadCubit.maxAttachmentBytes + 1);
+
+      await cubit.sendMedia(
+        messageId: 'big2',
+        rawBytes: huge,
+        type: MessageType.image,
+      );
+
+      final state = cubit.state as ActiveThreadLoaded;
+      expect(state.messages.where((m) => m.messageId == 'big2'), isEmpty);
+      expect(state.uploadProgress, isEmpty);
+      expect(outbox.items, isEmpty);
+      expect(messages.sent, isEmpty);
+    });
+
+    test('a batch gives every photo its own message', () async {
+      await open();
+      final png = img.encodePng(img.Image(width: 4, height: 2));
+
+      for (final id in ['b1', 'b2', 'b3']) {
+        await cubit.sendMedia(
+          messageId: id,
+          rawBytes: png,
+          type: MessageType.image,
+        );
+      }
+
+      expect(messages.sent.map((m) => m.messageId), ['b1', 'b2', 'b3']);
+      // Nothing is left showing progress once the batch is done.
+      expect((cubit.state as ActiveThreadLoaded).uploadProgress, isEmpty);
+    });
+
+    test('one failed photo does not hold up the rest', () async {
+      await open();
+      final png = img.encodePng(img.Image(width: 4, height: 2));
+      media.failOnMessageId = 'f2';
+
+      for (final id in ['f1', 'f2', 'f3']) {
+        await cubit.sendMedia(
+          messageId: id,
+          rawBytes: png,
+          type: MessageType.image,
+        );
+      }
+
+      expect(messages.sent.map((m) => m.messageId), ['f1', 'f3']);
+      expect((cubit.state as ActiveThreadLoaded).uploadProgress, isEmpty);
     });
 
     test('an attachment over the Storage limit is rejected up front', () async {
@@ -896,6 +1066,10 @@ class _FakeMediaRepository implements MediaRepository {
   /// Storage object names passed to [uploadEncryptedMedia].
   final List<String> uploadedNames = [];
 
+  /// When set, uploads for this message id throw, to check that one bad photo
+  /// in a batch does not stop the others.
+  String? failOnMessageId;
+
   @override
   Future<String> uploadEncryptedMedia({
     required String threadId,
@@ -904,7 +1078,12 @@ class _FakeMediaRepository implements MediaRepository {
     required Uint8List encryptedBytes,
     void Function(double progress)? onProgress,
   }) async {
+    if (messageId == failOnMessageId) {
+      throw Exception('upload refused');
+    }
     uploadedNames.add(filename);
+    onProgress?.call(0.5);
+    onProgress?.call(1);
     return 'chat_media/$threadId/$messageId/$filename';
   }
 

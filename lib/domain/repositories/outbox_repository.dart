@@ -47,8 +47,12 @@ class OutboxItem {
   final int attempts;
   final String? lastError;
 
-  OutboxItem copyWith({String? mediaRef, int? attempts, String? lastError}) =>
-      OutboxItem(
+  OutboxItem copyWith({
+    String? mediaRef,
+    MediaMeta? mediaMeta,
+    int? attempts,
+    String? lastError,
+  }) => OutboxItem(
         messageId: messageId,
         threadId: threadId,
         senderId: senderId,
@@ -58,7 +62,7 @@ class OutboxItem {
         queuedAt: queuedAt,
         mediaType: mediaType,
         mediaRef: mediaRef ?? this.mediaRef,
-        mediaMeta: mediaMeta,
+        mediaMeta: mediaMeta ?? this.mediaMeta,
         replyTo: replyTo,
         attempts: attempts ?? this.attempts,
         lastError: lastError ?? this.lastError,

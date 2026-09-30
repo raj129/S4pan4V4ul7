@@ -13,10 +13,12 @@ import 'package:uuid/uuid.dart';
 
 import '../../../application/services/chat_notification_service.dart';
 import '../../../application/services/chat_vault_bridge.dart';
+import '../../../application/services/image_compressor.dart';
 import '../../../domain/entities/chat_message.dart';
 import '../../../domain/entities/message_metadata.dart';
 import '../../../domain/entities/chat_thread.dart';
 import '../../../domain/entities/chat_user.dart';
+import '../../../domain/repositories/settings_repository.dart';
 import '../../../core/widgets/app_state_views.dart';
 import '../../state/chat/active_thread_cubit.dart';
 import '../../state/chat/thread_list_cubit.dart';
@@ -26,6 +28,7 @@ import '../../widgets/chat/chat_day_divider.dart';
 import '../../widgets/chat/chat_media_preview.dart';
 import '../../widgets/chat/chat_scrollbar.dart';
 import '../../widgets/chat/chat_wallpaper.dart';
+import '../../widgets/chat/image_quality_sheet.dart';
 import '../../widgets/chat/message_bubble.dart';
 import '../../widgets/chat/typing_indicator.dart';
 import '../../widgets/chat/vault_picker_sheet.dart';
@@ -86,6 +89,7 @@ class ThreadScreen extends StatefulWidget {
     required this.mediaLoader,
     required this.vaultBridge,
     this.notificationService,
+    this.settingsRepository,
   });
 
   final ChatThread thread;
@@ -100,6 +104,9 @@ class ThreadScreen extends StatefulWidget {
 
   /// Told which thread is on screen so it does not notify about it.
   final ChatNotificationService? notificationService;
+
+  /// Remembers the last attachment quality the user chose.
+  final SettingsRepository? settingsRepository;
 
   @override
   State<ThreadScreen> createState() => _ThreadScreenState();
@@ -615,6 +622,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
               otherUid: widget.otherUser.uid,
               otherIsOnline: state.otherIsOnline,
               mediaLoader: widget.mediaLoader,
+              sendStatus: state.uploadProgress[msg.messageId],
               isHighlighted:
                   _highlightedId == msg.messageId ||
                   state.currentMatchId == msg.messageId,
@@ -1395,7 +1403,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
           children: [
             ListTile(
               leading: const Icon(Icons.photo_library_outlined),
-              title: const Text('Photo from gallery'),
+              title: const Text('Photos from gallery'),
               onTap: () => Navigator.pop(sheetContext, 'photo'),
             ),
             ListTile(
@@ -1433,13 +1441,18 @@ class _ThreadScreenState extends State<ThreadScreen> {
       return;
     }
 
+    // Gallery photos are multi-select; the camera and video pickers are not.
+    if (choice == 'photo') {
+      final files = await _picker.pickMultiImage();
+      if (files.isEmpty || !mounted) return;
+      await _sendImages(cubit, files, messenger);
+      return;
+    }
+
     XFile? file;
     MessageType? type;
 
-    if (choice == 'photo') {
-      file = await _picker.pickImage(source: ImageSource.gallery);
-      type = MessageType.image;
-    } else if (choice == 'camera') {
+    if (choice == 'camera') {
       file = await _picker.pickImage(source: ImageSource.camera);
       type = MessageType.image;
     } else if (choice == 'video') {
@@ -1449,8 +1462,15 @@ class _ThreadScreenState extends State<ThreadScreen> {
 
     if (file == null || type == null || !mounted) return;
 
+    if (type == MessageType.image) {
+      await _sendImages(cubit, [file], messenger);
+      return;
+    }
+
     final length = await file.length();
     if (!mounted) return;
+    // Videos are sent as-is, so the limit still applies up front. Photos are
+    // checked after compression instead, which can bring a large one under it.
     if (length > ActiveThreadCubit.maxAttachmentBytes) {
       messenger.showSnackBar(
         const SnackBar(content: Text('Attachments must be smaller than 64 MB.')),
@@ -1458,9 +1478,88 @@ class _ThreadScreenState extends State<ThreadScreen> {
       return;
     }
     final bytes = await file.readAsBytes();
-    final msgId = _uuid.v4();
     if (!mounted) return;
-    await cubit.sendMedia(messageId: msgId, rawBytes: bytes, type: type);
+    await cubit.sendMedia(messageId: _uuid.v4(), rawBytes: bytes, type: type);
+  }
+
+  /// Most photos anyone sends at once; beyond this the batch is trimmed rather
+  /// than queueing an unbounded amount of compression work.
+  static const _maxPhotosPerSend = 10;
+
+  /// Asks for a quality once, then sends every picked photo.
+  ///
+  /// Photos go out one at a time: each is decoded and re-encoded in full, so
+  /// running a whole selection in parallel would multiply peak memory by the
+  /// number of photos for no gain on a single connection.
+  Future<void> _sendImages(
+    ActiveThreadCubit cubit,
+    List<XFile> files,
+    ScaffoldMessengerState messenger,
+  ) async {
+    var picked = files;
+    if (picked.length > _maxPhotosPerSend) {
+      picked = picked.sublist(0, _maxPhotosPerSend);
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text('Sending the first $_maxPhotosPerSend photos.'),
+        ),
+      );
+    }
+
+    // The sheet is sized from the first photo and applies to the whole batch,
+    // so picking ten photos is still one decision.
+    final firstBytes = await picked.first.readAsBytes();
+    if (!mounted) return;
+    final quality = await _askImageQuality(firstBytes.length);
+    if (quality == null || !mounted) return;
+
+    for (var i = 0; i < picked.length; i++) {
+      if (!mounted) return;
+      final bytes = i == 0 ? firstBytes : await picked[i].readAsBytes();
+      if (!mounted) return;
+      // Each photo is its own message, so one failure leaves the rest alone.
+      await cubit.sendMedia(
+        messageId: _uuid.v4(),
+        rawBytes: bytes,
+        type: MessageType.image,
+        quality: quality,
+      );
+    }
+  }
+
+  /// Shows the quality sheet, seeded with the last choice and remembering a
+  /// new one. Returns null if the sheet was dismissed.
+  Future<ImageQuality?> _askImageQuality(int originalBytes) async {
+    final settings = widget.settingsRepository;
+    final remembered = ImageQualityX.parse(
+      await settings?.getChatImageQuality(),
+    );
+    if (!mounted) return null;
+    final chosen = await ImageQualitySheet.show(
+      context,
+      originalBytes: originalBytes,
+      selected: remembered,
+    );
+    if (chosen == null) return null;
+    if (chosen != remembered) {
+      await settings?.setChatImageQuality(chosen.name);
+    }
+    return chosen;
+  }
+
+  /// Asks which quality to send a single photo at, then sends it.
+  Future<void> _sendImageWithQuality(
+    ActiveThreadCubit cubit,
+    Uint8List bytes,
+  ) async {
+    final quality = await _askImageQuality(bytes.length);
+    if (quality == null || !mounted) return;
+    await cubit.sendMedia(
+      messageId: _uuid.v4(),
+      rawBytes: bytes,
+      type: MessageType.image,
+      quality: quality,
+    );
   }
 
   /// Attach any file (PDF, Office document, archive…) as an encrypted blob.
@@ -1507,11 +1606,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
     try {
       final bytes = await widget.vaultBridge.readVaultPhoto(photo);
       if (!mounted) return;
-      await cubit.sendMedia(
-        messageId: _uuid.v4(),
-        rawBytes: bytes,
-        type: MessageType.image,
-      );
+      await _sendImageWithQuality(cubit, bytes);
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(

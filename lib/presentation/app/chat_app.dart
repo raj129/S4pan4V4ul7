@@ -304,6 +304,7 @@ class _ChatAppState extends State<ChatApp> with WidgetsBindingObserver {
                       cryptoService: _deps.cryptoService,
                       myUid: currentUser.uid,
                       connectivityStream: Connectivity().onConnectivityChanged,
+                      onMediaReady: _deps.mediaLoader.seed,
                     ),
                   ),
                 ],

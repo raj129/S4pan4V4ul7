@@ -11,4 +11,8 @@ abstract class SettingsRepository {
   Future<void> setExternalStorageMirrorEnabled(bool enabled);
   Future<bool> isDriveEncryptedBackupEnabled();
   Future<void> setDriveEncryptedBackupEnabled(bool enabled);
+
+  /// Last attachment quality the user picked, preselected next time.
+  Future<String?> getChatImageQuality();
+  Future<void> setChatImageQuality(String quality);
 }

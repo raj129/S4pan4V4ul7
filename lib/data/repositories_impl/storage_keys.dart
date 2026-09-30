@@ -13,4 +13,5 @@ class StorageKeys {
       'settings.external_storage_mirror_enabled';
   static const String driveEncryptedBackupEnabled =
       'settings.drive_encrypted_backup_enabled';
+  static const String chatImageQuality = 'settings.chat_image_quality';
 }

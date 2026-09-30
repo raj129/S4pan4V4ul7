@@ -265,6 +265,7 @@ GoRoute _chatRoute(AppDependencies deps, AppSessionState session) {
                 cryptoService: deps.chatDependencies.cryptoService,
                 myUid: deps.chatDependencies.authService.currentUid ?? '',
                 connectivityStream: Connectivity().onConnectivityChanged,
+                onMediaReady: deps.chatDependencies.mediaLoader.seed,
               ),
               child: child,
             );
@@ -305,6 +306,7 @@ GoRoute _chatRoute(AppDependencies deps, AppSessionState session) {
             mediaLoader: deps.chatDependencies.mediaLoader,
             vaultBridge: deps.chatVaultBridge,
             notificationService: deps.chatDependencies.notificationService,
+            settingsRepository: deps.settingsRepository,
           );
           final providedCubit = args.activeThreadCubit;
           Widget withThreadList(Widget child) {
@@ -348,6 +350,7 @@ GoRoute _chatRoute(AppDependencies deps, AppSessionState session) {
               cryptoService: deps.chatDependencies.cryptoService,
               myUid: deps.chatDependencies.authService.currentUid ?? '',
               connectivityStream: Connectivity().onConnectivityChanged,
+              onMediaReady: deps.chatDependencies.mediaLoader.seed,
             ),
             child: screen,
           ));

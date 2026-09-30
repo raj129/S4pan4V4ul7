@@ -161,6 +161,7 @@ class ChatDependencies {
     readPin: () => _vaultSession.pin,
     beforeSignOut: () async {
       await _pushService?.stop();
+      await mediaLoader.clearAll();
     },
   );
 

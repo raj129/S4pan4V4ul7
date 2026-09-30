@@ -86,6 +86,10 @@ class ChatMessage extends Equatable {
 
   bool get isDocument => isMedia && mediaType == MessageType.file;
 
+  /// Blob to render in the thread list: the small preview when one was
+  /// uploaded, otherwise the full-size object.
+  String? get previewRef => mediaMeta?.thumbRef ?? mediaRef;
+
   /// Thread-list / quote placeholder for an attachment of [type].
   ///
   /// Documents carry their file name in the (encrypted) message body rather

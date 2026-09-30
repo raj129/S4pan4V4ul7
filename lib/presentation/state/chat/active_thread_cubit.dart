@@ -13,6 +13,7 @@ import '../../../domain/entities/message_metadata.dart';
 import '../../../domain/entities/message_reply.dart';
 import '../../../domain/entities/user_presence.dart';
 import '../../../application/services/chat_search_indexer.dart';
+import '../../../application/services/image_compressor.dart';
 import '../../../domain/repositories/chat_search_index_repository.dart';
 import '../../../domain/repositories/message_cache_repository.dart';
 import '../../../domain/repositories/message_repository.dart';
@@ -22,6 +23,7 @@ import '../../../domain/repositories/thread_repository.dart';
 import '../../../domain/repositories/typing_repository.dart';
 import '../../../domain/repositories/user_repository.dart';
 import '../../../crypto/services/chat_crypto_service.dart';
+import 'media_send_status.dart';
 
 // ── States ──────────────────────────────────────────────────────────────────
 
@@ -66,6 +68,7 @@ class ActiveThreadLoaded extends ActiveThreadState {
     this.newWhileDetached = 0,
     this.indexingProgress,
     this.scrollRequest,
+    this.uploadProgress = const {},
   });
   final ChatThread thread;
   final ChatUser otherUser;
@@ -123,6 +126,10 @@ class ActiveThreadLoaded extends ActiveThreadState {
   /// Latest scroll request for the screen to honour.
   final ChatScrollRequest? scrollRequest;
 
+  /// Progress of each outgoing attachment, keyed by message id. An entry
+  /// exists only while that attachment is being prepared or uploaded.
+  final Map<String, MediaSendStatus> uploadProgress;
+
   bool get isSearching => searchQuery.trim().isNotEmpty;
 
   /// Position of [currentMatchId] in [searchMatchIds], or -1.
@@ -154,6 +161,7 @@ class ActiveThreadLoaded extends ActiveThreadState {
     double? indexingProgress,
     bool clearIndexingProgress = false,
     ChatScrollRequest? scrollRequest,
+    Map<String, MediaSendStatus>? uploadProgress,
   }) => ActiveThreadLoaded(
     thread: thread,
     otherUser: otherUser,
@@ -178,6 +186,7 @@ class ActiveThreadLoaded extends ActiveThreadState {
         ? null
         : (indexingProgress ?? this.indexingProgress),
     scrollRequest: scrollRequest ?? this.scrollRequest,
+    uploadProgress: uploadProgress ?? this.uploadProgress,
   );
 
   @override
@@ -201,6 +210,7 @@ class ActiveThreadLoaded extends ActiveThreadState {
     newWhileDetached,
     indexingProgress,
     scrollRequest,
+    uploadProgress,
   ];
 }
 
@@ -234,6 +244,8 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
     required this.outbox,
     required this.cryptoService,
     required this.myUid,
+    this.imageCompressor = const ImageCompressor(),
+    this.onMediaReady,
     ChatSearchIndexRepository searchIndex =
         const NoopChatSearchIndexRepository(),
     Stream<List<ConnectivityResult>>? connectivityStream,
@@ -270,6 +282,14 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
   final OutboxRepository outbox;
   final ChatCryptoService cryptoService;
   final String myUid;
+
+  /// Downscales outgoing photos and builds their previews.
+  final ImageCompressor imageCompressor;
+
+  /// Publishes locally prepared bytes under their storage path, so the
+  /// sender's own attachment renders without downloading it back.
+  final void Function(String storagePath, Uint8List bytes)? onMediaReady;
+
   final ChatSearchIndexer _indexer;
 
   StreamSubscription<List<ChatMessage>>? _messageSub;
@@ -1556,10 +1576,13 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
 
   /// Clear-text layout hints for an attachment. Best effort: an unreadable
   /// header only costs the placeholder its exact aspect ratio.
-  static MediaMeta _buildMediaMeta(MessageType type, Uint8List bytes) {
-    int? width;
-    int? height;
-    if (type == MessageType.image) {
+  static MediaMeta _buildMediaMeta(
+    MessageType type,
+    Uint8List bytes, {
+    int? width,
+    int? height,
+  }) {
+    if (type == MessageType.image && (width == null || height == null)) {
       try {
         final info = img.findDecoderForData(bytes)?.startDecode(bytes);
         width = info?.width;
@@ -1569,15 +1592,55 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
     return MediaMeta(width: width, height: height, sizeBytes: bytes.length);
   }
 
+  /// Publishes (or clears, when [status] is null) the progress of an outgoing
+  /// attachment.
+  void _setUploadStatus(String messageId, MediaSendStatus? status) {
+    final current = state;
+    if (current is! ActiveThreadLoaded) return;
+    final next = Map<String, MediaSendStatus>.from(current.uploadProgress);
+    if (status == null) {
+      if (next.remove(messageId) == null) return;
+    } else {
+      if (next[messageId] == status) return;
+      next[messageId] = status;
+    }
+    emit(current.copyWith(uploadProgress: next));
+  }
+
+  /// Advances the bar within one phase, never backwards.
+  void _advanceUpload(
+    String messageId,
+    MediaSendPhase phase,
+    double progress,
+  ) {
+    final current = state;
+    if (current is! ActiveThreadLoaded) return;
+    final existing = current.uploadProgress[messageId];
+    // A late callback from an earlier phase must not rewind the ring.
+    if (existing != null && progress < existing.progress) return;
+    _setUploadStatus(
+      messageId,
+      MediaSendStatus(phase: phase, progress: progress),
+    );
+  }
+
   /// Encrypt, upload and send an attachment.
   ///
   /// For [MessageType.file], [filename] is required: it becomes the encrypted
   /// message body, so the recipient sees the name but the server never does.
+  ///
+  /// Photos are downscaled to [quality] and get a small preview blob uploaded
+  /// beside them, so listing the thread never downloads the full image.
+  ///
+  /// The bubble is queued *before* compression. Compressing a large photo is
+  /// the slowest part of a send and reports no byte counts, so doing it first
+  /// would leave the screen unchanged for seconds after the user tapped send.
   Future<void> sendMedia({
     required String messageId,
     required List<int> rawBytes,
     required MessageType type,
     String? filename,
+    ImageQuality quality = ImageQuality.high,
   }) async {
     final threadId = _currentThreadId;
     if (threadId == null) return;
@@ -1585,22 +1648,18 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
       _reportActionError('That file is empty.');
       return;
     }
-    if (rawBytes.length > maxAttachmentBytes) {
-      _reportActionError('Attachments must be smaller than 64 MB.');
-      return;
-    }
     final preview = ChatMessage.mediaPreviewFor(type, filename: filename);
     try {
-      final bytes = rawBytes is Uint8List
+      var bytes = rawBytes is Uint8List
           ? rawBytes
           : Uint8List.fromList(rawBytes);
+
       final encryptedText = await cryptoService.encryptMessage(
         threadId: threadId,
         plaintext: preview,
       );
-      // Queued before the upload so the bubble appears immediately, but with no
-      // mediaRef yet: an entry without one is not deliverable and drainOutbox
-      // deliberately refuses to send it.
+      // Queued with no mediaRef yet: an entry without one is not deliverable
+      // and drainOutbox deliberately refuses to send it.
       var item = OutboxItem(
         messageId: messageId,
         threadId: threadId,
@@ -1614,22 +1673,109 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
       );
       await outbox.enqueue(item);
       _showPending(item, preview);
+      _setUploadStatus(messageId, const MediaSendStatus.preparing());
 
-      final encrypted = await cryptoService.encryptMedia(
-        threadId: threadId,
-        bytes: bytes,
-      );
-      final storagePath = await mediaRepository.uploadEncryptedMedia(
-        threadId: threadId,
-        messageId: messageId,
-        filename: '$messageId.${_storageExtension(type)}',
-        encryptedBytes: encrypted,
-      );
-      // Recorded so a retry reuses the upload instead of repeating it.
-      item = item.copyWith(mediaRef: storagePath);
-      await outbox.enqueue(item);
+      try {
+        Uint8List? thumbnail;
+        if (type == MessageType.image) {
+          final prepared = await imageCompressor.prepare(
+            bytes: bytes,
+            quality: quality,
+          );
+          bytes = prepared.bytes;
+          thumbnail = prepared.thumbnail.isEmpty ? null : prepared.thumbnail;
+          // Re-published so the bubble reserves the final aspect ratio using
+          // the compressed dimensions rather than the originals.
+          item = item.copyWith(
+            mediaMeta: _buildMediaMeta(
+              type,
+              bytes,
+              width: prepared.width == 0 ? null : prepared.width,
+              height: prepared.height == 0 ? null : prepared.height,
+            ),
+          );
+          _showPending(item, preview);
+        }
+        _advanceUpload(
+          messageId,
+          MediaSendPhase.encrypting,
+          MediaSendWeights.compressEnd,
+        );
+
+        // Checked after compression, so a large photo can still go through at
+        // a lower quality. The bubble already exists, so it has to be taken
+        // back rather than simply not created.
+        if (bytes.length > maxAttachmentBytes) {
+          await discardMessage(messageId);
+          _reportActionError('Attachments must be smaller than 64 MB.');
+          return;
+        }
+
+        String? thumbPath;
+        if (thumbnail != null) {
+          final encryptedThumb = await cryptoService.encryptMedia(
+            threadId: threadId,
+            bytes: thumbnail,
+          );
+          thumbPath = await mediaRepository.uploadEncryptedMedia(
+            threadId: threadId,
+            messageId: messageId,
+            filename: '$messageId.thumb.enc',
+            encryptedBytes: encryptedThumb,
+            onProgress: (p) => _advanceUpload(
+              messageId,
+              MediaSendPhase.uploading,
+              MediaSendWeights.span(
+                MediaSendWeights.compressEnd,
+                MediaSendWeights.thumbEnd,
+                p,
+              ),
+            ),
+          );
+          // The device already has these bytes; publishing them means the
+          // sender's own bubble never downloads its own thumbnail.
+          onMediaReady?.call(thumbPath, thumbnail);
+        }
+        _advanceUpload(
+          messageId,
+          MediaSendPhase.encrypting,
+          MediaSendWeights.thumbEnd,
+        );
+
+        final encrypted = await cryptoService.encryptMedia(
+          threadId: threadId,
+          bytes: bytes,
+        );
+        final storagePath = await mediaRepository.uploadEncryptedMedia(
+          threadId: threadId,
+          messageId: messageId,
+          filename: '$messageId.${_storageExtension(type)}',
+          encryptedBytes: encrypted,
+          onProgress: (p) => _advanceUpload(
+            messageId,
+            MediaSendPhase.uploading,
+            MediaSendWeights.span(MediaSendWeights.thumbEnd, 1, p),
+          ),
+        );
+        if (type == MessageType.image) {
+          onMediaReady?.call(storagePath, bytes);
+        }
+
+        // Recorded so a retry reuses the upload instead of repeating it.
+        item = item.copyWith(
+          mediaRef: storagePath,
+          mediaMeta: thumbPath == null
+              ? item.mediaMeta
+              : item.mediaMeta?.copyWith(thumbRef: thumbPath) ??
+                    MediaMeta(thumbRef: thumbPath),
+        );
+        await outbox.enqueue(item);
+      } finally {
+        _setUploadStatus(messageId, null);
+      }
       await _deliver(item, decryptedPreview: preview);
     } catch (e) {
+      _setUploadStatus(messageId, null);
       await outbox.markFailed(messageId, e.toString());
       _reportActionError('Media send failed: $e');
     }

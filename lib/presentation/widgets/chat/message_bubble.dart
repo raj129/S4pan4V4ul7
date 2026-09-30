@@ -7,12 +7,14 @@ import '../../../domain/entities/chat_message.dart';
 import '../../../domain/entities/message_metadata.dart';
 import '../../../domain/entities/message_reply.dart';
 import '../../../domain/search/chat_search_tokenizer.dart';
+import '../../screens/chat_screens/chat_image_viewer_screen.dart';
 import '../../theme/app_spacing.dart';
 import '../../theme/app_typography.dart';
 import '../../theme/chat_theme.dart';
 import 'animated_emoji.dart';
 import 'chat_bubble_shape.dart';
 import 'chat_media_preview.dart';
+import '../../state/chat/media_send_status.dart';
 
 /// Emoji offered in the quick reaction bar, matching WhatsApp's default set.
 const kQuickReactions = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
@@ -43,6 +45,8 @@ class MessageBubble extends StatelessWidget {
     this.canReplyFromLeftToRight = true,
     this.isHighlighted = false,
     this.highlightQuery = '',
+
+    this.sendStatus,
   });
 
   final ChatMessage message;
@@ -92,6 +96,9 @@ class MessageBubble extends StatelessWidget {
   /// Search term whose occurrences are marked inside the message text.
   final String highlightQuery;
 
+  /// Send progress of this attachment, null once it is sent.
+  final MediaSendStatus? sendStatus;
+
   @override
   Widget build(BuildContext context) {
     // "Delete for me" and "delete for everyone" must look identical and be
@@ -137,6 +144,7 @@ class MessageBubble extends StatelessWidget {
               otherUid: otherUid,
               otherIsOnline: otherIsOnline,
               mediaLoader: mediaLoader,
+              sendStatus: sendStatus,
               onTapQuote: onTapQuote,
               textColor: cs.onSurface,
               metaColor: cs.onSurfaceVariant,
@@ -164,6 +172,7 @@ class MessageBubble extends StatelessWidget {
                 otherUid: otherUid,
                 otherIsOnline: otherIsOnline,
                 mediaLoader: mediaLoader,
+                sendStatus: sendStatus,
                 onTapQuote: onTapQuote,
                 textColor: isHighlighted ? cs.onTertiaryContainer : textColor,
                 metaColor: isHighlighted ? cs.onTertiaryContainer : textColor,
@@ -395,6 +404,8 @@ class _BubbleContent extends StatelessWidget {
     required this.metaColor,
     required this.bare,
     this.highlightQuery = '',
+
+    this.sendStatus,
   });
 
   final ChatMessage message;
@@ -408,6 +419,9 @@ class _BubbleContent extends StatelessWidget {
   final Color metaColor;
   final bool bare;
   final String highlightQuery;
+
+  /// Send progress of this attachment, null once it is sent.
+  final MediaSendStatus? sendStatus;
 
   @override
   Widget build(BuildContext context) {
@@ -459,7 +473,18 @@ class _BubbleContent extends StatelessWidget {
         else if (message.isMedia)
           ClipRRect(
             borderRadius: AppRadius.all(AppRadius.sm),
-            child: ChatMediaPreview(message: message, loader: mediaLoader),
+            child: ChatMediaPreview(
+              message: message,
+              loader: mediaLoader,
+              sendStatus: sendStatus,
+              onTap: message.mediaType == MessageType.image
+                  ? () => ChatImageViewerScreen.open(
+                      context,
+                      message: message,
+                      loader: mediaLoader,
+                    )
+                  : null,
+            ),
           ),
         // A document's body is its file name, already shown in the tile.
         if (text != null && text.isNotEmpty && !message.isDocument)

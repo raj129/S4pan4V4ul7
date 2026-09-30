@@ -69,4 +69,12 @@ class PersistentSettingsRepository implements SettingsRepository {
   Future<void> setDriveEncryptedBackupEnabled(bool enabled) {
     return _kv.write(StorageKeys.driveEncryptedBackupEnabled, enabled.toString());
   }
+
+  @override
+  Future<String?> getChatImageQuality() =>
+      _kv.read(StorageKeys.chatImageQuality);
+
+  @override
+  Future<void> setChatImageQuality(String quality) =>
+      _kv.write(StorageKeys.chatImageQuality, quality);
 }

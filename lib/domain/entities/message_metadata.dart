@@ -14,6 +14,7 @@ class MediaMeta extends Equatable {
     this.sizeBytes,
     this.durationMs,
     this.filename,
+    this.thumbRef,
   });
 
   final int? width;
@@ -26,6 +27,13 @@ class MediaMeta extends Equatable {
   /// Legacy clear-text file name. New document messages leave this null and
   /// carry the name inside the encrypted body instead, so it is not leaked.
   final String? filename;
+
+  /// Storage path of the small encrypted preview blob, when one was uploaded.
+  ///
+  /// Listing a thread only needs a ~320 px tile, so downloading and decrypting
+  /// the full-size image for every bubble wastes bandwidth and memory. Null on
+  /// messages sent before thumbnails existed, which fall back to the full blob.
+  final String? thumbRef;
 
   /// Aspect ratio for the placeholder, falling back to 4:3 when unknown.
   double get aspectRatio {
@@ -58,7 +66,17 @@ class MediaMeta extends Equatable {
         if (sizeBytes != null) 'sizeBytes': sizeBytes,
         if (durationMs != null) 'durationMs': durationMs,
         if (filename != null) 'filename': filename,
+        if (thumbRef != null) 'thumbRef': thumbRef,
       };
+
+  MediaMeta copyWith({String? thumbRef, int? sizeBytes}) => MediaMeta(
+        width: width,
+        height: height,
+        sizeBytes: sizeBytes ?? this.sizeBytes,
+        durationMs: durationMs,
+        filename: filename,
+        thumbRef: thumbRef ?? this.thumbRef,
+      );
 
   static MediaMeta? fromFirestore(Map<String, dynamic>? data) {
     if (data == null || data.isEmpty) return null;
@@ -68,11 +86,19 @@ class MediaMeta extends Equatable {
       sizeBytes: (data['sizeBytes'] as num?)?.toInt(),
       durationMs: (data['durationMs'] as num?)?.toInt(),
       filename: data['filename'] as String?,
+      thumbRef: data['thumbRef'] as String?,
     );
   }
 
   @override
-  List<Object?> get props => [width, height, sizeBytes, durationMs, filename];
+  List<Object?> get props => [
+        width,
+        height,
+        sizeBytes,
+        durationMs,
+        filename,
+        thumbRef,
+      ];
 }
 
 /// Delivery state of an outgoing message, rendered as ticks on the bubble.

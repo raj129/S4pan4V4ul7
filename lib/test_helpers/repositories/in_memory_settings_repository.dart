@@ -50,4 +50,14 @@ class InMemorySettingsRepository implements SettingsRepository {
   Future<void> setDriveEncryptedBackupEnabled(bool enabled) async {
     _driveEncryptedBackupEnabled = enabled;
   }
+
+  String? _chatImageQuality;
+
+  @override
+  Future<String?> getChatImageQuality() async => _chatImageQuality;
+
+  @override
+  Future<void> setChatImageQuality(String quality) async {
+    _chatImageQuality = quality;
+  }
 }
