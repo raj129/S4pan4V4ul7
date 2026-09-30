@@ -150,10 +150,20 @@ class _ChatImageViewerScreenState extends State<ChatImageViewerScreen>
           return Image.memory(snap.data!, fit: BoxFit.contain);
         }
         if (snap.hasError) {
-          return const Icon(
-            Icons.broken_image_outlined,
+          return IconButton(
+            iconSize: 48,
             color: Colors.white54,
-            size: 48,
+            tooltip: 'Retry',
+            icon: const Icon(Icons.refresh_rounded),
+            onPressed: () => setState(() {
+              final ref = widget.message.mediaRef;
+              if (ref != null) {
+                _full = widget.loader.load(
+                  threadId: widget.message.threadId,
+                  storagePath: ref,
+                );
+              }
+            }),
           );
         }
         return Stack(

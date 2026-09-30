@@ -355,6 +355,7 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
   /// Kept separate from [_buffer] so that when the real message arrives on the
   /// stream the optimistic copy disappears without a merge conflict.
   final Map<String, ChatMessage> _pending = {};
+  final Map<String, UploadCancelToken> _uploadTokens = {};
 
   /// Local-only "clear chat" watermark for the open thread (null if the chat
   /// has never been cleared on this device). Messages sent at or before this
@@ -1624,6 +1625,23 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
     );
   }
 
+  /// Abort a send that is still being prepared or uploaded, and remove its
+  /// bubble. Has no effect once delivery has started.
+  Future<void> cancelUpload(String messageId) async {
+    final token = _uploadTokens[messageId];
+    if (token == null) return;
+    token.cancel();
+    _setUploadStatus(messageId, null);
+    await discardMessage(messageId);
+  }
+
+  Future<void> _deleteQuietly(String? storagePath) async {
+    if (storagePath == null) return;
+    try {
+      await mediaRepository.deleteMedia(storagePath);
+    } catch (_) {}
+  }
+
   /// Encrypt, upload and send an attachment.
   ///
   /// For [MessageType.file], [filename] is required: it becomes the encrypted
@@ -1649,6 +1667,13 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
       return;
     }
     final preview = ChatMessage.mediaPreviewFor(type, filename: filename);
+    final token = _uploadTokens[messageId] = UploadCancelToken();
+    void throwIfCancelled() {
+      if (token.isCancelled) throw const UploadCancelledException();
+    }
+
+    String? thumbPath;
+    String? storagePath;
     try {
       var bytes = rawBytes is Uint8List
           ? rawBytes
@@ -1672,6 +1697,7 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
         queuedAt: DateTime.now().toUtc(),
       );
       await outbox.enqueue(item);
+      throwIfCancelled();
       _showPending(item, preview);
       _setUploadStatus(messageId, const MediaSendStatus.preparing());
 
@@ -1694,8 +1720,10 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
               height: prepared.height == 0 ? null : prepared.height,
             ),
           );
+          throwIfCancelled();
           _showPending(item, preview);
         }
+        throwIfCancelled();
         _advanceUpload(
           messageId,
           MediaSendPhase.encrypting,
@@ -1711,7 +1739,6 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
           return;
         }
 
-        String? thumbPath;
         if (thumbnail != null) {
           final encryptedThumb = await cryptoService.encryptMedia(
             threadId: threadId,
@@ -1722,6 +1749,7 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
             messageId: messageId,
             filename: '$messageId.thumb.enc',
             encryptedBytes: encryptedThumb,
+            cancelToken: token,
             onProgress: (p) => _advanceUpload(
               messageId,
               MediaSendPhase.uploading,
@@ -1742,21 +1770,25 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
           MediaSendWeights.thumbEnd,
         );
 
+        throwIfCancelled();
         final encrypted = await cryptoService.encryptMedia(
           threadId: threadId,
           bytes: bytes,
         );
-        final storagePath = await mediaRepository.uploadEncryptedMedia(
+        throwIfCancelled();
+        storagePath = await mediaRepository.uploadEncryptedMedia(
           threadId: threadId,
           messageId: messageId,
           filename: '$messageId.${_storageExtension(type)}',
           encryptedBytes: encrypted,
+          cancelToken: token,
           onProgress: (p) => _advanceUpload(
             messageId,
             MediaSendPhase.uploading,
             MediaSendWeights.span(MediaSendWeights.thumbEnd, 1, p),
           ),
         );
+        throwIfCancelled();
         if (type == MessageType.image) {
           onMediaReady?.call(storagePath, bytes);
         }
@@ -1773,11 +1805,20 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
       } finally {
         _setUploadStatus(messageId, null);
       }
+      // Past this point the message is being written; cancelling is over.
+      _uploadTokens.remove(messageId);
       await _deliver(item, decryptedPreview: preview);
+    } on UploadCancelledException {
+      _setUploadStatus(messageId, null);
+      await discardMessage(messageId);
+      await _deleteQuietly(thumbPath);
+      await _deleteQuietly(storagePath);
     } catch (e) {
       _setUploadStatus(messageId, null);
       await outbox.markFailed(messageId, e.toString());
       _reportActionError('Media send failed: $e');
+    } finally {
+      _uploadTokens.remove(messageId);
     }
   }
 

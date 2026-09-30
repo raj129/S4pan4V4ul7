@@ -704,6 +704,9 @@ class _ThreadScreenState extends State<ThreadScreen> {
               otherIsOnline: state.otherIsOnline,
               mediaLoader: widget.mediaLoader,
               sendStatus: state.uploadProgress[msg.messageId],
+              onCancelUpload: state.uploadProgress[msg.messageId] == null
+                  ? null
+                  : () => cubit.cancelUpload(msg.messageId),
               isHighlighted:
                   _highlightedId == msg.messageId ||
                   state.currentMatchId == msg.messageId,

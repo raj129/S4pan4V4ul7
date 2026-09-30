@@ -8,6 +8,7 @@ import '../../../domain/entities/message_metadata.dart';
 import '../../../domain/entities/message_reply.dart';
 import '../../../domain/search/chat_search_tokenizer.dart';
 import '../../screens/chat_screens/chat_image_viewer_screen.dart';
+import '../../screens/chat_screens/chat_video_player_screen.dart';
 import '../../theme/app_spacing.dart';
 import '../../theme/app_typography.dart';
 import '../../theme/chat_theme.dart';
@@ -47,6 +48,7 @@ class MessageBubble extends StatelessWidget {
     this.highlightQuery = '',
 
     this.sendStatus,
+    this.onCancelUpload,
   });
 
   final ChatMessage message;
@@ -99,6 +101,9 @@ class MessageBubble extends StatelessWidget {
   /// Send progress of this attachment, null once it is sent.
   final MediaSendStatus? sendStatus;
 
+  /// Stops an attachment that is still being sent.
+  final VoidCallback? onCancelUpload;
+
   @override
   Widget build(BuildContext context) {
     // "Delete for me" and "delete for everyone" must look identical and be
@@ -145,6 +150,7 @@ class MessageBubble extends StatelessWidget {
               otherIsOnline: otherIsOnline,
               mediaLoader: mediaLoader,
               sendStatus: sendStatus,
+              onCancelUpload: onCancelUpload,
               onTapQuote: onTapQuote,
               textColor: cs.onSurface,
               metaColor: cs.onSurfaceVariant,
@@ -174,6 +180,7 @@ class MessageBubble extends StatelessWidget {
                 otherIsOnline: otherIsOnline,
                 mediaLoader: mediaLoader,
                 sendStatus: sendStatus,
+                onCancelUpload: onCancelUpload,
                 onTapQuote: onTapQuote,
                 textColor: isHighlighted ? cs.onTertiaryContainer : textColor,
                 metaColor: isHighlighted ? cs.onTertiaryContainer : textColor,
@@ -410,6 +417,7 @@ class _BubbleContent extends StatelessWidget {
     this.highlightQuery = '',
 
     this.sendStatus,
+    this.onCancelUpload,
   });
 
   final ChatMessage message;
@@ -427,6 +435,7 @@ class _BubbleContent extends StatelessWidget {
 
   /// Send progress of this attachment, null once it is sent.
   final MediaSendStatus? sendStatus;
+  final VoidCallback? onCancelUpload;
 
   @override
   Widget build(BuildContext context) {
@@ -474,16 +483,27 @@ class _BubbleContent extends StatelessWidget {
             message: message,
             loader: mediaLoader,
             textColor: textColor,
+            sendStatus: sendStatus,
+            onCancel: onCancelUpload,
           )
-        else if (message.isMedia)
+        else if (message.hasMediaSlot)
           ClipRRect(
             borderRadius: AppRadius.all(AppRadius.sm),
             child: ChatMediaPreview(
               message: message,
               loader: mediaLoader,
               sendStatus: sendStatus,
-              onTap: message.mediaType == MessageType.image
+              onCancel: onCancelUpload,
+              onTap: message.mediaRef == null
+                  ? null
+                  : message.mediaType == MessageType.image
                   ? () => ChatImageViewerScreen.open(
+                      context,
+                      message: message,
+                      loader: mediaLoader,
+                    )
+                  : message.mediaType == MessageType.video
+                  ? () => ChatVideoPlayerScreen.open(
                       context,
                       message: message,
                       loader: mediaLoader,

@@ -84,7 +84,13 @@ class ChatMessage extends Equatable {
 
   bool get isMedia => mediaRef != null;
 
-  bool get isDocument => isMedia && mediaType == MessageType.file;
+  /// True for an attachment bubble, including one still uploading (no
+  /// `mediaRef` yet), so the upload progress can be shown on it.
+  bool get hasMediaSlot =>
+      mediaRef != null ||
+      (mediaType != null && mediaType != MessageType.text);
+
+  bool get isDocument => hasMediaSlot && mediaType == MessageType.file;
 
   /// Blob to render in the thread list: the small preview when one was
   /// uploaded, otherwise the full-size object.

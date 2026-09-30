@@ -122,6 +122,7 @@ class ChatMediaPreview extends StatefulWidget {
     required this.loader,
     this.onTap,
     this.sendStatus,
+    this.onCancel,
   });
 
   final ChatMessage message;
@@ -131,16 +132,23 @@ class ChatMediaPreview extends StatefulWidget {
   /// Progress of this attachment while it is being sent, null once it is sent.
   final MediaSendStatus? sendStatus;
 
+  /// Stops the send while [sendStatus] is showing.
+  final VoidCallback? onCancel;
+
   @override
   State<ChatMediaPreview> createState() => _ChatMediaPreviewState();
 }
 
 class _ChatMediaPreviewState extends State<ChatMediaPreview> {
   Future<Uint8List>? _future;
+  int _attempt = 0;
+
+  static const _maxAutoRetries = 3;
 
   /// Kept after the send finishes so a very fast upload does not flash.
   MediaSendStatus? _visibleStatus;
   Timer? _linger;
+  Timer? _retryTimer;
   DateTime? _shownAt;
 
   /// How long the overlay stays up once it has appeared.
@@ -158,6 +166,8 @@ class _ChatMediaPreviewState extends State<ChatMediaPreview> {
   void didUpdateWidget(ChatMediaPreview oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.message.previewRef != widget.message.previewRef) {
+      _attempt = 0;
+      _retryTimer?.cancel();
       _future = _start();
     }
     if (oldWidget.sendStatus != widget.sendStatus) _syncStatus();
@@ -194,18 +204,36 @@ class _ChatMediaPreviewState extends State<ChatMediaPreview> {
   @override
   void dispose() {
     _linger?.cancel();
+    _retryTimer?.cancel();
     super.dispose();
+  }
+
+  /// A failed load would otherwise stay broken until the chat is reopened.
+  void _scheduleRetry() {
+    if (_attempt >= _maxAutoRetries || _retryTimer?.isActive == true) return;
+    _attempt++;
+    _retryTimer = Timer(Duration(seconds: 2 * _attempt), _retryNow);
+  }
+
+  void _retryNow() {
+    if (!mounted) return;
+    _retryTimer?.cancel();
+    setState(() => _future = _start());
   }
 
   /// Null while an outgoing attachment is still uploading: there is no object
   /// to fetch yet, and the bubble shows the upload placeholder instead.
   Future<Uint8List>? _start() {
-    final ref = widget.message.previewRef;
+    final message = widget.message;
+    final ref = message.previewRef;
     if (ref == null) return null;
-    return widget.loader.load(
-      threadId: widget.message.threadId,
-      storagePath: ref,
-    );
+    // Without a poster thumbnail the only blob is the whole video, which
+    // cannot be drawn as an image; don't download it just to fail decoding.
+    if (message.mediaType == MessageType.video &&
+        message.mediaMeta?.thumbRef == null) {
+      return null;
+    }
+    return widget.loader.load(threadId: message.threadId, storagePath: ref);
   }
 
   @override
@@ -228,7 +256,8 @@ class _ChatMediaPreviewState extends State<ChatMediaPreview> {
             fit: StackFit.expand,
             children: [
               _buildImage(),
-              if (status != null) _UploadOverlay(status: status),
+              if (status != null)
+                _UploadOverlay(status: status, onCancel: widget.onCancel),
             ],
           ),
         ),
@@ -241,7 +270,19 @@ class _ChatMediaPreviewState extends State<ChatMediaPreview> {
     // Still uploading: no object exists yet, so show a neutral tile that the
     // progress overlay sits on.
     if (future == null) {
-      return const ColoredBox(color: Colors.black26, child: SizedBox.expand());
+      return ColoredBox(
+        color: Colors.black26,
+        child:
+            widget.message.mediaType == MessageType.video &&
+                widget.message.mediaRef != null
+            ? const Center(
+                child: CircleAvatar(
+                  backgroundColor: Colors.black54,
+                  child: Icon(Icons.play_arrow, color: Colors.white),
+                ),
+              )
+            : const SizedBox.expand(),
+      );
     }
     return FutureBuilder<Uint8List>(
       future: future,
@@ -259,13 +300,18 @@ class _ChatMediaPreviewState extends State<ChatMediaPreview> {
           );
         }
         if (snap.hasError || snap.data == null || snap.data!.isEmpty) {
-          return const ColoredBox(
-            color: Colors.black26,
-            child: Center(
-              child: Icon(
-                Icons.broken_image_outlined,
-                color: Colors.white70,
-                size: 36,
+          _scheduleRetry();
+          return GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: _retryNow,
+            child: const ColoredBox(
+              color: Colors.black26,
+              child: Center(
+                child: Icon(
+                  Icons.refresh_rounded,
+                  color: Colors.white70,
+                  size: 36,
+                ),
               ),
             ),
           );
@@ -303,9 +349,10 @@ class _ChatMediaPreviewState extends State<ChatMediaPreview> {
 /// so the ring spins indeterminately there and switches to a percentage once
 /// the upload is actually moving.
 class _UploadOverlay extends StatelessWidget {
-  const _UploadOverlay({required this.status});
+  const _UploadOverlay({required this.status, this.onCancel});
 
   final MediaSendStatus status;
+  final VoidCallback? onCancel;
 
   @override
   Widget build(BuildContext context) {
@@ -328,7 +375,14 @@ class _UploadOverlay extends StatelessWidget {
                     color: Colors.white,
                     backgroundColor: Colors.white24,
                   ),
-                  if (!indeterminate)
+                  if (onCancel != null)
+                    IconButton(
+                      onPressed: onCancel,
+                      tooltip: 'Cancel',
+                      padding: EdgeInsets.zero,
+                      icon: const Icon(Icons.close, color: Colors.white),
+                    )
+                  else if (!indeterminate)
                     Text(
                       '${(status.progress * 100).clamp(0, 100).toStringAsFixed(0)}%',
                       style: const TextStyle(
@@ -361,11 +415,19 @@ class ChatDocumentTile extends StatefulWidget {
     required this.message,
     required this.loader,
     required this.textColor,
+    this.sendStatus,
+    this.onCancel,
   });
 
   final ChatMessage message;
   final ChatMediaLoader loader;
   final Color textColor;
+
+  /// Progress while the document is being sent, null once it is sent.
+  final MediaSendStatus? sendStatus;
+
+  /// Stops the send while [sendStatus] is showing.
+  final VoidCallback? onCancel;
 
   @override
   State<ChatDocumentTile> createState() => _ChatDocumentTileState();
@@ -434,7 +496,14 @@ class _ChatDocumentTileState extends State<ChatDocumentTile> {
             SizedBox(
               width: 36,
               height: 36,
-              child: _opening
+              child: widget.sendStatus != null && widget.onCancel != null
+                  ? IconButton(
+                      onPressed: widget.onCancel,
+                      tooltip: 'Cancel',
+                      padding: EdgeInsets.zero,
+                      icon: Icon(Icons.close_rounded, color: color),
+                    )
+                  : _opening
                   ? const Padding(
                       padding: EdgeInsets.all(8),
                       child: CircularProgressIndicator(strokeWidth: 2),
@@ -453,7 +522,25 @@ class _ChatDocumentTileState extends State<ChatDocumentTile> {
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(color: color, fontWeight: FontWeight.w600),
                   ),
-                  if (size.isNotEmpty)
+                  if (widget.sendStatus != null) ...[
+                    const SizedBox(height: 6),
+                    LinearProgressIndicator(
+                      value: widget.sendStatus!.isIndeterminate
+                          ? null
+                          : widget.sendStatus!.progress,
+                      minHeight: 4,
+                      color: color,
+                      backgroundColor: color.withValues(alpha: 0.2),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      widget.sendStatus!.label,
+                      style: TextStyle(
+                        color: color.withValues(alpha: 0.7),
+                        fontSize: 11,
+                      ),
+                    ),
+                  ] else if (size.isNotEmpty)
                     Text(
                       size,
                       style: TextStyle(

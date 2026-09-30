@@ -89,17 +89,47 @@ abstract class MessageRepository {
   Future<void> deleteAllMessages(String threadId);
 }
 
+/// Lets the caller abort an in-flight upload.
+class UploadCancelToken {
+  bool _cancelled = false;
+  void Function()? _onCancel;
+
+  bool get isCancelled => _cancelled;
+
+  /// Registered by the repository so cancelling reaches the running transfer.
+  set onCancel(void Function()? callback) {
+    _onCancel = callback;
+    if (_cancelled) callback?.call();
+  }
+
+  void cancel() {
+    if (_cancelled) return;
+    _cancelled = true;
+    _onCancel?.call();
+  }
+}
+
+/// Thrown by an upload that was stopped through its [UploadCancelToken].
+class UploadCancelledException implements Exception {
+  const UploadCancelledException();
+
+  @override
+  String toString() => 'Upload cancelled';
+}
+
 abstract class MediaRepository {
   /// Upload an encrypted media blob to Firebase Storage.
   /// Returns the Storage path.
   ///
   /// [onProgress] receives a 0..1 fraction so the bubble can show a progress ring.
+  /// Throws [UploadCancelledException] if [cancelToken] is cancelled.
   Future<String> uploadEncryptedMedia({
     required String threadId,
     required String messageId,
     required String filename,
     required Uint8List encryptedBytes,
     void Function(double progress)? onProgress,
+    UploadCancelToken? cancelToken,
   });
 
   /// Download an encrypted media blob.

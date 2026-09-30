@@ -222,12 +222,15 @@ class FirebaseMediaRepository implements MediaRepository {
     required String filename,
     required Uint8List encryptedBytes,
     void Function(double progress)? onProgress,
+    UploadCancelToken? cancelToken,
   }) async {
+    if (cancelToken?.isCancelled == true) throw const UploadCancelledException();
     final ref = _ref(threadId, messageId, filename);
     final task = ref.putData(
       encryptedBytes,
       SettableMetadata(contentType: 'application/octet-stream'),
     );
+    cancelToken?.onCancel = () => task.cancel();
     if (onProgress != null) {
       task.snapshotEvents.listen(
         (snapshot) {
@@ -239,7 +242,20 @@ class FirebaseMediaRepository implements MediaRepository {
         onError: (_) {},
       );
     }
-    await task;
+    try {
+      final snapshot = await task;
+      if (snapshot.state == TaskState.canceled ||
+          cancelToken?.isCancelled == true) {
+        throw const UploadCancelledException();
+      }
+    } on FirebaseException catch (e) {
+      if (e.code == 'canceled' || cancelToken?.isCancelled == true) {
+        throw const UploadCancelledException();
+      }
+      rethrow;
+    } finally {
+      cancelToken?.onCancel = null;
+    }
     return ref.fullPath;
   }
 
