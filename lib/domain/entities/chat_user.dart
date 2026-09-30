@@ -1,5 +1,7 @@
 import 'package:equatable/equatable.dart';
 
+import 'profile_avatar.dart';
+
 /// A chat participant's public identity.
 ///
 /// Deliberately excludes online state: presence is served by
@@ -10,7 +12,7 @@ class ChatUser extends Equatable {
     required this.uid,
     required this.email,
     required this.displayName,
-    this.photoUrl,
+    this.avatar = const ProfileAvatar.initials(),
     required this.publicKey,
     required this.createdAt,
   });
@@ -18,7 +20,7 @@ class ChatUser extends Equatable {
   final String uid;
   final String email;
   final String displayName;
-  final String? photoUrl;
+  final ProfileAvatar avatar;
 
   /// Base64-encoded ECDH public key used for key exchange.
   final String publicKey;
@@ -29,19 +31,19 @@ class ChatUser extends Equatable {
     final parts = displayName.trim().split(' ');
     if (parts.length >= 2) return '${parts[0][0]}${parts[1][0]}'.toUpperCase();
     if (displayName.isNotEmpty) return displayName[0].toUpperCase();
-    return email[0].toUpperCase();
+    return '?';
   }
 
   ChatUser copyWith({
     String? displayName,
-    String? photoUrl,
+    ProfileAvatar? avatar,
     String? publicKey,
   }) {
     return ChatUser(
       uid: uid,
       email: email,
       displayName: displayName ?? this.displayName,
-      photoUrl: photoUrl ?? this.photoUrl,
+      avatar: avatar ?? this.avatar,
       publicKey: publicKey ?? this.publicKey,
       createdAt: createdAt,
     );
@@ -51,7 +53,7 @@ class ChatUser extends Equatable {
         'uid': uid,
         'email': email,
         'displayName': displayName,
-        'photoUrl': photoUrl,
+        'avatar': avatar.encode(),
         'publicKey': publicKey,
         'createdAt': createdAt.toUtc().millisecondsSinceEpoch,
       };
@@ -59,8 +61,8 @@ class ChatUser extends Equatable {
   factory ChatUser.fromFirestore(Map<String, dynamic> data) => ChatUser(
         uid: data['uid'] as String,
         email: data['email'] as String,
-        displayName: data['displayName'] as String? ?? data['email'] as String,
-        photoUrl: data['photoUrl'] as String?,
+        displayName: data['displayName'] as String? ?? 'Chat user',
+        avatar: ProfileAvatar.decode(data['avatar'] as String?),
         publicKey: data['publicKey'] as String? ?? '',
         createdAt: DateTime.fromMillisecondsSinceEpoch(
           (data['createdAt'] as int?) ?? 0,
@@ -69,5 +71,5 @@ class ChatUser extends Equatable {
       );
 
   @override
-  List<Object?> get props => [uid, email, displayName, photoUrl, publicKey];
+  List<Object?> get props => [uid, email, displayName, avatar, publicKey];
 }

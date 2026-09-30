@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io' show gzip;
 import 'dart:typed_data';
@@ -8,6 +9,7 @@ import 'package:crypto/crypto.dart' as hash;
 import '../../crypto/services/chat_crypto_service.dart';
 import '../../domain/repositories/chat_backup_store.dart';
 import '../../domain/repositories/message_cache_repository.dart';
+import 'profile_service.dart';
 
 /// A decrypted chat backup found in one of the stores.
 class ChatBackupSnapshot {
@@ -16,12 +18,16 @@ class ChatBackupSnapshot {
     required this.source,
     required this.messages,
     required this.clearedBefore,
+    this.profileData = const {},
   });
 
   final DateTime backupAt;
   final String source;
   final List<CachedMessageRecord> messages;
   final Map<String, DateTime> clearedBefore;
+
+  /// Own profile and contact aliases (see [ProfileService.exportForBackup]).
+  final Map<String, dynamic> profileData;
 
   int get messageCount => messages.length;
 }
@@ -58,13 +64,18 @@ class ChatBackupService {
     required String? Function() currentUid,
     Future<List<ConnectivityResult>> Function()? checkConnectivity,
     DateTime Function()? clock,
+    ProfileService? profile,
   }) : _cache = cache,
+       _profile = profile,
        _crypto = crypto,
        _stores = stores,
        _currentUid = currentUid,
        _checkConnectivity =
            checkConnectivity ?? (() => Connectivity().checkConnectivity()),
-       _clock = clock ?? DateTime.now;
+       _clock = clock ?? DateTime.now {
+    // A profile or alias edit makes the next app-open backup due.
+    _profile?.onChanged = () => unawaited(_markCloudPending());
+  }
 
   final MessageCacheRepository _cache;
   final ChatCryptoService _crypto;
@@ -72,6 +83,13 @@ class ChatBackupService {
   final String? Function() _currentUid;
   final Future<List<ConnectivityResult>> Function() _checkConnectivity;
   final DateTime Function() _clock;
+  final ProfileService? _profile;
+
+  Future<void> _markCloudPending() async {
+    try {
+      await _cache.writeSetting(_cloudPendingKey, '1');
+    } catch (_) {}
+  }
 
   static const _formatVersion = 1;
   static const _initialisedKey = 'chat_backup_initialised';
@@ -154,6 +172,7 @@ class ChatBackupService {
         for (final e in cleared.entries) e.key: e.value.millisecondsSinceEpoch,
       },
       'messages': [for (final r in records) r.toJson()],
+      if (_profile != null) 'profile': await _profile.exportForBackup(),
     };
     final blob = await _crypto.encryptBackup(
       gzip.encode(utf8.encode(jsonEncode(payload))),
@@ -270,6 +289,9 @@ class ChatBackupService {
       source: source,
       messages: messages,
       clearedBefore: cleared,
+      profileData: map['profile'] is Map
+          ? (map['profile'] as Map).cast<String, dynamic>()
+          : const {},
     );
   }
 
@@ -290,6 +312,9 @@ class ChatBackupService {
       return cleared == null || m.sentAtMs > cleared.millisecondsSinceEpoch;
     }).toList();
     await _cache.importAll(visible);
+    if (snapshot.profileData.isNotEmpty) {
+      await _profile?.importFromBackup(snapshot.profileData);
+    }
 
     final horizon = await _cache.getHistoryHorizon();
     if (horizon != null && snapshot.backupAt.isBefore(horizon)) {

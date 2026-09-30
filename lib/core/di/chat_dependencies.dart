@@ -4,12 +4,14 @@ import '../../application/services/chat_identity_service.dart';
 import '../../application/services/chat_notification_service.dart';
 import '../../application/services/contact_discovery_service.dart';
 import '../../application/services/presence_service.dart';
+import '../../application/services/profile_service.dart';
 import '../../application/services/push_notification_service.dart';
 import '../../application/services/vault_session.dart';
 import '../../crypto/services/chat_crypto_service.dart';
 import '../../data/repositories_impl/drift_chat_search_index_repository.dart';
 import '../../data/repositories_impl/drift_message_cache_repository.dart';
 import '../../data/repositories_impl/drift_outbox_repository.dart';
+import '../../data/repositories_impl/firebase_avatar_storage.dart';
 import '../../data/repositories_impl/firestore_push_token_repository.dart';
 import '../../data/repositories_impl/google_drive_chat_backup_store.dart';
 import '../../data/repositories_impl/local_chat_backup_store.dart';
@@ -152,7 +154,15 @@ class ChatDependencies {
     cryptoService: cryptoService,
   );
 
+  /// Own name/avatar and contact aliases, kept locally and in the backup.
+  late final ProfileService profileService = ProfileService(
+    store: messageCache,
+    userRepository: userRepository,
+    avatarStorage: FirebaseAvatarStorage(),
+  );
+
   late final ChatAuthService authService = ChatAuthService(
+    profileService: profileService,
     authRepository: _authRepository,
     userRepository: userRepository,
     presenceRepository: presenceRepository,
@@ -174,6 +184,7 @@ class ChatDependencies {
       GoogleDriveChatBackupStore(authRepository: _authRepository),
     ],
     currentUid: () => authService.currentUid,
+    profile: profileService,
   );
 
   void dispose() {

@@ -8,6 +8,7 @@ import '../../domain/repositories/auth_repository.dart';
 import '../../domain/repositories/presence_repository.dart';
 import '../../domain/repositories/user_repository.dart';
 import 'chat_identity_service.dart';
+import 'profile_service.dart';
 
 /// Orchestrates Google Sign-In → Firestore profile upsert → ECDH key init.
 class ChatAuthService {
@@ -19,7 +20,12 @@ class ChatAuthService {
     required this.identityService,
     required this.readPin,
     this.beforeSignOut,
+    this.profileService,
   });
+
+  /// Own name/avatar. When present it, not the Google account, decides how
+  /// this user appears to others.
+  final ProfileService? profileService;
 
   /// Runs while the session is still authenticated, e.g. to unregister this
   /// device's push token (the security rules need the caller signed in).
@@ -92,10 +98,13 @@ class ChatAuthService {
       );
     }
 
-    final user = _buildUser(
-      firebaseUser,
-      email: resolvedEmail,
-      publicKey: await cryptoService.getOrCreatePublicKey(),
+    final user = await _withProfile(
+      _buildUser(
+        firebaseUser,
+        email: resolvedEmail,
+        publicKey: await cryptoService.getOrCreatePublicKey(),
+      ),
+      allowNetwork: true,
     );
     _publishProfileAndPresence(user);
     return user;
@@ -114,10 +123,13 @@ class ChatAuthService {
     if (!await cryptoService.hasIdentityKey()) return null;
     final email = (firebaseUser.email ?? '').toLowerCase().trim();
     if (email.isEmpty) return null;
-    return _buildUser(
-      firebaseUser,
-      email: email,
-      publicKey: await cryptoService.getOrCreatePublicKey(),
+    return _withProfile(
+      _buildUser(
+        firebaseUser,
+        email: email,
+        publicKey: await cryptoService.getOrCreatePublicKey(),
+      ),
+      allowNetwork: false,
     );
   }
 
@@ -136,6 +148,25 @@ class ChatAuthService {
     return result;
   }
 
+  /// Applies the user's own profile; the Google name and photo are only used
+  /// to seed it once.
+  Future<ChatUser> _withProfile(
+    ChatUser user, {
+    required bool allowNetwork,
+  }) async {
+    final service = profileService;
+    if (service == null) return user;
+    if (allowNetwork) {
+      await service.ensureProfile(
+        uid: user.uid,
+        fallbackName: user.displayName,
+      );
+    } else {
+      await service.load();
+    }
+    return service.applyTo(user);
+  }
+
   String _resolveEmail(User firebaseUser, {String? fallback}) {
     final email = (firebaseUser.email ?? fallback ?? '').toLowerCase().trim();
     if (email.isEmpty) {
@@ -151,8 +182,7 @@ class ChatAuthService {
   }) => ChatUser(
     uid: firebaseUser.uid,
     email: email,
-    displayName: firebaseUser.displayName ?? email,
-    photoUrl: firebaseUser.photoURL,
+    displayName: firebaseUser.displayName ?? 'User',
     publicKey: publicKey,
     createdAt: DateTime.now().toUtc(),
   );
@@ -163,7 +193,15 @@ class ChatAuthService {
   /// when a connection is available, so waiting for the acknowledgement would
   /// only block the UI while offline.
   void _publishProfileAndPresence(ChatUser user) {
-    unawaited(userRepository.upsertProfile(user).catchError((_) {}));
+    // Until the user's own profile is known locally, leave the server copy of
+    // the name/avatar alone.
+    final includeProfile =
+        profileService == null || profileService!.profile != null;
+    unawaited(
+      userRepository
+          .upsertProfile(user, includeProfile: includeProfile)
+          .catchError((_) {}),
+    );
     unawaited(presenceRepository.setOnline(user.uid).catchError((_) {}));
   }
 

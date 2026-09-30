@@ -3,7 +3,11 @@ import '../entities/wrapped_identity_key.dart';
 
 abstract class UserRepository {
   /// Create or update the current user's Firestore profile.
-  Future<void> upsertProfile(ChatUser user);
+  ///
+  /// With [includeProfile] false the display name and avatar are left as they
+  /// are on the server, so a device that has not loaded the user's own profile
+  /// yet cannot overwrite it.
+  Future<void> upsertProfile(ChatUser user, {bool includeProfile = true});
 
   /// Fetch a user by their UID.
   Future<ChatUser?> getUserById(String uid);

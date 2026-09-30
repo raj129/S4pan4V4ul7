@@ -27,8 +27,15 @@ class FirestoreUserRepository implements UserRepository {
       _users.doc(uid).collection('private').doc('keys');
 
   @override
-  Future<void> upsertProfile(ChatUser user) async {
-    await _users.doc(user.uid).set(user.toFirestore(), SetOptions(merge: true));
+  Future<void> upsertProfile(ChatUser user, {bool includeProfile = true}) async {
+    final data = user.toFirestore();
+    if (!includeProfile) {
+      data.remove('displayName');
+      data.remove('avatar');
+    }
+    // Drops the Google photo URL that older versions stored.
+    data['photoUrl'] = FieldValue.delete();
+    await _users.doc(user.uid).set(data, SetOptions(merge: true));
   }
 
   @override

@@ -14,6 +14,7 @@ import 'package:uuid/uuid.dart';
 import '../../../application/services/chat_notification_service.dart';
 import '../../../application/services/chat_vault_bridge.dart';
 import '../../../application/services/image_compressor.dart';
+import '../../../application/services/profile_service.dart';
 import '../../../domain/entities/chat_message.dart';
 import '../../../domain/entities/message_metadata.dart';
 import '../../../domain/entities/chat_thread.dart';
@@ -29,7 +30,9 @@ import '../../widgets/chat/chat_media_preview.dart';
 import '../../widgets/chat/chat_scrollbar.dart';
 import '../../widgets/chat/chat_wallpaper.dart';
 import '../../widgets/chat/image_quality_sheet.dart';
+import '../../widgets/chat/contact_info_sheet.dart';
 import '../../widgets/chat/message_bubble.dart';
+import '../../widgets/chat/user_avatar.dart';
 import '../../widgets/chat/typing_indicator.dart';
 import '../../widgets/chat/vault_picker_sheet.dart';
 
@@ -91,10 +94,14 @@ class ThreadScreen extends StatefulWidget {
     required this.onLock,
     this.notificationService,
     this.settingsRepository,
+    this.profileService,
   });
 
   final ChatThread thread;
   final ChatUser otherUser;
+
+  /// Resolves the contact's nickname; without it the real name is shown.
+  final ProfileService? profileService;
 
   /// Passed explicitly rather than read from context: this screen is pushed
   /// onto the root navigator, so it sits outside the chat providers.
@@ -152,6 +159,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
   @override
   void initState() {
     super.initState();
+    widget.profileService?.addListener(_onProfileChanged);
     _textCtrl.addListener(_onTextControllerChanged);
     context.read<ActiveThreadCubit>().openThread(
       thread: widget.thread,
@@ -212,8 +220,17 @@ class _ThreadScreenState extends State<ThreadScreen> {
     });
   }
 
+  void _onProfileChanged() {
+    if (mounted) setState(() {});
+  }
+
+  /// The contact's name as this user has chosen to see it.
+  String _nameOf(ChatUser user) =>
+      widget.profileService?.nameFor(user) ?? user.displayName;
+
   @override
   void dispose() {
+    widget.profileService?.removeListener(_onProfileChanged);
     widget.notificationService?.setActiveThread(null);
     _textCtrl.removeListener(_onTextControllerChanged);
     _itemPositions.itemPositions.removeListener(_onScroll);
@@ -486,10 +503,11 @@ class _ThreadScreenState extends State<ThreadScreen> {
           final theme = Theme.of(context);
           final semantic = context.semantic;
           final presence = online ? semantic.online : semantic.offline;
-          return Row(
+          final header = Row(
             children: [
               _PresenceAvatar(
                 user: widget.otherUser,
+                name: _nameOf(widget.otherUser),
                 online: online,
                 ringColor: presence,
               ),
@@ -500,7 +518,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Text(
-                      widget.otherUser.displayName,
+                      _nameOf(widget.otherUser),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: theme.textTheme.titleMedium?.copyWith(
@@ -521,6 +539,16 @@ class _ThreadScreenState extends State<ThreadScreen> {
                 ),
               ),
             ],
+          );
+          final service = widget.profileService;
+          if (service == null) return header;
+          return InkWell(
+            onTap: () => showContactInfoSheet(
+              context,
+              profileService: service,
+              user: widget.otherUser,
+            ),
+            child: header,
           );
         },
       ),
@@ -576,7 +604,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
             icon: Icons.waving_hand_outlined,
             title: 'No messages yet',
             subtitle:
-                'Say hello to ${widget.otherUser.displayName} — everything you '
+                'Say hello to ${_nameOf(widget.otherUser)} — everything you '
                 'send is end-to-end encrypted.',
           );
         }
@@ -1075,20 +1103,11 @@ class _ThreadScreenState extends State<ThreadScreen> {
             ),
             for (final target in targets)
               ListTile(
-                leading: CircleAvatar(
-                  backgroundImage: target.user.photoUrl != null
-                      ? NetworkImage(target.user.photoUrl!)
-                      : null,
-                  child: target.user.photoUrl == null
-                      ? Text(target.user.initials)
-                      : null,
+                leading: UserAvatar(
+                  avatar: target.user.avatar,
+                  name: _nameOf(target.user),
                 ),
-                title: Text(target.user.displayName),
-                subtitle: Text(
-                  target.user.email,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
+                title: Text(_nameOf(target.user)),
                 onTap: () => Navigator.pop(sheetContext, target),
               ),
           ],
@@ -1103,7 +1122,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
       targetRecipientUid: chosen.user.uid,
     );
     messenger.showSnackBar(
-      SnackBar(content: Text('Forwarded to ${chosen.user.displayName}.')),
+      SnackBar(content: Text('Forwarded to ${_nameOf(chosen.user)}.')),
     );
   }
 
@@ -1174,7 +1193,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
                       Text(
                         target.senderId == myUid
                             ? 'Replying to yourself'
-                            : 'Replying to ${widget.otherUser.displayName}',
+                            : 'Replying to ${_nameOf(widget.otherUser)}',
                         style: textTheme.labelSmall?.copyWith(
                           color: cs.primary,
                           fontWeight: FontWeight.w700,
@@ -1666,17 +1685,18 @@ class _ThreadItem {
 class _PresenceAvatar extends StatelessWidget {
   const _PresenceAvatar({
     required this.user,
+    required this.name,
     required this.online,
     required this.ringColor,
   });
 
   final ChatUser user;
+  final String name;
   final bool online;
   final Color ringColor;
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
     return SizedBox(
       width: 40,
       height: 40,
@@ -1692,22 +1712,7 @@ class _PresenceAvatar extends StatelessWidget {
                 width: 2,
               ),
             ),
-            child: CircleAvatar(
-              backgroundColor: cs.primaryContainer,
-              foregroundColor: cs.onPrimaryContainer,
-              backgroundImage: user.photoUrl != null
-                  ? NetworkImage(user.photoUrl!)
-                  : null,
-              child: user.photoUrl == null
-                  ? Text(
-                      user.initials,
-                      style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                        color: cs.onPrimaryContainer,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    )
-                  : null,
-            ),
+            child: UserAvatar(avatar: user.avatar, name: name, radius: 18),
           ),
         ],
       ),

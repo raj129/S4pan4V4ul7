@@ -132,10 +132,7 @@ class ContactDiscoveryService {
     }
 
     if (nameByEmail.isEmpty) {
-      return const ContactDiscoveryResult(
-        matches: [],
-        permissionGranted: true,
-      );
+      return const ContactDiscoveryResult(matches: [], permissionGranted: true);
     }
 
     final emails = nameByEmail.keys.toList();
@@ -152,7 +149,8 @@ class ContactDiscoveryService {
         found.add(
           MatchedContact(
             user: user,
-            contactName: nameByEmail[user.email.toLowerCase()] ?? user.email,
+            contactName:
+                nameByEmail[user.email.toLowerCase()] ?? user.displayName,
           ),
         );
       }

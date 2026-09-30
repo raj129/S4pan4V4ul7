@@ -1,11 +1,10 @@
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 
 import '../../../application/services/chat_notification_service.dart';
-import '../../../application/services/chat_vault_bridge.dart';
+import '../../../application/services/profile_service.dart';
 import '../../../domain/entities/chat_user.dart';
 import '../../../core/widgets/main_scaffold_scope.dart';
 import '../../../core/widgets/app_state_views.dart';
@@ -15,16 +14,19 @@ import '../../theme/app_spacing.dart';
 import '../../state/chat/chat_auth_cubit.dart';
 import '../../state/chat/thread_list_cubit.dart';
 import '../../state/chat/user_lookup_cubit.dart';
-import '../../widgets/chat/chat_media_preview.dart';
 import '../../widgets/chat/history_locked_banner.dart';
+import '../../widgets/chat/user_avatar.dart';
 import 'new_chat_screen.dart';
 import 'thread_screen.dart';
 
 /// Main chat list: all conversations for the signed-in user.
 class ChatListScreen extends StatefulWidget {
-  const ChatListScreen({super.key, required this.myUid});
+  const ChatListScreen({super.key, required this.myUid, this.profileService});
 
   final String myUid;
+
+  /// Own profile and contact nicknames; without it real names are shown.
+  final ProfileService? profileService;
 
   @override
   State<ChatListScreen> createState() => _ChatListScreenState();
@@ -32,6 +34,7 @@ class ChatListScreen extends StatefulWidget {
 
 class _ChatListScreenState extends State<ChatListScreen> {
   ChatNotificationService? _notifications;
+  ProfileService? get _profile => widget.profileService;
 
   @override
   void initState() {
@@ -96,6 +99,17 @@ class _ChatListScreenState extends State<ChatListScreen> {
           onPressed: () => openAppNavigationDrawer(context),
         ),
         actions: [
+          if (_profile != null)
+            IconButton(
+              icon: const Icon(Icons.account_circle_outlined),
+              tooltip: 'My profile',
+              onPressed: () {
+                final auth = context.read<ChatAuthCubit>().state;
+                if (auth is ChatAuthAuthenticated) {
+                  context.push('/chat/profile', extra: auth.user);
+                }
+              },
+            ),
           IconButton(
             icon: const Icon(Icons.edit_outlined),
             tooltip: 'New chat',
@@ -121,6 +135,15 @@ class _ChatListScreenState extends State<ChatListScreen> {
   }
 
   Widget _buildThreadList(BuildContext context) {
+    final profile = _profile;
+    if (profile == null) return _buildThreads(context, null);
+    return ListenableBuilder(
+      listenable: profile,
+      builder: (context, _) => _buildThreads(context, profile),
+    );
+  }
+
+  Widget _buildThreads(BuildContext context, ProfileService? profile) {
     return BlocBuilder<ThreadListCubit, ThreadListState>(
       builder: (context, state) {
         if (state is ThreadListLoading) {
@@ -159,10 +182,13 @@ class _ChatListScreenState extends State<ChatListScreen> {
             return _ThreadTile(
               key: ValueKey(item.thread.threadId),
               user: item.otherUser,
+              name:
+                  profile?.nameFor(item.otherUser) ??
+                  item.otherUser.displayName,
               isOnline: state.isOnline(item.otherUser.uid),
               unread: unread,
               lastMessage: item.thread.lastMessage.isEmpty
-                  ? item.otherUser.email
+                  ? 'No messages yet'
                   : item.thread.lastMessage,
               timeLabel: _formatTime(item.thread.lastMessageAt),
               onTap: () => openThreadScreen(
@@ -246,6 +272,7 @@ class _ThreadTile extends StatelessWidget {
   const _ThreadTile({
     super.key,
     required this.user,
+    required this.name,
     required this.isOnline,
     required this.unread,
     required this.lastMessage,
@@ -256,6 +283,7 @@ class _ThreadTile extends StatelessWidget {
   });
 
   final ChatUser user;
+  final String name;
   final bool isOnline;
   final int unread;
   final String lastMessage;
@@ -283,10 +311,7 @@ class _ThreadTile extends StatelessWidget {
             color: cs.errorContainer,
             borderRadius: radius,
           ),
-          child: Icon(
-            Icons.delete_outline_rounded,
-            color: cs.onErrorContainer,
-          ),
+          child: Icon(Icons.delete_outline_rounded, color: cs.onErrorContainer),
         ),
         confirmDismiss: (_) => onConfirmDelete(),
         onDismissed: (_) => onDelete(),
@@ -306,7 +331,7 @@ class _ThreadTile extends StatelessWidget {
               ),
               child: Row(
                 children: [
-                  _Avatar(user: user, isOnline: isOnline),
+                  _Avatar(user: user, name: name, isOnline: isOnline),
                   const SizedBox(width: AppSpacing.sm + AppSpacing.xxs),
                   Expanded(
                     child: Column(
@@ -317,7 +342,7 @@ class _ThreadTile extends StatelessWidget {
                           children: [
                             Expanded(
                               child: Text(
-                                user.displayName,
+                                name,
                                 overflow: TextOverflow.ellipsis,
                                 style: theme.textTheme.titleSmall?.copyWith(
                                   fontWeight: hasUnread
@@ -462,8 +487,13 @@ class _ThreadListSkeleton extends StatelessWidget {
 }
 
 class _Avatar extends StatelessWidget {
-  const _Avatar({required this.user, required this.isOnline});
+  const _Avatar({
+    required this.user,
+    required this.name,
+    required this.isOnline,
+  });
   final ChatUser user;
+  final String name;
   final bool isOnline;
 
   @override
@@ -474,22 +504,7 @@ class _Avatar extends StatelessWidget {
       height: 48,
       child: Stack(
         children: [
-          CircleAvatar(
-            radius: 24,
-            backgroundColor: cs.primaryContainer,
-            backgroundImage: user.photoUrl != null
-                ? CachedNetworkImageProvider(user.photoUrl!)
-                : null,
-            child: user.photoUrl == null
-                ? Text(
-                    user.initials,
-                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                      color: cs.onPrimaryContainer,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  )
-                : null,
-          ),
+          UserAvatar(avatar: user.avatar, name: name),
           if (isOnline)
             Positioned(
               bottom: 0,

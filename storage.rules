@@ -36,6 +36,17 @@ service firebase.storage {
       allow delete: if isThreadParticipant(threadId);
     }
 
+    // Profile photos: a small public-to-signed-in JPEG, writable only by its
+    // owner, so contacts can display it.
+    match /profiles/{uid}/{filename} {
+      allow read: if isSignedIn();
+      allow create, update: if isSignedIn()
+                            && request.auth.uid == uid
+                            && request.resource.size < 1024 * 1024
+                            && request.resource.contentType == 'image/jpeg';
+      allow delete: if isSignedIn() && request.auth.uid == uid;
+    }
+
     match /{allPaths=**} {
       allow read, write: if false;
     }

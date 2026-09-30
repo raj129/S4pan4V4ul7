@@ -79,7 +79,7 @@ class GoogleSignInScreen extends StatelessWidget {
                   ],
                   if (state is OnboardingGoogleSignInSuccess) ...[
                     InfoBanner(
-                      message: 'Signed in as ${state.email}',
+                      message: 'Signed in with Google',
                       tone: InfoBannerTone.success,
                     ),
                     const SizedBox(height: AppSpacing.md),

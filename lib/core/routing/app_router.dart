@@ -13,7 +13,9 @@ import '../../presentation/app/chat_app.dart';
 import '../../presentation/app/main_scaffold.dart';
 import '../../presentation/features/utility_shell/utility_shell.dart';
 import '../../presentation/screens/chat_screens/new_chat_screen.dart';
+import '../../presentation/screens/chat_screens/profile_screen.dart';
 import '../../presentation/screens/chat_screens/thread_screen.dart';
+import '../../domain/entities/chat_user.dart';
 import '../../presentation/screens/files/files_screen.dart';
 import '../../presentation/screens/gallery/gallery_home_screen.dart';
 import '../../presentation/screens/gallery/gallery_photo_viewer_screen.dart';
@@ -239,6 +241,24 @@ GoRoute _chatRoute(AppDependencies deps, AppSessionState session) {
     ),
     routes: [
       GoRoute(
+        path: 'profile',
+        builder: (context, state) {
+          final me = state.extra as ChatUser?;
+          if (me == null) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (context.mounted) context.go('/chat');
+            });
+            return const Scaffold(
+              body: Center(child: CircularProgressIndicator()),
+            );
+          }
+          return ProfileScreen(
+            me: me,
+            service: deps.chatDependencies.profileService,
+          );
+        },
+      ),
+      GoRoute(
         path: 'new',
         builder: (context, state) {
           final extra = state.extra as NewChatArgs?;
@@ -312,6 +332,7 @@ GoRoute _chatRoute(AppDependencies deps, AppSessionState session) {
             },
             notificationService: deps.chatDependencies.notificationService,
             settingsRepository: deps.settingsRepository,
+            profileService: deps.chatDependencies.profileService,
           );
           final providedCubit = args.activeThreadCubit;
           Widget withThreadList(Widget child) {

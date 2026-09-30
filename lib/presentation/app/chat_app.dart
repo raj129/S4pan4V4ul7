@@ -119,7 +119,9 @@ class _ChatAppState extends State<ChatApp> with WidgetsBindingObserver {
         if (!mounted) return;
         setState(() => _restoreGeneration++);
         ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-          SnackBar(content: Text('Restored ${snapshot.messageCount} messages.')),
+          SnackBar(
+            content: Text('Restored ${snapshot.messageCount} messages.'),
+          ),
         );
       } else if (restore == false) {
         await backup.dismissRestoreOffer();
@@ -185,135 +187,140 @@ class _ChatAppState extends State<ChatApp> with WidgetsBindingObserver {
           }
         },
         child: BlocListener<ChatAuthCubit, ChatAuthState>(
-        listenWhen: (prev, next) => prev.runtimeType != next.runtimeType,
-        listener: (context, authState) {
-          // Notifications follow the signed-in session, not the widget tree, so
-          // they keep working while the user is on another tab.
-          if (authState is ChatAuthAuthenticated) {
-            _deps.notificationService.start(authState.user.uid);
-            try {
-              unawaited(_deps.pushService.start(authState.user.uid));
-            } catch (_) {
-              // Firebase unavailable (tests); local notifications still work.
+          listenWhen: (prev, next) => prev.runtimeType != next.runtimeType,
+          listener: (context, authState) {
+            // Notifications follow the signed-in session, not the widget tree, so
+            // they keep working while the user is on another tab.
+            if (authState is ChatAuthAuthenticated) {
+              _deps.notificationService.start(authState.user.uid);
+              try {
+                unawaited(_deps.pushService.start(authState.user.uid));
+              } catch (_) {
+                // Firebase unavailable (tests); local notifications still work.
+              }
+            } else {
+              _deps.notificationService.stop();
             }
-          } else {
-            _deps.notificationService.stop();
-          }
-          if (widget.userMode != UserMode.localOnly) return;
-          if (authState is ChatAuthAuthenticated) {
-            _didShowLocalModePrompt = false;
-            return;
-          }
-          if (_didShowLocalModePrompt) return;
-          _didShowLocalModePrompt = true;
-          WidgetsBinding.instance.addPostFrameCallback((_) async {
-            if (!mounted) return;
-            await showDialog<void>(
-              context: context,
-              builder: (dialogContext) => AlertDialog(
-                title: const Text('Sign in required for chat'),
-                content: const Text(
-                  'You are in local mode. Sign in with Google to use encrypted chat.',
-                ),
-                actions: [
-                  TextButton(
-                    onPressed: () => Navigator.of(dialogContext).pop(),
-                    child: const Text('Not now'),
+            if (widget.userMode != UserMode.localOnly) return;
+            if (authState is ChatAuthAuthenticated) {
+              _didShowLocalModePrompt = false;
+              return;
+            }
+            if (_didShowLocalModePrompt) return;
+            _didShowLocalModePrompt = true;
+            WidgetsBinding.instance.addPostFrameCallback((_) async {
+              if (!mounted) return;
+              await showDialog<void>(
+                context: context,
+                builder: (dialogContext) => AlertDialog(
+                  title: const Text('Sign in required for chat'),
+                  content: const Text(
+                    'You are in local mode. Sign in with Google to use encrypted chat.',
                   ),
-                  FilledButton(
-                    onPressed: () {
-                      Navigator.of(dialogContext).pop();
-                      context.read<ChatAuthCubit>().signIn();
-                    },
-                    child: const Text('Sign in'),
-                  ),
-                ],
-              ),
-            );
-          });
-        },
-        child: BlocBuilder<ChatAuthCubit, ChatAuthState>(
-          builder: (context, authState) {
-            if (authState is ChatAuthInitial || authState is ChatAuthLoading) {
-              return const Scaffold(
-                body: Center(child: CircularProgressIndicator()),
-              );
-            }
-
-            if (authState is! ChatAuthAuthenticated) {
-              return ChatSignInScreen(
-                isLocalMode: widget.userMode == UserMode.localOnly,
-              );
-            }
-
-            final currentUser = authState.user;
-
-            if (!_sessionPrepared) {
-              WidgetsBinding.instance.addPostFrameCallback(
-                (_) => unawaited(_ensurePrepared()),
-              );
-              return const Scaffold(
-                body: Center(child: CircularProgressIndicator()),
-              );
-            }
-
-            return MultiRepositoryProvider(
-              key: ValueKey(_restoreGeneration),
-              providers: [
-                RepositoryProvider<ChatMediaLoader>.value(
-                  value: _deps.mediaLoader,
-                ),
-                RepositoryProvider<ChatVaultBridge>.value(
-                  value: widget.vaultBridge,
-                ),
-                RepositoryProvider<ChatNotificationService>.value(
-                  value: _deps.notificationService,
-                ),
-              ],
-              child: MultiBlocProvider(
-                providers: [
-                  BlocProvider(
-                    create: (_) => ThreadListCubit(
-                      threadRepository: _deps.threadRepository,
-                      userRepository: _deps.userRepository,
-                      messageRepository: _deps.messageRepository,
-                      mediaRepository: _deps.mediaRepository,
-                      presenceRepository: _deps.presenceRepository,
-                      messageCache: _deps.messageCache,
-                      myUid: currentUser.uid,
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.of(dialogContext).pop(),
+                      child: const Text('Not now'),
                     ),
-                  ),
-                  BlocProvider(
-                    create: (_) => UserLookupCubit(
-                      userRepository: _deps.userRepository,
-                      threadRepository: _deps.threadRepository,
-                      myUid: currentUser.uid,
+                    FilledButton(
+                      onPressed: () {
+                        Navigator.of(dialogContext).pop();
+                        context.read<ChatAuthCubit>().signIn();
+                      },
+                      child: const Text('Sign in'),
                     ),
-                  ),
-                  BlocProvider(
-                    create: (_) => ActiveThreadCubit(
-                      messageRepository: _deps.messageRepository,
-                      threadRepository: _deps.threadRepository,
-                      userRepository: _deps.userRepository,
-                      typingRepository: _deps.typingRepository,
-                      presenceRepository: _deps.presenceRepository,
-                      mediaRepository: _deps.mediaRepository,
-                      messageCache: _deps.messageCache,
-                      searchIndex: _deps.searchIndex,
-                      outbox: _deps.outbox,
-                      cryptoService: _deps.cryptoService,
-                      myUid: currentUser.uid,
-                      connectivityStream: Connectivity().onConnectivityChanged,
-                      onMediaReady: _deps.mediaLoader.seed,
-                    ),
-                  ),
-                ],
-                child: ChatListScreen(myUid: currentUser.uid),
-              ),
-            );
+                  ],
+                ),
+              );
+            });
           },
+          child: BlocBuilder<ChatAuthCubit, ChatAuthState>(
+            builder: (context, authState) {
+              if (authState is ChatAuthInitial ||
+                  authState is ChatAuthLoading) {
+                return const Scaffold(
+                  body: Center(child: CircularProgressIndicator()),
+                );
+              }
+
+              if (authState is! ChatAuthAuthenticated) {
+                return ChatSignInScreen(
+                  isLocalMode: widget.userMode == UserMode.localOnly,
+                );
+              }
+
+              final currentUser = authState.user;
+
+              if (!_sessionPrepared) {
+                WidgetsBinding.instance.addPostFrameCallback(
+                  (_) => unawaited(_ensurePrepared()),
+                );
+                return const Scaffold(
+                  body: Center(child: CircularProgressIndicator()),
+                );
+              }
+
+              return MultiRepositoryProvider(
+                key: ValueKey(_restoreGeneration),
+                providers: [
+                  RepositoryProvider<ChatMediaLoader>.value(
+                    value: _deps.mediaLoader,
+                  ),
+                  RepositoryProvider<ChatVaultBridge>.value(
+                    value: widget.vaultBridge,
+                  ),
+                  RepositoryProvider<ChatNotificationService>.value(
+                    value: _deps.notificationService,
+                  ),
+                ],
+                child: MultiBlocProvider(
+                  providers: [
+                    BlocProvider(
+                      create: (_) => ThreadListCubit(
+                        threadRepository: _deps.threadRepository,
+                        userRepository: _deps.userRepository,
+                        messageRepository: _deps.messageRepository,
+                        mediaRepository: _deps.mediaRepository,
+                        presenceRepository: _deps.presenceRepository,
+                        messageCache: _deps.messageCache,
+                        myUid: currentUser.uid,
+                      ),
+                    ),
+                    BlocProvider(
+                      create: (_) => UserLookupCubit(
+                        userRepository: _deps.userRepository,
+                        threadRepository: _deps.threadRepository,
+                        myUid: currentUser.uid,
+                      ),
+                    ),
+                    BlocProvider(
+                      create: (_) => ActiveThreadCubit(
+                        messageRepository: _deps.messageRepository,
+                        threadRepository: _deps.threadRepository,
+                        userRepository: _deps.userRepository,
+                        typingRepository: _deps.typingRepository,
+                        presenceRepository: _deps.presenceRepository,
+                        mediaRepository: _deps.mediaRepository,
+                        messageCache: _deps.messageCache,
+                        searchIndex: _deps.searchIndex,
+                        outbox: _deps.outbox,
+                        cryptoService: _deps.cryptoService,
+                        myUid: currentUser.uid,
+                        connectivityStream:
+                            Connectivity().onConnectivityChanged,
+                        onMediaReady: _deps.mediaLoader.seed,
+                      ),
+                    ),
+                  ],
+                  child: ChatListScreen(
+                    myUid: currentUser.uid,
+                    profileService: _deps.profileService,
+                  ),
+                ),
+              );
+            },
+          ),
         ),
-      ),
       ),
     );
   }
