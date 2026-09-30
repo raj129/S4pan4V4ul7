@@ -9,6 +9,7 @@ import '../../domain/entities/user_mode.dart';
 import '../../domain/entities/vault_photo.dart';
 import '../../domain/entities/vault_status.dart';
 import '../../features/calculator/calculator.dart';
+import '../../application/services/chat_share_inbox.dart';
 import '../../presentation/app/chat_app.dart';
 import '../../presentation/app/main_scaffold.dart';
 import '../../presentation/features/utility_shell/utility_shell.dart';
@@ -529,7 +530,13 @@ GoRoute _importRoute(
     builder: (context, state) => ImportBottomSheetLauncherScreen(
       importManager: deps.importManager,
       autoOpenShareReview: autoOpenShareReview,
-      onClosed: () => context.go('/gallery', extra: session.mode),
+      onClosed: () {
+        if (ChatShareInbox.instance.hasPending) {
+          context.go('/chat');
+        } else {
+          context.go('/gallery', extra: session.mode);
+        }
+      },
     ),
   );
 }

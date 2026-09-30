@@ -6,6 +6,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:receive_sharing_intent/receive_sharing_intent.dart';
 
 import '../../core/app/app_session.dart';
+import '../../core/app/external_activity_guard.dart';
 import '../../core/di/app_dependencies.dart';
 import '../../core/routing/app_router.dart';
 import '../state/onboarding/onboarding_cubit.dart';
@@ -107,7 +108,11 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
         state == AppLifecycleState.hidden ||
         state == AppLifecycleState.inactive) {
       _backgroundLockTimer?.cancel();
-      _backgroundLockTimer = Timer(_autoLockDelay, _lockSession);
+      if (ExternalActivityGuard.isActive) return;
+      _backgroundLockTimer = Timer(_autoLockDelay, () {
+        if (ExternalActivityGuard.isActive) return;
+        _lockSession();
+      });
       return;
     }
     if (state == AppLifecycleState.resumed) {

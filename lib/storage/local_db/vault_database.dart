@@ -270,7 +270,7 @@ class OutboxMessages extends Table {
   TextColumn get recipientUid => text()();
 
   /// Plaintext-free preview already encrypted for the thread list, or a
-  /// media placeholder like "📷 Photo".
+  /// short label (empty for photos and videos).
   TextColumn get preview => text()();
 
   /// `MessageType.name`, null for plain text.

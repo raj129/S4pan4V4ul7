@@ -1,5 +1,7 @@
 import 'dart:async';
 
+import '../../../application/services/chat_share_inbox.dart';
+import '../../../core/app/external_activity_guard.dart';
 import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
@@ -169,8 +171,46 @@ class _ThreadScreenState extends State<ThreadScreen> {
     widget.notificationService?.setActiveThread(widget.thread.threadId);
     // Opening the thread is itself a read: everything already on screen counts.
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) context.read<ActiveThreadCubit>().markVisibleAsRead();
+      if (!mounted) return;
+      context.read<ActiveThreadCubit>().markVisibleAsRead();
+      _sendSharedFiles();
     });
+  }
+
+  static const _videoExtensions = {'mp4', 'mov', 'mkv', 'webm', '3gp', 'avi', 'm4v'};
+
+  /// Sends files shared into the app from another app, once the user has
+  /// picked this conversation as the destination.
+  Future<void> _sendSharedFiles() async {
+    final shared = ChatShareInbox.instance.take();
+    if (shared.isEmpty) return;
+    final cubit = context.read<ActiveThreadCubit>();
+    final messenger = ScaffoldMessenger.of(context);
+    bool isVideo(XFile f) {
+      final dot = f.path.lastIndexOf('.');
+      return dot >= 0 &&
+          _videoExtensions.contains(f.path.substring(dot + 1).toLowerCase());
+    }
+
+    final images = shared.where((f) => !isVideo(f)).toList();
+    final videos = shared.where(isVideo).toList();
+    if (images.isNotEmpty) await _sendImages(cubit, images, messenger);
+    for (final video in videos) {
+      if (!mounted) return;
+      if (await video.length() > ActiveThreadCubit.maxAttachmentBytes) {
+        messenger.showSnackBar(
+          const SnackBar(content: Text('Attachments must be smaller than 64 MB.')),
+        );
+        continue;
+      }
+      final bytes = await video.readAsBytes();
+      if (!mounted) return;
+      await cubit.sendMedia(
+        messageId: _uuid.v4(),
+        rawBytes: bytes,
+        type: MessageType.video,
+      );
+    }
   }
 
   void _onTextControllerChanged() {
@@ -1468,7 +1508,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
 
     // Gallery photos are multi-select; the camera and video pickers are not.
     if (choice == 'photo') {
-      final files = await _picker.pickMultiImage();
+      final files = await ExternalActivityGuard.run(_picker.pickMultiImage);
       if (files.isEmpty || !mounted) return;
       await _sendImages(cubit, files, messenger);
       return;
@@ -1478,10 +1518,14 @@ class _ThreadScreenState extends State<ThreadScreen> {
     MessageType? type;
 
     if (choice == 'camera') {
-      file = await _picker.pickImage(source: ImageSource.camera);
+      file = await ExternalActivityGuard.run(
+        () => _picker.pickImage(source: ImageSource.camera),
+      );
       type = MessageType.image;
     } else if (choice == 'video') {
-      file = await _picker.pickVideo(source: ImageSource.gallery);
+      file = await ExternalActivityGuard.run(
+        () => _picker.pickVideo(source: ImageSource.gallery),
+      );
       type = MessageType.video;
     }
 
@@ -1591,7 +1635,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
   Future<void> _sendDocument(ActiveThreadCubit cubit) async {
     final messenger = ScaffoldMessenger.of(context);
     try {
-      final picked = await FilePicker.pickFile();
+      final picked = await ExternalActivityGuard.run(FilePicker.pickFile);
       if (picked == null || !mounted) return;
       final length = await picked.length();
       if (length != null && length > ActiveThreadCubit.maxAttachmentBytes) {

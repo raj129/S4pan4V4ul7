@@ -94,12 +94,12 @@ class ChatMessage extends Equatable {
   ///
   /// Documents carry their file name in the (encrypted) message body rather
   /// than in clear-text metadata, so the name never reaches the server.
+  /// Photos and videos carry no label: the attachment speaks for itself.
   static String mediaPreviewFor(MessageType? type, {String? filename}) =>
       switch (type) {
-        MessageType.video => '🎥 Video',
         MessageType.file =>
-          filename == null || filename.isEmpty ? '📎 Document' : '📎 $filename',
-        _ => '📷 Photo',
+          filename == null || filename.isEmpty ? 'Document' : filename,
+        _ => '',
       };
 
   /// Placeholder used when quoting or forwarding this attachment.

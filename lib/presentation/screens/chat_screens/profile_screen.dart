@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../../../application/services/profile_service.dart';
+import '../../../core/app/external_activity_guard.dart';
 import '../../../domain/entities/chat_user.dart';
 import '../../../domain/entities/profile_avatar.dart';
 import '../../theme/app_spacing.dart';
@@ -76,11 +77,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
     } else if (choice is ImageSource) {
       try {
         // Downsized at the source so a 12 MP photo is never held in memory.
-        final file = await ImagePicker().pickImage(
-          source: choice,
-          maxWidth: 512,
-          maxHeight: 512,
-          imageQuality: 85,
+        final file = await ExternalActivityGuard.run(
+          () => ImagePicker().pickImage(
+            source: choice,
+            maxWidth: 512,
+            maxHeight: 512,
+            imageQuality: 85,
+          ),
         );
         if (file == null) return;
         final bytes = await file.readAsBytes();

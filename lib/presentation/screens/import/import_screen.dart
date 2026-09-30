@@ -4,7 +4,9 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
 
+import '../../../application/services/chat_share_inbox.dart';
 import '../../../application/services/import_manager.dart';
+import '../../../core/app/external_activity_guard.dart';
 import '../../../core/widgets/app_surfaces.dart';
 import '../../theme/app_spacing.dart';
 
@@ -154,7 +156,7 @@ class _ImportScreenState extends State<ImportScreen> {
     if (_isPicking) return;
     setState(() => _isPicking = true);
     try {
-      final files = await _picker.pickMultiImage();
+      final files = await ExternalActivityGuard.run(_picker.pickMultiImage);
       if (!mounted) return;
       if (files.isEmpty) {
         ScaffoldMessenger.of(
@@ -184,7 +186,9 @@ class _ImportScreenState extends State<ImportScreen> {
     if (_isPicking) return;
     setState(() => _isPicking = true);
     try {
-      final file = await _picker.pickImage(source: ImageSource.camera);
+      final file = await ExternalActivityGuard.run(
+        () => _picker.pickImage(source: ImageSource.camera),
+      );
       if (!mounted) return;
       if (file == null) {
         ScaffoldMessenger.of(
@@ -221,6 +225,14 @@ class _ImportScreenState extends State<ImportScreen> {
       files: queuedFiles,
       source: source,
     );
+    widget.onImportQueued();
+  }
+
+  /// Hands the shared files to the chat list, which asks who to send them to.
+  void _sendInChat() {
+    if (_selectedFiles.isEmpty || _isQueueing) return;
+    ChatShareInbox.instance.set(_selectedFiles);
+    widget.importManager.clearPendingImportSelection();
     widget.onImportQueued();
   }
 
@@ -376,6 +388,15 @@ class _ImportScreenState extends State<ImportScreen> {
                           child: const Text('Cancel'),
                         ),
                       ),
+                      if (_selectedSource == 'share-intent') ...[
+                        const SizedBox(width: AppSpacing.md),
+                        Expanded(
+                          child: OutlinedButton(
+                            onPressed: _isQueueing ? null : _sendInChat,
+                            child: const Text('Send in chat'),
+                          ),
+                        ),
+                      ],
                       const SizedBox(width: AppSpacing.md),
                       Expanded(
                         child: FilledButton(

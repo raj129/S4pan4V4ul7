@@ -854,7 +854,7 @@ void main() {
 
       final sent = messages.sent.single;
       expect(sent.mediaType, MessageType.file);
-      expect(sent.encryptedText, '📎 report.pdf');
+      expect(sent.encryptedText, 'report.pdf');
       expect(sent.mediaRef, 'chat_media/me_other/doc1/doc1.bin.enc');
       // The storage object name must not reveal the file type.
       expect(media.uploadedNames.single, 'doc1.bin.enc');

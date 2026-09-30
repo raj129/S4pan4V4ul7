@@ -14,8 +14,8 @@ abstract class ThreadRepository {
   Future<ChatThread?> getThread(String threadId);
 
   /// Update the thread's last-message preview and timestamp.
-  /// The preview is a placeholder string (e.g. "📷 Photo", "🎥 Video", or "🔒 Message")
-  /// because actual content is encrypted.
+  /// The preview is empty for photos/videos, the file name for documents, or a
+  /// "🔒 Message" placeholder, because actual content is encrypted.
   Future<void> updateLastMessage({
     required String threadId,
     required String preview,

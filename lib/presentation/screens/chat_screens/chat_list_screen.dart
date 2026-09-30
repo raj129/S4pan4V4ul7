@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 
 import '../../../application/services/chat_notification_service.dart';
+import '../../../application/services/chat_share_inbox.dart';
 import '../../../application/services/profile_service.dart';
 import '../../../domain/entities/chat_user.dart';
 import '../../../core/widgets/main_scaffold_scope.dart';
@@ -128,6 +129,17 @@ class _ChatListScreenState extends State<ChatListScreen> {
               return const SizedBox.shrink();
             },
           ),
+          ListenableBuilder(
+            listenable: ChatShareInbox.instance,
+            builder: (context, _) {
+              final inbox = ChatShareInbox.instance;
+              if (!inbox.hasPending) return const SizedBox.shrink();
+              return _ShareBanner(
+                count: inbox.count,
+                onCancel: inbox.clear,
+              );
+            },
+          ),
           Expanded(child: _buildThreadList(context)),
         ],
       ),
@@ -187,7 +199,9 @@ class _ChatListScreenState extends State<ChatListScreen> {
                   item.otherUser.displayName,
               isOnline: state.isOnline(item.otherUser.uid),
               unread: unread,
-              lastMessage: item.thread.lastMessage.isEmpty
+              lastMessage:
+                  item.thread.lastMessage.isEmpty &&
+                      !item.thread.lastMessageAt.isAfter(item.thread.createdAt)
                   ? 'No messages yet'
                   : item.thread.lastMessage,
               timeLabel: _formatTime(item.thread.lastMessageAt),
@@ -520,6 +534,32 @@ class _Avatar extends StatelessWidget {
               ),
             ),
         ],
+      ),
+    );
+  }
+}
+
+/// Prompt shown while files shared from another app wait for a recipient.
+class _ShareBanner extends StatelessWidget {
+  const _ShareBanner({required this.count, required this.onCancel});
+
+  final int count;
+  final VoidCallback onCancel;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Material(
+      color: cs.primaryContainer,
+      child: ListTile(
+        leading: Icon(Icons.send_rounded, color: cs.onPrimaryContainer),
+        title: Text(
+          count == 1
+              ? 'Choose a chat to send 1 file'
+              : 'Choose a chat to send $count files',
+          style: TextStyle(color: cs.onPrimaryContainer),
+        ),
+        trailing: TextButton(onPressed: onCancel, child: const Text('Cancel')),
       ),
     );
   }

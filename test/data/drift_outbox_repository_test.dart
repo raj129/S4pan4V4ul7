@@ -25,7 +25,7 @@ void main() {
         senderId: 'a',
         encryptedText: 'cipher',
         recipientUid: 'b',
-        preview: '📎 report.pdf',
+        preview: 'report.pdf',
         mediaType: MessageType.file,
         mediaRef: 'chat_media/a_b/m1/m1.bin.enc',
         mediaMeta: const MediaMeta(sizeBytes: 2048),

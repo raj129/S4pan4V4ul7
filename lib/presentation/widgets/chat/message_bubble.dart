@@ -771,14 +771,24 @@ class _QuotedHeader extends StatelessWidget {
                 color: accent,
               ),
             ),
-            Text(
-              preview == null || preview.isEmpty ? '🔒 Message' : preview,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: textColor.withValues(alpha: 0.8),
+            if (preview != null && preview.isNotEmpty)
+              Text(
+                preview,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: textColor.withValues(alpha: 0.8),
+                ),
+              )
+            else if (reply.mediaType == null)
+              Text(
+                '🔒 Message',
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: textColor.withValues(alpha: 0.8),
+                ),
               ),
-            ),
           ],
         ),
       ),
