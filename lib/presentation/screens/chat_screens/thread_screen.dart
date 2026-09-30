@@ -88,6 +88,7 @@ class ThreadScreen extends StatefulWidget {
     required this.otherUser,
     required this.mediaLoader,
     required this.vaultBridge,
+    required this.onLock,
     this.notificationService,
     this.settingsRepository,
   });
@@ -101,6 +102,7 @@ class ThreadScreen extends StatefulWidget {
 
   /// Bridge to the photo vault, for attaching and saving media.
   final ChatVaultBridge vaultBridge;
+  final VoidCallback onLock;
 
   /// Told which thread is on screen so it does not notify about it.
   final ChatNotificationService? notificationService;
@@ -453,7 +455,9 @@ class _ThreadScreenState extends State<ThreadScreen> {
       actions: [
         PopupMenuButton<String>(
           onSelected: (value) {
-            if (value == 'date') {
+            if (value == 'search') {
+              setState(() => _searching = true);
+            } else if (value == 'date') {
               _pickJumpDate();
             } else if (value == 'clear') {
               _confirmClearMessages(context);
@@ -462,14 +466,16 @@ class _ThreadScreenState extends State<ThreadScreen> {
             }
           },
           itemBuilder: (context) => const [
+            PopupMenuItem(value: 'search', child: Text('Search this chat')),
             PopupMenuItem(value: 'date', child: Text('Jump to date')),
             PopupMenuItem(value: 'clear', child: Text('Clear messages')),
             PopupMenuItem(value: 'delete', child: Text('Delete thread')),
           ],
         ),
         IconButton(
-          icon: const Icon(Icons.search),
-          onPressed: () => setState(() => _searching = true),
+          icon: const Icon(Icons.lock_outline_rounded),
+          tooltip: 'Lock vault',
+          onPressed: widget.onLock,
         ),
       ],
       title: BlocBuilder<ActiveThreadCubit, ActiveThreadState>(

@@ -305,6 +305,11 @@ GoRoute _chatRoute(AppDependencies deps, AppSessionState session) {
             otherUser: args.otherUser,
             mediaLoader: deps.chatDependencies.mediaLoader,
             vaultBridge: deps.chatVaultBridge,
+            onLock: () {
+              deps.vaultSession.lock();
+              session.lock();
+              context.go('/');
+            },
             notificationService: deps.chatDependencies.notificationService,
             settingsRepository: deps.settingsRepository,
           );

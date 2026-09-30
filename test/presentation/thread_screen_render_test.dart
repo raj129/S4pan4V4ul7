@@ -191,6 +191,7 @@ void main() {
 
     final messages = _Messages();
     final unused = _Unused();
+    var locked = false;
     final cubit = ActiveThreadCubit(
       messageRepository: messages,
       threadRepository: _Threads(),
@@ -231,6 +232,7 @@ void main() {
               cryptoService: _Crypto(),
             ),
             vaultBridge: unused,
+            onLock: () => locked = true,
           ),
         ),
       ),
@@ -256,6 +258,13 @@ void main() {
     expect(find.byType(MessageBubble), findsNWidgets(2));
     expect(find.textContaining('my reply', findRichText: true), findsOneWidget);
     expect(tester.takeException(), isNull);
+
+    await tester.tap(find.byTooltip('Lock vault'));
+    expect(locked, isTrue);
+
+    await tester.tap(find.byType(PopupMenuButton<String>));
+    await tester.pump();
+    expect(find.text('Search this chat'), findsOneWidget);
 
     await cubit.close();
     await tester.pumpWidget(const SizedBox.shrink());

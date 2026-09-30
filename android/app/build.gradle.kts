@@ -29,7 +29,7 @@ android {
         // minSdk 23: required for flutter_secure_storage (Android Keystore).
         minSdk = flutter.minSdkVersion
         targetSdk = 35
-        versionCode = flutter.versionCode
+        versionCode = flutter.versionC.ode
         versionName = flutter.versionName
     }
 
