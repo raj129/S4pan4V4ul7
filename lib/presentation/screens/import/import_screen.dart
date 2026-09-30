@@ -71,12 +71,8 @@ class _ImportBottomSheetLauncherScreenState
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Theme.of(
-        context,
-      ).colorScheme.surface.withValues(alpha: 0),
-      body: const SizedBox.shrink(),
-    );
+    // Opaque so a slow or failed sheet never leaves a blank window behind.
+    return const Scaffold(body: Center(child: CircularProgressIndicator()));
   }
 }
 

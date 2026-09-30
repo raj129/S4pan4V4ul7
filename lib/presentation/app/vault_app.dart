@@ -83,10 +83,13 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
     _shareStreamSub = ReceiveSharingIntent.instance
         .getMediaStream()
         .listen(_handleSharedFiles);
-    ReceiveSharingIntent.instance.getInitialMedia().then(_handleSharedFiles);
+    ReceiveSharingIntent.instance
+        .getInitialMedia()
+        .then(_handleSharedFiles)
+        .catchError((_) {});
   }
 
-  void _handleSharedFiles(List<SharedMediaFile> files) {
+  Future<void> _handleSharedFiles(List<SharedMediaFile> files) async {
     if (files.isEmpty) return;
     final mapped = files
         .where((f) => f.path.isNotEmpty)
@@ -97,6 +100,13 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
       files: mapped,
       source: 'share-intent',
     );
+    // On a cold start the router is still resolving its initial location;
+    // navigating before then is overwritten and leaves a blank screen.
+    for (var i = 0; i < 100; i++) {
+      if (_router.routerDelegate.currentConfiguration.isNotEmpty) break;
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      if (!mounted) return;
+    }
     _router.go('/lock?returnTo=%2Fimport%2Fshare-intent');
     ReceiveSharingIntent.instance.reset();
   }
