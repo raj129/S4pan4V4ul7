@@ -2,7 +2,6 @@ import 'dart:async';
 
 import '../../../application/services/chat_share_inbox.dart';
 import '../../../core/app/external_activity_guard.dart';
-import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -161,6 +160,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
   @override
   void initState() {
     super.initState();
+    _inputFocus.addListener(_onInputFocusChanged);
     widget.profileService?.addListener(_onProfileChanged);
     _textCtrl.addListener(_onTextControllerChanged);
     context.read<ActiveThreadCubit>().openThread(
@@ -268,8 +268,15 @@ class _ThreadScreenState extends State<ThreadScreen> {
   String _nameOf(ChatUser user) =>
       widget.profileService?.nameFor(user) ?? user.displayName;
 
+  void _onInputFocusChanged() {
+    if (_inputFocus.hasFocus && _showEmojiPicker && mounted) {
+      setState(() => _showEmojiPicker = false);
+    }
+  }
+
   @override
   void dispose() {
+    _inputFocus.removeListener(_onInputFocusChanged);
     widget.profileService?.removeListener(_onProfileChanged);
     widget.notificationService?.setActiveThread(null);
     _textCtrl.removeListener(_onTextControllerChanged);
@@ -715,7 +722,10 @@ class _ThreadScreenState extends State<ThreadScreen> {
               // centrally, inside `_promptEdit`, so both the long-press menu
               // entry and the Signal-style double-tap give the same
               // accept/reject behaviour instead of silently disappearing.
-              onEdit: isMine && !msg.isMedia ? () => _promptEdit(msg) : null,
+              onEdit:
+                  isMine && !msg.isMedia && cubit.canEditMessage(msg)
+                  ? () => _promptEdit(msg)
+                  : null,
               onCopy: msg.localDecryptedText?.trim().isNotEmpty == true
                   ? () => _copyMessage(msg.localDecryptedText!)
                   : null,
@@ -1436,23 +1446,13 @@ class _ThreadScreenState extends State<ThreadScreen> {
 
   Widget _buildEmojiPicker() {
     if (!_showEmojiPicker) return const SizedBox.shrink();
-    return SizedBox(
-      height: 280,
-      child: EmojiPicker(
-        textEditingController: _textCtrl,
-        onEmojiSelected: (category, emoji) {
-          // The controller is updated by the picker itself; this only keeps
-          // the typing indicator in sync.
-          context.read<ActiveThreadCubit>().onTextChanged(_textCtrl.text);
-        },
-        config: const Config(
-          height: 280,
-          checkPlatformCompatibility: true,
-          emojiViewConfig: EmojiViewConfig(columns: 8, emojiSizeMax: 28),
-          categoryViewConfig: CategoryViewConfig(),
-          bottomActionBarConfig: BottomActionBarConfig(enabled: false),
-        ),
-      ),
+    return ThemedEmojiPicker(
+      textEditingController: _textCtrl,
+      onEmojiSelected: (category, emoji) {
+        // The controller is updated by the picker itself; this only keeps
+        // the typing indicator in sync.
+        context.read<ActiveThreadCubit>().onTextChanged(_textCtrl.text);
+      },
     );
   }
 

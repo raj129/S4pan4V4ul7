@@ -563,25 +563,247 @@ class _QuickReactionButton extends StatelessWidget {
   }
 }
 
+/// Emoji picker themed from the app colour scheme, with a WhatsApp/Gboard-style
+/// bottom bar (search + backspace). While the search view is open the picker
+/// collapses to [searchHeight] so it hugs the keyboard.
+class ThemedEmojiPicker extends StatefulWidget {
+  const ThemedEmojiPicker({
+    super.key,
+    required this.onEmojiSelected,
+    this.textEditingController,
+    this.height = 280,
+    this.searchHeight = 170,
+    this.showBackspace = true,
+  });
+
+  final OnEmojiSelected onEmojiSelected;
+  final TextEditingController? textEditingController;
+  final double height;
+  final double searchHeight;
+  final bool showBackspace;
+
+  @override
+  State<ThemedEmojiPicker> createState() => _ThemedEmojiPickerState();
+}
+
+class _ThemedEmojiPickerState extends State<ThemedEmojiPicker> {
+  final _searching = ValueNotifier<bool>(false);
+
+  @override
+  void dispose() {
+    _searching.dispose();
+    super.dispose();
+  }
+
+  Config _config(BuildContext context, double height) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    final bg = cs.surfaceContainerHigh;
+    return Config(
+      height: height,
+      checkPlatformCompatibility: true,
+      emojiViewConfig: EmojiViewConfig(
+        columns: 8,
+        emojiSizeMax: 28,
+        backgroundColor: bg,
+      ),
+      categoryViewConfig: CategoryViewConfig(
+        backgroundColor: bg,
+        indicatorColor: cs.primary,
+        iconColor: cs.onSurfaceVariant,
+        iconColorSelected: cs.primary,
+        backspaceColor: cs.primary,
+        dividerColor: cs.outlineVariant,
+      ),
+      bottomActionBarConfig: BottomActionBarConfig(
+        backgroundColor: bg,
+        buttonColor: Colors.transparent,
+        buttonIconColor: cs.onSurfaceVariant,
+        showBackspaceButton: widget.showBackspace,
+        showSearchViewButton: true,
+      ),
+      searchViewConfig: SearchViewConfig(
+        backgroundColor: bg,
+        buttonIconColor: cs.onSurfaceVariant,
+        inputTextStyle: theme.textTheme.bodyLarge,
+        hintText: 'Search emoji',
+        hintTextStyle: theme.textTheme.bodyLarge?.copyWith(
+          color: cs.onSurfaceVariant,
+        ),
+        customSearchView: (config, state, showEmojiView) =>
+            _EmojiSearchView(config, state, showEmojiView, _searching),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<bool>(
+      valueListenable: _searching,
+      builder: (context, searching, _) {
+        final h = searching ? widget.searchHeight : widget.height;
+        return SizedBox(
+          height: h,
+          child: EmojiPicker(
+            textEditingController: widget.textEditingController,
+            onEmojiSelected: widget.onEmojiSelected,
+            config: _config(context, h),
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// Search view showing two rows of results; an empty query shows recents.
+class _EmojiSearchView extends SearchView {
+  const _EmojiSearchView(
+    super.config,
+    super.state,
+    super.showEmojiView,
+    this.searching,
+  );
+
+  final ValueNotifier<bool> searching;
+
+  @override
+  SearchViewState<_EmojiSearchView> createState() => _EmojiSearchViewState();
+}
+
+class _EmojiSearchViewState extends SearchViewState<_EmojiSearchView> {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) widget.searching.value = true;
+    });
+  }
+
+  @override
+  void dispose() {
+    final searching = widget.searching;
+    WidgetsBinding.instance.addPostFrameCallback(
+      (_) => searching.value = false,
+    );
+    super.dispose();
+  }
+
+  @override
+  void onTextInputChanged(String text) {
+    if (text.trim().isNotEmpty) {
+      super.onTextInputChanged(text);
+      return;
+    }
+    utils.getRecentEmojis().then((recents) {
+      if (!mounted) return;
+      setState(() {
+        links.clear();
+        results
+          ..clear()
+          ..addAll(recents.map((e) => e.emoji));
+        for (final e in results) {
+          links[e.emoji] = LayerLink();
+        }
+      });
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cfg = widget.config;
+    final cs = Theme.of(context).colorScheme;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final emojiSize = cfg.emojiViewConfig.getEmojiSize(
+          constraints.maxWidth,
+        );
+        final box = cfg.emojiViewConfig.getEmojiBoxSize(constraints.maxWidth);
+        return Container(
+          color: cfg.searchViewConfig.backgroundColor,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SizedBox(
+                height: box * 2 + 4,
+                child: results.isEmpty
+                    ? Center(
+                        child: Text(
+                          'No emoji found',
+                          style: TextStyle(color: cs.onSurfaceVariant),
+                        ),
+                      )
+                    : Material(
+                        color: Colors.transparent,
+                        child: GridView.builder(
+                          scrollDirection: Axis.horizontal,
+                          padding: const EdgeInsets.symmetric(vertical: 2),
+                          gridDelegate:
+                              SliverGridDelegateWithFixedCrossAxisCount(
+                                crossAxisCount: 2,
+                                mainAxisExtent: box,
+                              ),
+                          itemCount: results.length,
+                          itemBuilder: (context, i) =>
+                              buildEmoji(results[i], emojiSize, box),
+                        ),
+                      ),
+              ),
+              SizedBox(
+                height: 44,
+                child: Row(
+                  children: [
+                    IconButton(
+                      onPressed: widget.showEmojiView,
+                      color: cfg.searchViewConfig.buttonIconColor,
+                      icon: const Icon(Icons.arrow_back),
+                    ),
+                    Expanded(
+                      child: TextField(
+                        onChanged: onTextInputChanged,
+                        focusNode: focusNode,
+                        style: cfg.searchViewConfig.inputTextStyle,
+                        decoration: InputDecoration(
+                          border: InputBorder.none,
+                          enabledBorder: InputBorder.none,
+                          focusedBorder: InputBorder.none,
+                          filled: false,
+                          isDense: true,
+                          hintText: cfg.searchViewConfig.hintText,
+                          hintStyle: cfg.searchViewConfig.hintTextStyle,
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
 /// Opens the full emoji picker and resolves to the chosen emoji, or null if
 /// the sheet was dismissed.
 Future<String?> showReactionPicker(BuildContext context) {
   return showModalBottomSheet<String>(
     context: context,
     showDragHandle: true,
-    builder: (pickerContext) => SafeArea(
-      child: SizedBox(
-        height: 320,
-        child: EmojiPicker(
+    isScrollControlled: true,
+    builder: (pickerContext) => Padding(
+      padding: EdgeInsets.only(
+        bottom: MediaQuery.viewInsetsOf(pickerContext).bottom,
+      ),
+      child: SafeArea(
+        child: ThemedEmojiPicker(
+          height: 360,
+          showBackspace: false,
           onEmojiSelected: (category, emoji) =>
               Navigator.pop(pickerContext, emoji.emoji),
-          config: const Config(
-            height: 320,
-            checkPlatformCompatibility: true,
-            emojiViewConfig: EmojiViewConfig(columns: 8, emojiSizeMax: 28),
-            categoryViewConfig: CategoryViewConfig(),
-            bottomActionBarConfig: BottomActionBarConfig(enabled: false),
-          ),
         ),
       ),
     ),
@@ -1038,7 +1260,10 @@ class _MessageText extends StatelessWidget {
       );
     }
 
-    return SelectableText.rich(
+    // Not selectable: a SelectableText would swallow the long-press and start
+    // text selection instead of opening the message action sheet (which has
+    // "Copy message").
+    return Text.rich(
       TextSpan(
         style: bare
             ? const TextStyle(fontSize: 44, height: 1.1)
