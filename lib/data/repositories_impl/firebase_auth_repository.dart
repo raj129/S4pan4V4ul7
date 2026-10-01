@@ -27,6 +27,9 @@ class FirebaseAuthRepository implements AuthRepository {
 
   @override
   Future<bool> isSignedIn() async {
+    // Firebase restores its persisted user asynchronously after app startup.
+    // Wait for the initial auth event before callers decide the user signed out.
+    await _firebaseAuth.authStateChanges().first;
     return _firebaseAuth.currentUser != null;
   }
 

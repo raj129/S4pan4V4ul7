@@ -61,7 +61,10 @@ class ChatAuthService {
   Future<ChatUser> ensureSignedIn({
     required bool allowInteractiveSignIn,
   }) async {
-    var firebaseUser = FirebaseAuth.instance.currentUser;
+    final hasRestoredSession = await authRepository.isSignedIn();
+    var firebaseUser = hasRestoredSession
+        ? FirebaseAuth.instance.currentUser
+        : null;
     AuthResult? result;
 
     if (firebaseUser == null) {
@@ -118,6 +121,7 @@ class ChatAuthService {
   /// no identity key yet. Creating a key here instead would orphan existing
   /// history that a restore from the Firestore backup could have unlocked.
   Future<ChatUser?> restoreLocalSession() async {
+    if (!await authRepository.isSignedIn()) return null;
     final firebaseUser = FirebaseAuth.instance.currentUser;
     if (firebaseUser == null) return null;
     if (!await cryptoService.hasIdentityKey()) return null;
