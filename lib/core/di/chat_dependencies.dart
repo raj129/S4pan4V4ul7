@@ -77,6 +77,9 @@ class ChatDependencies {
   }
 
   final AuthRepository _authRepository;
+
+  /// Exposed so the session can authorize Google Drive once up front.
+  AuthRepository get authRepository => _authRepository;
   final VaultSession _vaultSession;
 
   /// Shared local database, or null in the in-memory test configuration.

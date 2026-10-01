@@ -100,13 +100,15 @@ class FirebaseAuthRepository implements AuthRepository {
   static DateTime? _cachedAt;
   static GoogleSignInAccount? _sessionAccount;
   static Future<Map<String, String>?>? _inFlight;
-  static bool _inFlightInteractive = false;
+  static DateTime? _failedAt;
   static const Duration _headerTtl = Duration(minutes: 45);
+  static const Duration _failureTtl = Duration(minutes: 10);
 
   static void _clearCache() {
     _cachedHeaders = null;
     _cachedAt = null;
     _sessionAccount = null;
+    _failedAt = null;
   }
 
   @override
@@ -126,14 +128,20 @@ class FirebaseAuthRepository implements AuthRepository {
     }
     final pending = _inFlight;
     if (pending != null) {
-      if (!interactive || _inFlightInteractive) return pending;
-      // A silent attempt may fail; retry interactively once it settles.
-      return pending.then(
-        (h) => h ?? _driveHeaders(interactive: true),
-      );
+      // Join the running attempt rather than starting another prompt. An
+      // explicit interactive request that finds it failed is made by the
+      // caller (Settings), not chained here, so no second dialog appears.
+      return pending;
+    }
+    // A recent silent attempt already failed: don't re-run account lookup on
+    // every Drive call. Only an explicit interactive request retries early.
+    final failedAt = _failedAt;
+    if (!interactive &&
+        failedAt != null &&
+        DateTime.now().difference(failedAt) < _failureTtl) {
+      return Future.value(null);
     }
 
-    _inFlightInteractive = interactive;
     final future = _fetchDriveHeaders(interactive: interactive);
     _inFlight = future;
     return future.whenComplete(() {
@@ -147,7 +155,10 @@ class FirebaseAuthRepository implements AuthRepository {
     try {
       final account = _sessionAccount ??
           await _googleSignIn.attemptLightweightAuthentication();
-      if (account == null) return null;
+      if (account == null) {
+        _failedAt = DateTime.now();
+        return null;
+      }
       _sessionAccount = account;
       final allScopes = [..._authScopes, ..._driveScopes];
       final headers = await account.authorizationClient
@@ -155,11 +166,15 @@ class FirebaseAuthRepository implements AuthRepository {
       if (headers != null) {
         _cachedHeaders = headers;
         _cachedAt = DateTime.now();
+        _failedAt = null;
+      } else {
+        _failedAt = DateTime.now();
       }
       return headers;
     } catch (_) {
       // Drive authorization failed (e.g. user did not grant drive scope).
       // Return null so callers fall back gracefully.
+      _failedAt = DateTime.now();
       return null;
     }
   }

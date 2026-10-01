@@ -1,5 +1,6 @@
 import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:intl/intl.dart';
 
@@ -19,6 +20,13 @@ import '../../state/chat/media_send_status.dart';
 
 /// Emoji offered in the quick reaction bar, matching WhatsApp's default set.
 const kQuickReactions = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
+
+/// Soft tick the moment a reply swipe crosses the threshold, once per swipe.
+void _replySwipeHaptic(DismissUpdateDetails details) {
+  if (details.reached && !details.previousReached) {
+    HapticFeedback.lightImpact();
+  }
+}
 
 /// A single chat message.
 class MessageBubble extends StatelessWidget {
@@ -211,6 +219,7 @@ class MessageBubble extends StatelessWidget {
                   ? DismissDirection.none
                   : DismissDirection.startToEnd,
               dismissThresholds: const {DismissDirection.startToEnd: 0.25},
+              onUpdate: _replySwipeHaptic,
               confirmDismiss: (_) async {
                 onReply?.call();
                 return false;
@@ -1152,6 +1161,7 @@ class _TombstoneBubble extends StatelessWidget {
       key: ValueKey('reply_deleted_$messageId'),
       direction: DismissDirection.startToEnd,
       dismissThresholds: const {DismissDirection.startToEnd: 0.25},
+      onUpdate: _replySwipeHaptic,
       confirmDismiss: (_) async {
         onReply!.call();
         return false;
