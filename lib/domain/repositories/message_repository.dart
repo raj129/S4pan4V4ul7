@@ -14,6 +14,7 @@ abstract class MessageRepository {
     required String senderId,
     required String encryptedText,
     String? messageId,
+    DateTime? sentAt,
     String? mediaRef,
     MessageType? mediaType,
     MediaMeta? mediaMeta,
@@ -64,6 +65,13 @@ abstract class MessageRepository {
 
   /// Mark messages as read by [uid], driving the sender's read receipts.
   Future<void> markRead({
+    required String threadId,
+    required List<String> messageIds,
+    required String uid,
+  });
+
+  /// Mark messages as delivered to [uid]'s device.
+  Future<void> markDelivered({
     required String threadId,
     required List<String> messageIds,
     required String uid,

@@ -34,6 +34,7 @@ class FirestoreMessageRepository implements MessageRepository {
     required String senderId,
     required String encryptedText,
     String? messageId,
+    DateTime? sentAt,
     String? mediaRef,
     MessageType? mediaType,
     MediaMeta? mediaMeta,
@@ -41,7 +42,7 @@ class FirestoreMessageRepository implements MessageRepository {
     bool isForwarded = false,
   }) async {
     final msgId = messageId ?? _uuid.v4();
-    final now = DateTime.now().toUtc();
+    final now = sentAt?.toUtc() ?? DateTime.now().toUtc();
     final msg = ChatMessage(
       messageId: msgId,
       threadId: threadId,
@@ -65,10 +66,15 @@ class FirestoreMessageRepository implements MessageRepository {
     return _messages(threadId)
         .orderBy('sentAt', descending: true)
         .limit(limit)
-        .snapshots()
+        .snapshots(includeMetadataChanges: true)
         .map(
           (snap) => snap.docs
-              .map((d) => ChatMessage.fromFirestore(d.data()))
+              .map(
+                (d) => ChatMessage.fromFirestore(
+                  d.data(),
+                  hasPendingWrites: d.metadata.hasPendingWrites,
+                ),
+              )
               .toList(),
         );
   }
@@ -134,9 +140,9 @@ class FirestoreMessageRepository implements MessageRepository {
     // Dotted field paths would break on UIDs containing '.', so address the
     // nested key explicitly.
     final field = FieldPath(['reactions', uid]);
-    await _messages(threadId).doc(messageId).update({
-      field: emoji ?? FieldValue.delete(),
-    });
+    await _messages(
+      threadId,
+    ).doc(messageId).update({field: emoji ?? FieldValue.delete()});
   }
 
   @override
@@ -152,6 +158,25 @@ class FirestoreMessageRepository implements MessageRepository {
       for (final id in chunk) {
         batch.update(_messages(threadId).doc(id), {
           'readBy': FieldValue.arrayUnion([uid]),
+        });
+      }
+      await batch.commit();
+    }
+  }
+
+  @override
+  Future<void> markDelivered({
+    required String threadId,
+    required List<String> messageIds,
+    required String uid,
+  }) async {
+    if (messageIds.isEmpty) return;
+    for (var i = 0; i < messageIds.length; i += _maxBatchSize) {
+      final chunk = messageIds.skip(i).take(_maxBatchSize);
+      final batch = _db.batch();
+      for (final id in chunk) {
+        batch.update(_messages(threadId).doc(id), {
+          'deliveredTo': FieldValue.arrayUnion([uid]),
         });
       }
       await batch.commit();
@@ -224,7 +249,9 @@ class FirebaseMediaRepository implements MediaRepository {
     void Function(double progress)? onProgress,
     UploadCancelToken? cancelToken,
   }) async {
-    if (cancelToken?.isCancelled == true) throw const UploadCancelledException();
+    if (cancelToken?.isCancelled == true) {
+      throw const UploadCancelledException();
+    }
     final ref = _ref(threadId, messageId, filename);
     final task = ref.putData(
       encryptedBytes,

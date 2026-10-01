@@ -37,11 +37,23 @@ service cloud.firestore {
     }
 
     // Fields a non-sender may touch on someone else's message: their own
-    // reaction, their own read receipt, and hiding it for themselves.
+    // reaction/receipts and hiding it for themselves.
     function onlyRecipientFieldsChanged() {
+      let oldDelivered = resource.data.get('deliveredTo', []);
+      let newDelivered = request.resource.data.get('deliveredTo', []);
       return request.resource.data.diff(resource.data)
-             .affectedKeys()
-             .hasOnly(['reactions', 'readBy', 'deletedFor']);
+                 .affectedKeys()
+                 .hasOnly([
+                   'reactions',
+                   'readBy',
+                   'deliveredTo',
+                   'deletedFor'
+                 ])
+             && newDelivered is list
+             && newDelivered.toSet().hasAll(oldDelivered.toSet())
+             && newDelivered.toSet()
+                   .difference(oldDelivered.toSet())
+                   .hasOnly([request.auth.uid]);
     }
 
     // ── Users ────────────────────────────────────────────────────────────────
@@ -117,6 +129,7 @@ service cloud.firestore {
         allow create: if isThreadParticipant(threadId)
                       && request.resource.data.senderId == request.auth.uid
                       && request.resource.data.threadId == threadId
+                      && request.resource.data.get('deliveredTo', []).size() == 0
                       && exists(/databases/$(database)/documents/threads/$(threadId))
                       && request.auth.uid in
                          get(/databases/$(database)/documents/threads/$(threadId))
@@ -127,7 +140,11 @@ service cloud.firestore {
         // so a recipient cannot rewrite the ciphertext or forge a sender.
         allow update: if isThreadParticipant(threadId)
                       && (
-                        resource.data.senderId == request.auth.uid
+                        (
+                          resource.data.senderId == request.auth.uid
+                          && request.resource.data.get('deliveredTo', []) ==
+                             resource.data.get('deliveredTo', [])
+                        )
                         || onlyRecipientFieldsChanged()
                       )
                       && request.resource.data.senderId == resource.data.senderId;
@@ -144,7 +161,7 @@ service cloud.firestore {
       }
     }
 
-    // Push rate-limit bookkeeping, written only by Cloud Functions (Admin SDK).
+    // Alert-rate-limit bookkeeping is written only by Cloud Functions.
     match /pushThrottle/{docId} {
       allow read, write: if false;
     }

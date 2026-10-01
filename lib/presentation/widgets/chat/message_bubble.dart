@@ -38,7 +38,7 @@ class MessageBubble extends StatelessWidget {
     required this.otherUid,
     required this.mediaLoader,
     required this.onDeleteForMe,
-    this.otherIsOnline = false,
+    this.isOffline = false,
     this.isFirstInGroup = true,
     this.isLastInGroup = true,
     this.onDeleteForEveryone,
@@ -63,7 +63,7 @@ class MessageBubble extends StatelessWidget {
   final bool isMine;
   final String myUid;
   final String otherUid;
-  final bool otherIsOnline;
+  final bool isOffline;
 
   /// First message of a consecutive run by the same sender: draws the tail.
   final bool isFirstInGroup;
@@ -155,7 +155,7 @@ class MessageBubble extends StatelessWidget {
               isMine: isMine,
               myUid: myUid,
               otherUid: otherUid,
-              otherIsOnline: otherIsOnline,
+              isOffline: isOffline,
               mediaLoader: mediaLoader,
               sendStatus: sendStatus,
               onCancelUpload: onCancelUpload,
@@ -185,7 +185,7 @@ class MessageBubble extends StatelessWidget {
                 isMine: isMine,
                 myUid: myUid,
                 otherUid: otherUid,
-                otherIsOnline: otherIsOnline,
+                isOffline: isOffline,
                 mediaLoader: mediaLoader,
                 sendStatus: sendStatus,
                 onCancelUpload: onCancelUpload,
@@ -416,7 +416,7 @@ class _BubbleContent extends StatelessWidget {
     required this.isMine,
     required this.myUid,
     required this.otherUid,
-    required this.otherIsOnline,
+    required this.isOffline,
     required this.mediaLoader,
     required this.onTapQuote,
     required this.textColor,
@@ -433,7 +433,7 @@ class _BubbleContent extends StatelessWidget {
   final bool isMine;
   final String myUid;
   final String otherUid;
-  final bool otherIsOnline;
+  final bool isOffline;
   final ChatMediaLoader mediaLoader;
   final void Function(String messageId)? onTapQuote;
   final Color textColor;
@@ -551,7 +551,7 @@ class _BubbleContent extends StatelessWidget {
               message: message,
               isMine: isMine,
               otherUid: otherUid,
-              otherIsOnline: otherIsOnline,
+              isOffline: isOffline,
               textColor: metaColor,
             ),
           ],
@@ -879,14 +879,14 @@ class _MetaRow extends StatelessWidget {
     required this.message,
     required this.isMine,
     required this.otherUid,
-    required this.otherIsOnline,
+    required this.isOffline,
     required this.textColor,
   });
 
   final ChatMessage message;
   final bool isMine;
   final String otherUid;
-  final bool otherIsOnline;
+  final bool isOffline;
   final Color textColor;
 
   @override
@@ -898,8 +898,13 @@ class _MetaRow extends StatelessWidget {
         message.status ??
         MessageStatusX.forOneToOne(
           readByRecipient: message.isReadBy(otherUid),
-          recipientOnline: otherIsOnline,
+          deliveredToRecipient: message.deliveredTo.contains(otherUid),
         );
+    final waitingForConnection =
+        isOffline &&
+        (status == MessageStatus.sending || status == MessageStatus.failed);
+    final visibleStatus = waitingForConnection ? MessageStatus.sending : status;
+    final statusLabel = waitingForConnection ? 'Waiting for connection' : null;
 
     return Row(
       mainAxisSize: MainAxisSize.min,
@@ -914,20 +919,27 @@ class _MetaRow extends StatelessWidget {
           style: AppTypography.bubbleMeta(faded),
         ),
         if (isMine) ...[
-          if (status == MessageStatus.sending || status == MessageStatus.failed)
+          if (waitingForConnection ||
+              status == MessageStatus.sending ||
+              status == MessageStatus.failed)
             Padding(
               padding: const EdgeInsets.only(right: AppSpacing.xs),
               child: Text(
-                status == MessageStatus.sending ? 'Sending' : 'Not sent',
+                statusLabel ??
+                    (status == MessageStatus.sending ? 'Sending' : 'Not sent'),
                 style: AppTypography.bubbleMeta(
-                  status == MessageStatus.failed
+                  status == MessageStatus.failed && !waitingForConnection
                       ? Theme.of(context).colorScheme.error
                       : faded,
                 ),
               ),
             ),
           const SizedBox(width: AppSpacing.xs),
-          _StatusTicks(status: status, color: faded),
+          _StatusTicks(
+            status: visibleStatus,
+            color: faded,
+            labelOverride: statusLabel,
+          ),
         ],
       ],
     );
@@ -936,14 +948,19 @@ class _MetaRow extends StatelessWidget {
 
 /// WhatsApp-style delivery ticks.
 class _StatusTicks extends StatelessWidget {
-  const _StatusTicks({required this.status, required this.color});
+  const _StatusTicks({
+    required this.status,
+    required this.color,
+    this.labelOverride,
+  });
 
   final MessageStatus status;
   final Color color;
+  final String? labelOverride;
 
   @override
   Widget build(BuildContext context) {
-    final (icon, label, iconColor) = switch (status) {
+    final (icon, statusLabel, iconColor) = switch (status) {
       MessageStatus.sending => (Icons.schedule_rounded, 'Sending', color),
       MessageStatus.failed => (
         Icons.error_outline_rounded,
@@ -959,12 +976,12 @@ class _StatusTicks extends StatelessWidget {
       MessageStatus.sent => (Icons.done_rounded, 'Sent', color),
     };
     return Semantics(
-      label: label,
+      label: labelOverride ?? statusLabel,
       child: AnimatedSwitcher(
         duration: AppDuration.fast,
         child: Icon(
           icon,
-          key: ValueKey(status),
+          key: ValueKey((status, labelOverride)),
           size: status == MessageStatus.failed ? 14 : 15,
           color: iconColor,
         ),

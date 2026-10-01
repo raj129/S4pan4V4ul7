@@ -1,10 +1,9 @@
 /**
  * Push notifications for the end-to-end encrypted chat.
  *
- * Message bodies are ciphertext the server cannot read, so the push is a
- * deliberately generic, disguised alert ("Calculator — You have a new alert").
- * It carries only the thread ID, which the app uses to open the conversation
- * once the vault is unlocked.
+ * Message bodies are ciphertext the server cannot read, so the push carries
+ * only thread and message IDs. The client displays a generic alert and records
+ * device delivery without exposing message content.
  */
 import { initializeApp } from "firebase-admin/app";
 import { FieldPath, getFirestore } from "firebase-admin/firestore";
@@ -24,15 +23,8 @@ const DATABASE_ID = "default1";
  */
 const REGION = "asia-south1";
 
-/** Must match ChatNotificationService.channelId in the Flutter app. */
-const ANDROID_CHANNEL_ID = "chat_messages";
-
-/**
- * At most one push per thread and recipient in this window. Pushes for the
- * same thread collapse into one notification on the device (same tag), so
- * this loses nothing for the user but caps spam and Blaze costs.
- */
-const MIN_PUSH_INTERVAL_MS = 30 * 1000;
+/** At most one visible alert per thread and recipient in this window. */
+const MIN_ALERT_INTERVAL_MS = 30 * 1000;
 
 /** FCM accepts at most 500 tokens per multicast. */
 const MAX_TOKENS_PER_SEND = 500;
@@ -46,11 +38,7 @@ setGlobalOptions({ region: REGION, maxInstances: 10 });
 
 const db = getFirestore(DATABASE_ID);
 
-/**
- * Atomically claims the push slot for this thread and recipient. Returns
- * false if a push was already sent within MIN_PUSH_INTERVAL_MS.
- */
-async function acquirePushSlot(
+async function acquireAlertSlot(
   threadId: string,
   recipientId: string,
 ): Promise<boolean> {
@@ -59,7 +47,7 @@ async function acquirePushSlot(
     const snap = await tx.get(ref);
     const now = Date.now();
     const last = snap.get("lastSentAt");
-    if (typeof last === "number" && now - last < MIN_PUSH_INTERVAL_MS) {
+    if (typeof last === "number" && now - last < MIN_ALERT_INTERVAL_MS) {
       return false;
     }
     tx.set(ref, { lastSentAt: now });
@@ -115,11 +103,7 @@ export const onChatMessageCreated = onDocumentCreated(
       return;
     }
 
-    if (!(await acquirePushSlot(threadId, recipientId))) {
-      logger.info("Chat push throttled", { threadId, messageId });
-      return;
-    }
-
+    const notify = await acquireAlertSlot(threadId, recipientId);
     const tokensRef = db
       .collection("users")
       .doc(recipientId)
@@ -135,16 +119,9 @@ export const onChatMessageCreated = onDocumentCreated(
       const batch = tokens.slice(i, i + MAX_TOKENS_PER_SEND);
       const response = await getMessaging().sendEachForMulticast({
         tokens: batch,
-        notification: {
-          title: "Calculator",
-          body: "You have a new alert",
-        },
-        data: { threadId },
+        data: { threadId, messageId, notify: notify ? "true" : "false" },
         android: {
           priority: "high",
-          // Same tag + id 0 as the in-app notification, so they replace
-          // each other instead of stacking duplicates.
-          notification: { channelId: ANDROID_CHANNEL_ID, tag: threadId },
         },
       });
       response.responses.forEach((r, idx) => {

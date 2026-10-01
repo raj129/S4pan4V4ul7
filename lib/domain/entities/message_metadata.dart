@@ -61,22 +61,22 @@ class MediaMeta extends Equatable {
   }
 
   Map<String, dynamic> toFirestore() => {
-        if (width != null) 'width': width,
-        if (height != null) 'height': height,
-        if (sizeBytes != null) 'sizeBytes': sizeBytes,
-        if (durationMs != null) 'durationMs': durationMs,
-        if (filename != null) 'filename': filename,
-        if (thumbRef != null) 'thumbRef': thumbRef,
-      };
+    if (width != null) 'width': width,
+    if (height != null) 'height': height,
+    if (sizeBytes != null) 'sizeBytes': sizeBytes,
+    if (durationMs != null) 'durationMs': durationMs,
+    if (filename != null) 'filename': filename,
+    if (thumbRef != null) 'thumbRef': thumbRef,
+  };
 
   MediaMeta copyWith({String? thumbRef, int? sizeBytes}) => MediaMeta(
-        width: width,
-        height: height,
-        sizeBytes: sizeBytes ?? this.sizeBytes,
-        durationMs: durationMs,
-        filename: filename,
-        thumbRef: thumbRef ?? this.thumbRef,
-      );
+    width: width,
+    height: height,
+    sizeBytes: sizeBytes ?? this.sizeBytes,
+    durationMs: durationMs,
+    filename: filename,
+    thumbRef: thumbRef ?? this.thumbRef,
+  );
 
   static MediaMeta? fromFirestore(Map<String, dynamic>? data) {
     if (data == null || data.isEmpty) return null;
@@ -92,32 +92,32 @@ class MediaMeta extends Equatable {
 
   @override
   List<Object?> get props => [
-        width,
-        height,
-        sizeBytes,
-        durationMs,
-        filename,
-        thumbRef,
-      ];
+    width,
+    height,
+    sizeBytes,
+    durationMs,
+    filename,
+    thumbRef,
+  ];
 }
 
 /// Delivery state of an outgoing message, rendered as ticks on the bubble.
 ///
-/// [sending] and [failed] are local-only states produced by the outbox; they
-/// are never written to Firestore.
+/// [sending] and [failed] are local-only outbox states; Firestore pending-write
+/// metadata also supplies [sending]. Neither is stored in message data.
 enum MessageStatus { sending, sent, delivered, read, failed }
 
 extension MessageStatusX on MessageStatus {
   bool get isPending => this == MessageStatus.sending;
   bool get isFailed => this == MessageStatus.failed;
 
-  /// Resolves the tick state for a 1:1 thread from the recipient's read state.
+  /// Resolves the tick state without inferring delivery from online presence.
   static MessageStatus forOneToOne({
     required bool readByRecipient,
-    required bool recipientOnline,
+    required bool deliveredToRecipient,
   }) {
     if (readByRecipient) return MessageStatus.read;
-    if (recipientOnline) return MessageStatus.delivered;
+    if (deliveredToRecipient) return MessageStatus.delivered;
     return MessageStatus.sent;
   }
 

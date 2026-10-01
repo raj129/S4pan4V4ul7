@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:typed_data';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:equatable/equatable.dart';
+import 'package:flutter/widgets.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:image/image.dart' as img;
 import 'package:uuid/uuid.dart';
@@ -232,7 +233,8 @@ class ForwardTarget extends Equatable {
 
 // ── Cubit ────────────────────────────────────────────────────────────────────
 
-class ActiveThreadCubit extends Cubit<ActiveThreadState> {
+class ActiveThreadCubit extends Cubit<ActiveThreadState>
+    with WidgetsBindingObserver {
   ActiveThreadCubit({
     required this.messageRepository,
     required this.threadRepository,
@@ -254,6 +256,7 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
          cryptoService: cryptoService,
        ),
        super(const ActiveThreadLoading()) {
+    WidgetsBinding.instance.addObserver(this);
     // Auto-drain the outbox the moment connectivity is restored, instead of
     // only retrying the next time the user happens to reopen the thread —
     // this is what makes queued offline messages "send automatically once
@@ -270,6 +273,7 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
         onError: (_) {},
       );
     }
+    unawaited(drainOutbox());
   }
 
   final MessageRepository messageRepository;
@@ -349,6 +353,7 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
   static const _pageSize = 30;
 
   static const _uuid = Uuid();
+  static final Set<String> _inFlightMessageIds = {};
 
   /// Locally-queued messages not yet acknowledged by Firestore, newest first.
   ///
@@ -456,6 +461,29 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
       }
     }
 
+    List<OutboxItem> queued;
+    try {
+      queued = await outbox.pendingForThread(thread.threadId);
+    } catch (_) {
+      queued = const [];
+    }
+    for (final item in queued.where((item) => item.senderId == myUid)) {
+      String preview;
+      try {
+        preview = await cryptoService.decryptMessage(
+          threadId: item.threadId,
+          encryptedB64: item.encryptedText,
+        );
+      } catch (_) {
+        preview = '🔒 Encrypted message';
+      }
+      var message = item.toOptimisticMessage().withDecryptedText(preview);
+      if (_inFlightMessageIds.contains(item.messageId)) {
+        message = message.copyWith(status: MessageStatus.sending);
+      }
+      _pending[item.messageId] = message;
+    }
+
     // Paint from the local cache before Firestore answers. Without this the
     // thread shows a spinner on every open, even for conversations whose
     // history has not changed.
@@ -508,6 +536,23 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
             final decrypted = await _decryptAll(msgs, thread.threadId);
             if (thread.threadId != _currentThreadId) return;
             final visible = _visibleFromServer(decrypted);
+            final undelivered = visible
+                .where(
+                  (message) =>
+                      message.senderId != myUid &&
+                      !message.deliveredTo.contains(myUid),
+                )
+                .map((message) => message.messageId)
+                .toList();
+            if (undelivered.isNotEmpty) {
+              _fireAndForget(
+                () => messageRepository.markDelivered(
+                  threadId: thread.threadId,
+                  messageIds: undelivered,
+                  uid: myUid,
+                ),
+              );
+            }
             _lastLive = visible;
             _openTimeoutTimer?.cancel();
             if (_detached && state is ActiveThreadLoaded) {
@@ -549,6 +594,8 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
         emit(current.copyWith(otherIsOnline: presence.isOnline));
       }
     });
+
+    if (_pending.isNotEmpty) _emitMessages();
 
     // Flush anything written while offline, now that a connection is likely.
     unawaited(drainOutbox());
@@ -613,12 +660,18 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
   }
 
   Future<void> _deliver(OutboxItem item, {String? decryptedPreview}) async {
+    if (!_inFlightMessageIds.add(item.messageId)) return;
+    if (item.threadId == _currentThreadId &&
+        (item.attempts > 0 || !_pending.containsKey(item.messageId))) {
+      _showPending(item, decryptedPreview, status: MessageStatus.sending);
+    }
     try {
       final msg = await messageRepository.sendMessage(
         threadId: item.threadId,
         senderId: item.senderId,
         encryptedText: item.encryptedText,
         messageId: item.messageId,
+        sentAt: item.queuedAt,
         mediaRef: item.mediaRef,
         mediaType: item.mediaType,
         mediaMeta: item.mediaMeta,
@@ -637,44 +690,52 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
       // Keep a sent local copy until the matching Firestore snapshot arrives.
       // Removing it here could make a successful message disappear briefly
       // while the listener is still catching up.
-      _pending[item.messageId] = decryptedPreview == null
-          ? msg
-          : msg.withDecryptedText(decryptedPreview);
-      if (item.threadId == _currentThreadId) _emitMessages();
+      if (item.threadId == _currentThreadId) {
+        _pending[item.messageId] = decryptedPreview == null
+            ? msg
+            : msg.withDecryptedText(decryptedPreview);
+        _emitMessages();
+      }
     } catch (e) {
       await outbox.markFailed(item.messageId, e.toString());
       _showPending(
         item.copyWith(attempts: item.attempts + 1),
         decryptedPreview,
       );
-      _reportActionError('Not sent — will retry when you are back online.');
+      if (item.threadId == _currentThreadId) {
+        _reportActionError('Not sent — will retry when you are back online.');
+      }
+    } finally {
+      _inFlightMessageIds.remove(item.messageId);
     }
   }
 
-  void _showPending(OutboxItem item, String? decryptedPreview) {
+  void _showPending(
+    OutboxItem item,
+    String? decryptedPreview, {
+    MessageStatus? status,
+  }) {
     if (item.threadId != _currentThreadId) return;
     var msg = item.toOptimisticMessage();
     if (decryptedPreview != null) {
       msg = msg.withDecryptedText(decryptedPreview);
     }
+    if (status != null) msg = msg.copyWith(status: status);
     _pending[item.messageId] = msg;
     _emitMessages();
   }
 
-  /// Retry everything still queued for this thread.
-  ///
-  /// Called on thread open, so a message written while offline goes out as soon
-  /// as the conversation is looked at again.
+  /// Retry every queued message for this account, even when its thread is not
+  /// currently open.
   Future<void> drainOutbox() async {
-    final threadId = _currentThreadId;
-    if (threadId == null) return;
     List<OutboxItem> queued;
     try {
-      queued = await outbox.pendingForThread(threadId);
+      queued = await outbox.pending();
     } catch (_) {
       return;
     }
     for (final item in queued) {
+      if (item.senderId != myUid) continue;
       // A queued media message whose upload never finished cannot be retried
       // from here — the plaintext bytes are gone. Surface it as failed instead
       // of silently sending a message that points at nothing.
@@ -1609,11 +1670,7 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
   }
 
   /// Advances the bar within one phase, never backwards.
-  void _advanceUpload(
-    String messageId,
-    MediaSendPhase phase,
-    double progress,
-  ) {
+  void _advanceUpload(String messageId, MediaSendPhase phase, double progress) {
     final current = state;
     if (current is! ActiveThreadLoaded) return;
     final existing = current.uploadProgress[messageId];
@@ -2142,6 +2199,7 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
 
   @override
   Future<void> close() async {
+    WidgetsBinding.instance.removeObserver(this);
     _messageSub?.cancel();
     _typingSub?.cancel();
     _presenceSub?.cancel();
@@ -2159,5 +2217,12 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState> {
       );
     }
     return super.close();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      unawaited(drainOutbox());
+    }
   }
 }

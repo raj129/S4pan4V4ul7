@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:photo_vault/crypto/services/chat_crypto_service.dart';
 import 'package:photo_vault/domain/entities/chat_message.dart';
+import 'package:photo_vault/domain/entities/message_metadata.dart';
 import 'package:photo_vault/domain/repositories/message_repository.dart';
 import 'package:photo_vault/presentation/widgets/chat/chat_media_preview.dart';
 import 'package:photo_vault/presentation/widgets/chat/animated_emoji.dart';
@@ -85,9 +86,7 @@ void main() {
         ? target
         : find.ancestor(of: target, matching: find.byType(Material)).first;
     if (text == 'hello' && mediaType == null) {
-      await tester.longPressAt(
-        tester.getTopLeft(bubble) + const Offset(6, 4),
-      );
+      await tester.longPressAt(tester.getTopLeft(bubble) + const Offset(6, 4));
     } else {
       await tester.longPress(bubble);
     }
@@ -152,5 +151,28 @@ void main() {
 
     expect(find.byType(BottomSheet), findsOneWidget);
     expect(find.text('Delete for me'), findsOneWidget);
+  });
+
+  testWidgets('offline outgoing message shows a waiting indicator', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: MessageBubble(
+            message: _message().copyWith(status: MessageStatus.failed),
+            isMine: true,
+            myUid: 'me',
+            otherUid: 'other',
+            isOffline: true,
+            mediaLoader: _TestMediaLoader(),
+            onDeleteForMe: () {},
+          ),
+        ),
+      ),
+    );
+
+    expect(find.text('Waiting for connection'), findsOneWidget);
+    expect(find.byIcon(Icons.schedule_rounded), findsOneWidget);
   });
 }

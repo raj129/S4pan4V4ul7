@@ -23,6 +23,7 @@ class ChatMessage extends Equatable {
     this.replyTo,
     this.reactions = const {},
     this.readBy = const [],
+    this.deliveredTo = const [],
     this.deletedForEveryone = false,
     this.editedAt,
     this.isForwarded = false,
@@ -59,6 +60,9 @@ class ChatMessage extends Equatable {
   /// UIDs that have read this message, used to drive the read receipt ticks.
   final List<String> readBy;
 
+  /// UIDs whose devices have acknowledged receiving this message.
+  final List<String> deliveredTo;
+
   /// Tombstone flag. The document is kept so both sides render
   /// "This message was deleted" instead of the message silently vanishing.
   final bool deletedForEveryone;
@@ -70,8 +74,7 @@ class ChatMessage extends Equatable {
   /// bubble can label it rather than passing it off as original.
   final bool isForwarded;
 
-  /// Delivery state. Persisted only for terminal states; `sending`/`failed`
-  /// are supplied locally by the outbox.
+  /// Local delivery-state override for optimistic bubbles; not serialized.
   final MessageStatus? status;
 
   final DateTime sentAt;
@@ -87,8 +90,7 @@ class ChatMessage extends Equatable {
   /// True for an attachment bubble, including one still uploading (no
   /// `mediaRef` yet), so the upload progress can be shown on it.
   bool get hasMediaSlot =>
-      mediaRef != null ||
-      (mediaType != null && mediaType != MessageType.text);
+      mediaRef != null || (mediaType != null && mediaType != MessageType.text);
 
   bool get isDocument => hasMediaSlot && mediaType == MessageType.file;
 
@@ -144,6 +146,7 @@ class ChatMessage extends Equatable {
     MessageReply? replyTo,
     Map<String, String>? reactions,
     List<String>? readBy,
+    List<String>? deliveredTo,
     List<String>? deletedFor,
     bool? deletedForEveryone,
     DateTime? editedAt,
@@ -168,6 +171,7 @@ class ChatMessage extends Equatable {
       replyTo: replyTo ?? this.replyTo,
       reactions: reactions ?? this.reactions,
       readBy: readBy ?? this.readBy,
+      deliveredTo: deliveredTo ?? this.deliveredTo,
       deletedForEveryone: deletedForEveryone ?? this.deletedForEveryone,
       editedAt: editedAt ?? this.editedAt,
       isForwarded: isForwarded ?? this.isForwarded,
@@ -179,51 +183,58 @@ class ChatMessage extends Equatable {
       copyWith(localDecryptedText: plaintext);
 
   Map<String, dynamic> toFirestore() => {
-        'messageId': messageId,
-        'threadId': threadId,
-        'senderId': senderId,
-        'encryptedText': encryptedText,
-        'sentAt': sentAt.toUtc().millisecondsSinceEpoch,
-        'deletedFor': deletedFor,
-        'deletedForEveryone': deletedForEveryone,
-        'reactions': reactions,
-        'readBy': readBy,
-        if (mediaRef != null) 'mediaRef': mediaRef,
-        if (mediaType != null) 'mediaType': mediaType!.name,
-        if (mediaMeta != null) 'mediaMeta': mediaMeta!.toFirestore(),
-        if (encryptedMediaKey != null) 'encryptedMediaKey': encryptedMediaKey,
-        if (replyTo != null) 'replyTo': replyTo!.toFirestore(),
-        if (editedAt != null)
-          'editedAt': editedAt!.toUtc().millisecondsSinceEpoch,
-        if (isForwarded) 'isForwarded': true,
-      };
+    'messageId': messageId,
+    'threadId': threadId,
+    'senderId': senderId,
+    'encryptedText': encryptedText,
+    'sentAt': sentAt.toUtc().millisecondsSinceEpoch,
+    'deletedFor': deletedFor,
+    'deletedForEveryone': deletedForEveryone,
+    'reactions': reactions,
+    'readBy': readBy,
+    'deliveredTo': deliveredTo,
+    if (mediaRef != null) 'mediaRef': mediaRef,
+    if (mediaType != null) 'mediaType': mediaType!.name,
+    if (mediaMeta != null) 'mediaMeta': mediaMeta!.toFirestore(),
+    if (encryptedMediaKey != null) 'encryptedMediaKey': encryptedMediaKey,
+    if (replyTo != null) 'replyTo': replyTo!.toFirestore(),
+    if (editedAt != null) 'editedAt': editedAt!.toUtc().millisecondsSinceEpoch,
+    if (isForwarded) 'isForwarded': true,
+  };
 
-  factory ChatMessage.fromFirestore(Map<String, dynamic> data) => ChatMessage(
-        messageId: data['messageId'] as String,
-        threadId: data['threadId'] as String,
-        senderId: data['senderId'] as String,
-        encryptedText: data['encryptedText'] as String? ?? '',
-        sentAt: _timestamp(data['sentAt']) ??
-            DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
-        deletedFor: List<String>.from(data['deletedFor'] as List? ?? const []),
-        deletedForEveryone: data['deletedForEveryone'] as bool? ?? false,
-        readBy: List<String>.from(data['readBy'] as List? ?? const []),
-        reactions: (data['reactions'] as Map?)?.map(
-              (k, v) => MapEntry(k as String, v as String),
-            ) ??
-            const {},
-        mediaRef: data['mediaRef'] as String?,
-        mediaType: _parseMediaType(data['mediaType'] as String?),
-        mediaMeta: MediaMeta.fromFirestore(
-          (data['mediaMeta'] as Map?)?.cast<String, dynamic>(),
-        ),
-        encryptedMediaKey: data['encryptedMediaKey'] as String?,
-        replyTo: MessageReply.fromFirestore(
-          (data['replyTo'] as Map?)?.cast<String, dynamic>(),
-        ),
-        editedAt: _timestamp(data['editedAt']),
-        isForwarded: data['isForwarded'] as bool? ?? false,
-      );
+  factory ChatMessage.fromFirestore(
+    Map<String, dynamic> data, {
+    bool hasPendingWrites = false,
+  }) => ChatMessage(
+    messageId: data['messageId'] as String,
+    threadId: data['threadId'] as String,
+    senderId: data['senderId'] as String,
+    encryptedText: data['encryptedText'] as String? ?? '',
+    sentAt:
+        _timestamp(data['sentAt']) ??
+        DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
+    deletedFor: List<String>.from(data['deletedFor'] as List? ?? const []),
+    deletedForEveryone: data['deletedForEveryone'] as bool? ?? false,
+    readBy: List<String>.from(data['readBy'] as List? ?? const []),
+    deliveredTo: List<String>.from(data['deliveredTo'] as List? ?? const []),
+    reactions:
+        (data['reactions'] as Map?)?.map(
+          (k, v) => MapEntry(k as String, v as String),
+        ) ??
+        const {},
+    mediaRef: data['mediaRef'] as String?,
+    mediaType: _parseMediaType(data['mediaType'] as String?),
+    mediaMeta: MediaMeta.fromFirestore(
+      (data['mediaMeta'] as Map?)?.cast<String, dynamic>(),
+    ),
+    encryptedMediaKey: data['encryptedMediaKey'] as String?,
+    replyTo: MessageReply.fromFirestore(
+      (data['replyTo'] as Map?)?.cast<String, dynamic>(),
+    ),
+    editedAt: _timestamp(data['editedAt']),
+    isForwarded: data['isForwarded'] as bool? ?? false,
+    status: hasPendingWrites ? MessageStatus.sending : null,
+  );
 
   /// Reads a millisecond epoch written by [toFirestore].
   static DateTime? _timestamp(Object? value) {
@@ -244,21 +255,22 @@ class ChatMessage extends Equatable {
 
   @override
   List<Object?> get props => [
-        messageId,
-        threadId,
-        senderId,
-        encryptedText,
-        localDecryptedText,
-        sentAt,
-        deletedFor,
-        deletedForEveryone,
-        mediaRef,
-        mediaType,
-        mediaMeta,
-        replyTo,
-        reactions,
-        readBy,
-        editedAt,
-        status,
-      ];
+    messageId,
+    threadId,
+    senderId,
+    encryptedText,
+    localDecryptedText,
+    sentAt,
+    deletedFor,
+    deletedForEveryone,
+    mediaRef,
+    mediaType,
+    mediaMeta,
+    replyTo,
+    reactions,
+    readBy,
+    deliveredTo,
+    editedAt,
+    status,
+  ];
 }

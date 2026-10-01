@@ -9,11 +9,9 @@ import '../../domain/repositories/thread_repository.dart';
 /// Shows a local notification when an unread count goes up, and remembers
 /// which conversation a tapped notification belongs to.
 ///
-/// This covers the app while its process is alive. When the process is dead,
-/// the `onChatMessageCreated` Cloud Function delivers an FCM notification
-/// instead. Both use the Android tag = threadId and id = 0 (the id FCM uses
-/// for tagged notifications), so whichever arrives second replaces the first
-/// rather than stacking a duplicate.
+/// This covers the app while its process is alive. The background FCM handler
+/// also posts through the local-notification plugin. Both use the Android tag
+/// = threadId and id = 0, so they replace rather than stack duplicates.
 class ChatNotificationService {
   ChatNotificationService({required ThreadRepository threadRepository})
     : _threadRepository = threadRepository;
@@ -91,10 +89,9 @@ class ChatNotificationService {
     _watchingUid = myUid;
     _primed = false;
     _lastUnread.clear();
-    _sub = _threadRepository.watchThreadsForUser(myUid).listen(
-      (threads) => _onThreads(threads, myUid),
-      onError: (_) {},
-    );
+    _sub = _threadRepository
+        .watchThreadsForUser(myUid)
+        .listen((threads) => _onThreads(threads, myUid), onError: (_) {});
   }
 
   Future<void> _onThreads(List<ChatThread> threads, String myUid) async {

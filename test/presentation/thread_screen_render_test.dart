@@ -74,6 +74,7 @@ class _Messages implements MessageRepository {
     required String senderId,
     required String encryptedText,
     String? messageId,
+    DateTime? sentAt,
     String? mediaRef,
     MessageType? mediaType,
     MediaMeta? mediaMeta,
@@ -83,6 +84,13 @@ class _Messages implements MessageRepository {
 
   @override
   Future<void> markRead({
+    required String threadId,
+    required List<String> messageIds,
+    required String uid,
+  }) async {}
+
+  @override
+  Future<void> markDelivered({
     required String threadId,
     required List<String> messageIds,
     required String uid,

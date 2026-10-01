@@ -65,7 +65,8 @@ class ChatDependencies {
     if (threadRepository != null) this.threadRepository = threadRepository;
     if (messageRepository != null) this.messageRepository = messageRepository;
     if (mediaRepository != null) this.mediaRepository = mediaRepository;
-    if (presenceRepository != null) this.presenceRepository = presenceRepository;
+    if (presenceRepository != null)
+      this.presenceRepository = presenceRepository;
     if (typingRepository != null) this.typingRepository = typingRepository;
     if (cryptoService != null) this.cryptoService = cryptoService;
     _vaultSession.addListener(_onVaultSessionChanged);
@@ -87,15 +88,13 @@ class ChatDependencies {
 
   late UserRepository userRepository = FirestoreUserRepository();
   late ThreadRepository threadRepository = FirestoreThreadRepository();
-  late MessageRepository messageRepository =
-      FirestoreMessageRepository();
+  late MessageRepository messageRepository = FirestoreMessageRepository();
   late MediaRepository mediaRepository = FirebaseMediaRepository();
   late ChatCryptoService cryptoService = ChatCryptoService();
 
   /// Swap point for presence: replacing these two bindings with Realtime
   /// Database implementations is the whole cost of that migration.
-  late PresenceRepository presenceRepository =
-      FirestorePresenceRepository();
+  late PresenceRepository presenceRepository = FirestorePresenceRepository();
   late TypingRepository typingRepository = FirestoreTypingRepository();
 
   /// Offline message cache. Falls back to a no-op when no local database is
@@ -132,12 +131,9 @@ class ChatDependencies {
 
   /// Serverless new-message notifications, driven by the thread listener.
   late final ChatNotificationService notificationService =
-      ChatNotificationService(
-        threadRepository: threadRepository,
-      );
+      ChatNotificationService(threadRepository: threadRepository);
 
-  late PushTokenRepository pushTokenRepository =
-      FirestorePushTokenRepository();
+  late PushTokenRepository pushTokenRepository = FirestorePushTokenRepository();
 
   /// FCM registration, fed by the `onChatMessageCreated` Cloud Function.
   /// Built on first use so tests without Firebase never touch it.
@@ -146,6 +142,7 @@ class ChatDependencies {
       _pushService ??= PushNotificationService(
         tokenRepository: pushTokenRepository,
         notificationService: notificationService,
+        messageRepository: messageRepository,
       );
 
   late final PresenceService presenceService = PresenceService(

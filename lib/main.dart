@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:firebase_crashlytics/firebase_crashlytics.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -8,6 +9,7 @@ import 'package:flutter/widgets.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 
 import 'application/services/chat_backup_scheduler.dart';
+import 'application/services/push_notification_service.dart';
 import 'firebase_options.dart';
 import 'presentation/app/vault_app.dart';
 import 'presentation/widgets/chat/animated_emoji.dart';
@@ -16,6 +18,9 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+  if (defaultTargetPlatform == TargetPlatform.android) {
+    FirebaseMessaging.onBackgroundMessage(handleChatPushInBackground);
+  }
 
   FlutterError.onError = FirebaseCrashlytics.instance.recordFlutterFatalError;
   PlatformDispatcher.instance.onError = (error, stack) {
@@ -27,9 +32,7 @@ Future<void> main() async {
   // the first frame from rendering; sign-in surfaces its own error later.
   try {
     await GoogleSignIn.instance
-        .initialize(
-          serverClientId: googleServerClientId,
-        )
+        .initialize(serverClientId: googleServerClientId)
         .timeout(const Duration(seconds: 5));
   } catch (e, stack) {
     FirebaseCrashlytics.instance.recordError(e, stack);

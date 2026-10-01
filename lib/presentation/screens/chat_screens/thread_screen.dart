@@ -177,7 +177,15 @@ class _ThreadScreenState extends State<ThreadScreen> {
     });
   }
 
-  static const _videoExtensions = {'mp4', 'mov', 'mkv', 'webm', '3gp', 'avi', 'm4v'};
+  static const _videoExtensions = {
+    'mp4',
+    'mov',
+    'mkv',
+    'webm',
+    '3gp',
+    'avi',
+    'm4v',
+  };
 
   /// Sends files shared into the app from another app, once the user has
   /// picked this conversation as the destination.
@@ -199,7 +207,9 @@ class _ThreadScreenState extends State<ThreadScreen> {
       if (!mounted) return;
       if (await video.length() > ActiveThreadCubit.maxAttachmentBytes) {
         messenger.showSnackBar(
-          const SnackBar(content: Text('Attachments must be smaller than 64 MB.')),
+          const SnackBar(
+            content: Text('Attachments must be smaller than 64 MB.'),
+          ),
         );
         continue;
       }
@@ -701,7 +711,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
               isMine: isMine,
               myUid: myUid,
               otherUid: widget.otherUser.uid,
-              otherIsOnline: state.otherIsOnline,
+              isOffline: state.isOffline,
               mediaLoader: widget.mediaLoader,
               sendStatus: state.uploadProgress[msg.messageId],
               onCancelUpload: state.uploadProgress[msg.messageId] == null
@@ -728,8 +738,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
               // centrally, inside `_promptEdit`, so both the long-press menu
               // entry and the Signal-style double-tap give the same
               // accept/reject behaviour instead of silently disappearing.
-              onEdit:
-                  isMine && !msg.isMedia && cubit.canEditMessage(msg)
+              onEdit: isMine && !msg.isMedia && cubit.canEditMessage(msg)
                   ? () => _promptEdit(msg)
                   : null,
               onCopy: msg.localDecryptedText?.trim().isNotEmpty == true
@@ -1548,7 +1557,9 @@ class _ThreadScreenState extends State<ThreadScreen> {
     // checked after compression instead, which can bring a large one under it.
     if (length > ActiveThreadCubit.maxAttachmentBytes) {
       messenger.showSnackBar(
-        const SnackBar(content: Text('Attachments must be smaller than 64 MB.')),
+        const SnackBar(
+          content: Text('Attachments must be smaller than 64 MB.'),
+        ),
       );
       return;
     }
@@ -1575,9 +1586,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
     if (picked.length > _maxPhotosPerSend) {
       picked = picked.sublist(0, _maxPhotosPerSend);
       messenger.showSnackBar(
-        SnackBar(
-          content: Text('Sending the first $_maxPhotosPerSend photos.'),
-        ),
+        SnackBar(content: Text('Sending the first $_maxPhotosPerSend photos.')),
       );
     }
 

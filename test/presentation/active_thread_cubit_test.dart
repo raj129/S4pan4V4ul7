@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter/widgets.dart';
 import 'package:image/image.dart' as img;
 import 'package:photo_vault/crypto/services/chat_crypto_service.dart';
 import 'package:photo_vault/application/services/image_compressor.dart';
@@ -73,6 +74,7 @@ class _FakeMessageRepository implements MessageRepository {
 
   /// Sends that reached the "server".
   final List<ChatMessage> sent = [];
+  final Map<String, List<String>> deliveredReceipts = {};
 
   /// When set, the next send throws — used to simulate being offline.
   Object? failNextSend;
@@ -117,6 +119,7 @@ class _FakeMessageRepository implements MessageRepository {
     required String senderId,
     required String encryptedText,
     String? messageId,
+    DateTime? sentAt,
     String? mediaRef,
     MessageType? mediaType,
     MediaMeta? mediaMeta,
@@ -133,7 +136,7 @@ class _FakeMessageRepository implements MessageRepository {
       threadId: threadId,
       senderId: senderId,
       encryptedText: encryptedText,
-      sentAt: DateTime.utc(2024, 1, 2),
+      sentAt: sentAt ?? DateTime.utc(2024, 1, 2),
       deletedFor: const [],
       mediaRef: mediaRef,
       mediaType: mediaType,
@@ -144,6 +147,17 @@ class _FakeMessageRepository implements MessageRepository {
     );
     sent.add(msg);
     return msg;
+  }
+
+  @override
+  Future<void> markDelivered({
+    required String threadId,
+    required List<String> messageIds,
+    required String uid,
+  }) async {
+    deliveredReceipts
+        .putIfAbsent(threadId, () => [])
+        .addAll(messageIds.map((id) => '$id:$uid'));
   }
 
   @override
@@ -271,6 +285,8 @@ final _other = ChatUser(
 );
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
   late _FakeMessageRepository messages;
   late _FakeThreadRepository threads;
   late _MemoryOutbox outbox;
@@ -832,6 +848,68 @@ void main() {
       },
     );
 
+    test('reconnect drains messages for threads that are not open', () async {
+      await cubit.close();
+      cubit = build(connectivityStream: connectivity.stream);
+      await open();
+      messages.emitLive(const []);
+      await Future<void>.delayed(Duration.zero);
+      await outbox.enqueue(
+        OutboxItem(
+          messageId: 'queued-elsewhere',
+          threadId: 'me_another',
+          senderId: 'me',
+          encryptedText: 'ciphertext',
+          recipientUid: 'another',
+          preview: 'queued',
+          queuedAt: DateTime.utc(2026, 1, 1),
+        ),
+      );
+
+      connectivity.add(const [ConnectivityResult.none]);
+      await Future<void>.delayed(Duration.zero);
+      connectivity.add(const [ConnectivityResult.wifi]);
+      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(outbox.items, isEmpty);
+      expect(messages.sent.single.threadId, 'me_another');
+      expect(threads.unreadBumps, ['another']);
+      expect((cubit.state as ActiveThreadLoaded).messages, isEmpty);
+    });
+
+    test('resuming the app retries queued messages', () async {
+      await open();
+      await outbox.enqueue(
+        OutboxItem(
+          messageId: 'queued-before-resume',
+          threadId: 'me_other',
+          senderId: 'me',
+          encryptedText: 'ciphertext',
+          recipientUid: 'other',
+          preview: 'queued',
+          queuedAt: DateTime.utc(2026, 1, 1),
+        ),
+      );
+
+      WidgetsBinding.instance.handleAppLifecycleStateChanged(
+        AppLifecycleState.resumed,
+      );
+      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(outbox.items, isEmpty);
+      expect(messages.sent.single.messageId, 'queued-before-resume');
+    });
+
+    test('received live messages record a delivery receipt', () async {
+      await open();
+      messages.emitLive([_msg('incoming', 5)]);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(messages.deliveredReceipts['me_other'], ['incoming:me']);
+    });
+
     test('an empty message is not queued', () async {
       await open();
       await cubit.sendText('   ');
@@ -842,27 +920,30 @@ void main() {
   });
 
   group('attachments', () {
-    test('a document is sent with its name only in the encrypted body', () async {
-      await open();
+    test(
+      'a document is sent with its name only in the encrypted body',
+      () async {
+        await open();
 
-      await cubit.sendMedia(
-        messageId: 'doc1',
-        rawBytes: [1, 2, 3],
-        type: MessageType.file,
-        filename: 'report.pdf',
-      );
+        await cubit.sendMedia(
+          messageId: 'doc1',
+          rawBytes: [1, 2, 3],
+          type: MessageType.file,
+          filename: 'report.pdf',
+        );
 
-      final sent = messages.sent.single;
-      expect(sent.mediaType, MessageType.file);
-      expect(sent.encryptedText, 'report.pdf');
-      expect(sent.mediaRef, 'chat_media/me_other/doc1/doc1.bin.enc');
-      // The storage object name must not reveal the file type.
-      expect(media.uploadedNames.single, 'doc1.bin.enc');
-      expect(sent.mediaMeta?.sizeBytes, 3);
-      expect(sent.mediaMeta?.filename, isNull);
-      expect(threads.unreadBumps, ['other']);
-      expect(outbox.items, isEmpty);
-    });
+        final sent = messages.sent.single;
+        expect(sent.mediaType, MessageType.file);
+        expect(sent.encryptedText, 'report.pdf');
+        expect(sent.mediaRef, 'chat_media/me_other/doc1/doc1.bin.enc');
+        // The storage object name must not reveal the file type.
+        expect(media.uploadedNames.single, 'doc1.bin.enc');
+        expect(sent.mediaMeta?.sizeBytes, 3);
+        expect(sent.mediaMeta?.filename, isNull);
+        expect(threads.unreadBumps, ['other']);
+        expect(outbox.items, isEmpty);
+      },
+    );
 
     test('an image records its dimensions for the placeholder', () async {
       await open();
@@ -1077,7 +1158,11 @@ class _FakeMediaRepository implements MediaRepository {
     required String filename,
     required Uint8List encryptedBytes,
     void Function(double progress)? onProgress,
+    UploadCancelToken? cancelToken,
   }) async {
+    if (cancelToken?.isCancelled == true) {
+      throw const UploadCancelledException();
+    }
     if (messageId == failOnMessageId) {
       throw Exception('upload refused');
     }
