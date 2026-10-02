@@ -14,4 +14,5 @@ class StorageKeys {
   static const String driveEncryptedBackupEnabled =
       'settings.drive_encrypted_backup_enabled';
   static const String chatImageQuality = 'settings.chat_image_quality';
+  static const String chatVideoQuality = 'settings.chat_video_quality';
 }

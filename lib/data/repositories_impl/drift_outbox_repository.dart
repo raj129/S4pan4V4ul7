@@ -26,10 +26,10 @@ class DriftOutboxRepository implements OutboxRepository {
         preview: Value(item.preview),
         mediaType: Value(item.mediaType?.name),
         mediaRef: Value(item.mediaRef),
+        hasStagedMedia: Value(item.hasStagedMedia),
+        hasStagedThumbnail: Value(item.hasStagedThumbnail),
         replyJson: Value(
-          item.replyTo == null
-              ? null
-              : jsonEncode(item.replyTo!.toFirestore()),
+          item.replyTo == null ? null : jsonEncode(item.replyTo!.toFirestore()),
         ),
         mediaMetaJson: Value(
           item.mediaMeta == null
@@ -58,6 +58,14 @@ class DriftOutboxRepository implements OutboxRepository {
   Future<void> markFailed(String messageId, String error) =>
       _db.markOutboxFailure(messageId, error);
 
+  @override
+  Future<bool> tryClaim(String messageId, DateTime now, Duration lease) =>
+      _db.claimOutboxEntry(messageId, now: now, lease: lease);
+
+  @override
+  Future<void> releaseClaim(String messageId) =>
+      _db.releaseOutboxClaim(messageId);
+
   OutboxItem _toItem(OutboxEntry row) => OutboxItem(
     messageId: row.messageId,
     threadId: row.threadId,
@@ -67,6 +75,8 @@ class DriftOutboxRepository implements OutboxRepository {
     preview: row.preview,
     mediaType: _parseMediaType(row.mediaType),
     mediaRef: row.mediaRef,
+    hasStagedMedia: row.hasStagedMedia,
+    hasStagedThumbnail: row.hasStagedThumbnail,
     mediaMeta: _parseMeta(row.mediaMetaJson),
     replyTo: _parseReply(row.replyJson),
     queuedAt: DateTime.fromMillisecondsSinceEpoch(row.queuedAtMs, isUtc: true),

@@ -28,6 +28,8 @@ void main() {
         preview: 'report.pdf',
         mediaType: MessageType.file,
         mediaRef: 'chat_media/a_b/m1/m1.bin.enc',
+        hasStagedMedia: true,
+        hasStagedThumbnail: true,
         mediaMeta: const MediaMeta(sizeBytes: 2048),
         queuedAt: DateTime.utc(2024, 1, 1),
       ),
@@ -35,6 +37,8 @@ void main() {
 
     final item = (await outbox.pendingForThread('a_b')).single;
     expect(item.mediaType, MessageType.file);
+    expect(item.hasStagedMedia, isTrue);
+    expect(item.hasStagedThumbnail, isTrue);
     expect(item.mediaMeta, const MediaMeta(sizeBytes: 2048));
     expect(item.toOptimisticMessage().mediaMeta?.readableSize, '2 KB');
   });
@@ -53,5 +57,42 @@ void main() {
     );
 
     expect((await outbox.pending()).single.mediaMeta, isNull);
+  });
+
+  test('delivery claim excludes concurrent workers and expires', () async {
+    final now = DateTime.utc(2024, 1, 1);
+    await outbox.enqueue(
+      OutboxItem(
+        messageId: 'claim-1',
+        threadId: 'a_b',
+        senderId: 'a',
+        encryptedText: 'cipher',
+        recipientUid: 'b',
+        preview: 'hello',
+        queuedAt: now,
+      ),
+    );
+
+    expect(
+      await outbox.tryClaim('claim-1', now, const Duration(minutes: 1)),
+      isTrue,
+    );
+    expect(
+      await outbox.tryClaim('claim-1', now, const Duration(minutes: 1)),
+      isFalse,
+    );
+    expect(
+      await outbox.tryClaim(
+        'claim-1',
+        now.add(const Duration(minutes: 2)),
+        const Duration(minutes: 1),
+      ),
+      isTrue,
+    );
+    await outbox.releaseClaim('claim-1');
+    expect(
+      await outbox.tryClaim('claim-1', now, const Duration(minutes: 1)),
+      isTrue,
+    );
   });
 }

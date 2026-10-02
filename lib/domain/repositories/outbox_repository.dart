@@ -18,6 +18,8 @@ class OutboxItem {
     this.mediaType,
     this.mediaRef,
     this.mediaMeta,
+    this.hasStagedMedia = false,
+    this.hasStagedThumbnail = false,
     this.replyTo,
     this.attempts = 0,
     this.lastError,
@@ -42,6 +44,10 @@ class OutboxItem {
   /// Layout hints (dimensions, size) sent alongside the attachment.
   final MediaMeta? mediaMeta;
 
+  /// Encrypted bytes are staged locally and can be uploaded or retried.
+  final bool hasStagedMedia;
+  final bool hasStagedThumbnail;
+
   final MessageReply? replyTo;
   final DateTime queuedAt;
   final int attempts;
@@ -50,23 +56,27 @@ class OutboxItem {
   OutboxItem copyWith({
     String? mediaRef,
     MediaMeta? mediaMeta,
+    bool? hasStagedMedia,
+    bool? hasStagedThumbnail,
     int? attempts,
     String? lastError,
   }) => OutboxItem(
-        messageId: messageId,
-        threadId: threadId,
-        senderId: senderId,
-        encryptedText: encryptedText,
-        recipientUid: recipientUid,
-        preview: preview,
-        queuedAt: queuedAt,
-        mediaType: mediaType,
-        mediaRef: mediaRef ?? this.mediaRef,
-        mediaMeta: mediaMeta ?? this.mediaMeta,
-        replyTo: replyTo,
-        attempts: attempts ?? this.attempts,
-        lastError: lastError ?? this.lastError,
-      );
+    messageId: messageId,
+    threadId: threadId,
+    senderId: senderId,
+    encryptedText: encryptedText,
+    recipientUid: recipientUid,
+    preview: preview,
+    queuedAt: queuedAt,
+    mediaType: mediaType,
+    mediaRef: mediaRef ?? this.mediaRef,
+    mediaMeta: mediaMeta ?? this.mediaMeta,
+    hasStagedMedia: hasStagedMedia ?? this.hasStagedMedia,
+    hasStagedThumbnail: hasStagedThumbnail ?? this.hasStagedThumbnail,
+    replyTo: replyTo,
+    attempts: attempts ?? this.attempts,
+    lastError: lastError ?? this.lastError,
+  );
 
   /// The optimistic bubble shown while the message is still queued.
   ChatMessage toOptimisticMessage() => ChatMessage(
@@ -103,6 +113,12 @@ abstract class OutboxRepository {
 
   /// Record a failed attempt so the bubble can offer a retry.
   Future<void> markFailed(String messageId, String error);
+
+  /// Claim an item so foreground and background delivery do not race.
+  Future<bool> tryClaim(String messageId, DateTime now, Duration lease);
+
+  /// Release a claim after delivery succeeds or fails.
+  Future<void> releaseClaim(String messageId);
 }
 
 /// Outbox that stores nothing.
@@ -126,4 +142,11 @@ class NoopOutboxRepository implements OutboxRepository {
 
   @override
   Future<void> markFailed(String messageId, String error) async {}
+
+  @override
+  Future<bool> tryClaim(String messageId, DateTime now, Duration lease) async =>
+      true;
+
+  @override
+  Future<void> releaseClaim(String messageId) async {}
 }

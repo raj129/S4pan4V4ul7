@@ -1,5 +1,7 @@
 import '../../application/services/chat_auth_service.dart';
+import '../../application/services/chat_attachment_staging.dart';
 import '../../application/services/chat_backup_service.dart';
+import '../../application/services/chat_outbox_delivery.dart';
 import '../../application/services/chat_identity_service.dart';
 import '../../application/services/chat_notification_service.dart';
 import '../../application/services/contact_discovery_service.dart';
@@ -116,6 +118,21 @@ class ChatDependencies {
     final VaultDatabase db => DriftOutboxRepository(db),
     _ => const NoopOutboxRepository(),
   };
+
+  late final AttachmentStagingStore attachmentStagingStore =
+      switch (_database) {
+        final VaultDatabase _ => FileAttachmentStagingStore(),
+        _ => MemoryAttachmentStagingStore(),
+      };
+
+  late final ChatOutboxDeliveryService outboxDeliveryService =
+      ChatOutboxDeliveryService(
+        outbox: outbox,
+        mediaRepository: mediaRepository,
+        messageRepository: messageRepository,
+        threadRepository: threadRepository,
+        stagingStore: attachmentStagingStore,
+      );
 
   /// Shared decrypt-and-cache pipeline for attachments.
   ///

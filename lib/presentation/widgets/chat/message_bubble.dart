@@ -250,6 +250,20 @@ class MessageBubble extends StatelessWidget {
                 ),
               ),
             ),
+            if (isMine &&
+                message.status == MessageStatus.failed &&
+                onRetry != null)
+              TextButton.icon(
+                onPressed: onRetry,
+                icon: const Icon(Icons.refresh_rounded, size: 16),
+                label: Text(message.isMedia ? 'Retry attachment' : 'Retry'),
+                style: TextButton.styleFrom(
+                  visualDensity: VisualDensity.compact,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: AppSpacing.sm,
+                  ),
+                ),
+              ),
             if (grouped.isNotEmpty)
               _ReactionRow(grouped: grouped, myUid: myUid, onTap: onReact),
           ],

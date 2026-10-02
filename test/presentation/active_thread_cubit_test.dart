@@ -1,10 +1,14 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter/widgets.dart';
 import 'package:image/image.dart' as img;
+import 'package:path/path.dart' as p;
+import 'package:photo_vault/application/services/chat_attachment_staging.dart';
+import 'package:photo_vault/application/services/video_compressor.dart';
 import 'package:photo_vault/crypto/services/chat_crypto_service.dart';
 import 'package:photo_vault/application/services/image_compressor.dart';
 import 'package:photo_vault/domain/entities/chat_message.dart';
@@ -22,6 +26,7 @@ import 'package:photo_vault/domain/repositories/thread_repository.dart';
 import 'package:photo_vault/domain/repositories/typing_repository.dart';
 import 'package:photo_vault/domain/repositories/user_repository.dart';
 import 'package:photo_vault/presentation/state/chat/active_thread_cubit.dart';
+import 'package:photo_vault/presentation/state/chat/active_upload_registry.dart';
 import 'package:photo_vault/presentation/state/chat/media_send_status.dart';
 
 import '../helpers/memory_chat_search_index.dart';
@@ -165,6 +170,41 @@ class _FakeMessageRepository implements MessageRepository {
       throw UnimplementedError('${invocation.memberName} not needed');
 }
 
+class _FailingVideoCompressor extends VideoCompressor {
+  @override
+  Future<PreparedVideo> prepare({
+    required String path,
+    required ChatVideoQuality quality,
+    void Function(double progress)? onProgress,
+    int maxOutputBytes = 64 * 1024 * 1024 - 1024,
+  }) async {
+    throw StateError('transcode failed');
+  }
+}
+
+/// A compressor that stays "preparing" until [release] is called.
+class _HeldVideoCompressor extends VideoCompressor {
+  final Completer<void> _started = Completer<void>();
+  final Completer<void> _release = Completer<void>();
+
+  Future<void> get started => _started.future;
+
+  void release() => _release.complete();
+
+  @override
+  Future<PreparedVideo> prepare({
+    required String path,
+    required ChatVideoQuality quality,
+    void Function(double progress)? onProgress,
+    int maxOutputBytes = 64 * 1024 * 1024 - 1024,
+  }) async {
+    onProgress?.call(0.5);
+    _started.complete();
+    await _release.future;
+    return PreparedVideo(bytes: Uint8List.fromList([1, 2, 3]));
+  }
+}
+
 class _FakeThreadRepository implements ThreadRepository {
   final List<String> previews = [];
   final List<String> unreadBumps = [];
@@ -252,6 +292,13 @@ class _MemoryOutbox implements OutboxRepository {
       );
     }
   }
+
+  @override
+  Future<bool> tryClaim(String messageId, DateTime now, Duration lease) async =>
+      true;
+
+  @override
+  Future<void> releaseClaim(String messageId) async {}
 }
 
 // ---------------------------------------------------------------------------
@@ -295,12 +342,15 @@ void main() {
   late StreamController<List<ConnectivityResult>> connectivity;
   late Map<String, Uint8List> seeded;
   late List<MediaSendStatus> progressSeen;
+  late ActiveUploadRegistry uploads;
 
   ActiveThreadCubit build({
     Stream<List<ConnectivityResult>>? connectivityStream,
     MessageCacheRepository messageCache = const NoopMessageCacheRepository(),
     ChatSearchIndexRepository searchIndex =
         const NoopChatSearchIndexRepository(),
+    AttachmentStagingStore? attachmentStagingStore,
+    VideoCompressor videoCompressor = const VideoCompressor(),
   }) => ActiveThreadCubit(
     messageRepository: messages,
     threadRepository: threads,
@@ -313,8 +363,11 @@ void main() {
     outbox: outbox,
     cryptoService: _PassThroughCrypto(),
     myUid: 'me',
+    attachmentStagingStore: attachmentStagingStore,
+    videoCompressor: videoCompressor,
     connectivityStream: connectivityStream,
     onMediaReady: (path, bytes) => seeded[path] = bytes,
+    uploads: uploads,
   );
 
   setUp(() {
@@ -322,6 +375,7 @@ void main() {
     threads = _FakeThreadRepository();
     outbox = _MemoryOutbox();
     media = _FakeMediaRepository();
+    uploads = ActiveUploadRegistry();
     seeded = {};
     progressSeen = [];
     connectivity = StreamController<List<ConnectivityResult>>.broadcast();
@@ -921,6 +975,96 @@ void main() {
 
   group('attachments', () {
     test(
+      'failed attachment upload can retry from encrypted staged bytes',
+      () async {
+        await cubit.close();
+        final staging = MemoryAttachmentStagingStore();
+        cubit = build(attachmentStagingStore: staging);
+        await open();
+        media.failOnMessageId = 'retry-file';
+
+        await cubit.sendMedia(
+          messageId: 'retry-file',
+          rawBytes: [1, 2, 3],
+          type: MessageType.file,
+          filename: 'retry.pdf',
+        );
+
+        expect(messages.sent, isEmpty);
+        expect(outbox.items['retry-file']?.hasStagedMedia, isTrue);
+        expect(await staging.readMedia('retry-file'), isNotNull);
+        expect(
+          (cubit.state as ActiveThreadLoaded).messages.single.status,
+          MessageStatus.failed,
+        );
+
+        await cubit.retryMessage('retry-file');
+
+        expect(outbox.items, isEmpty);
+        expect(
+          messages.sent.single.mediaRef,
+          'chat_media/me_other/retry-file/retry-file.bin.enc',
+        );
+        expect(await staging.readMedia('retry-file'), isNull);
+      },
+    );
+
+    test(
+      'an unstaged legacy attachment is never sent without its media',
+      () async {
+        await open();
+        await outbox.enqueue(
+          OutboxItem(
+            messageId: 'legacy-file',
+            threadId: 'me_other',
+            senderId: 'me',
+            encryptedText: 'file',
+            recipientUid: 'other',
+            preview: 'old.pdf',
+            mediaType: MessageType.file,
+            queuedAt: DateTime.utc(2024, 1, 1),
+          ),
+        );
+
+        await cubit.drainOutbox();
+
+        expect(messages.sent, isEmpty);
+        expect(outbox.items['legacy-file']?.attempts, 1);
+        final pending = (cubit.state as ActiveThreadLoaded).messages.single;
+        expect(pending.status, MessageStatus.failed);
+        expect(pending.mediaRef, isNull);
+      },
+    );
+
+    test(
+      'a preparation failure removes a non-retryable attachment bubble',
+      () async {
+        await cubit.close();
+        cubit = build(videoCompressor: _FailingVideoCompressor());
+        await open();
+        final directory = await Directory.systemTemp.createTemp(
+          'video-send-test-',
+        );
+        try {
+          final source = File(p.join(directory.path, 'source.mp4'));
+          await source.writeAsBytes([1, 2, 3]);
+
+          await cubit.sendMedia(
+            messageId: 'video-prepare-fail',
+            type: MessageType.video,
+            videoPath: source.path,
+          );
+
+          expect(outbox.items, isEmpty);
+          expect(messages.sent, isEmpty);
+          expect((cubit.state as ActiveThreadLoaded).messages, isEmpty);
+        } finally {
+          await directory.delete(recursive: true);
+        }
+      },
+    );
+
+    test(
       'a document is sent with its name only in the encrypted body',
       () async {
         await open();
@@ -1135,6 +1279,149 @@ void main() {
       expect(messages.sent, isEmpty);
     });
   });
+
+  group('upload progress across navigation', () {
+    Future<void> startHeldFileSend(String id) {
+      media.holdUpload = Completer<void>();
+      return cubit.sendMedia(
+        messageId: id,
+        rawBytes: [1, 2, 3],
+        type: MessageType.file,
+        filename: 'a.pdf',
+      );
+    }
+
+    test('progress survives leaving and re-opening the thread', () async {
+      await open();
+      final send = startHeldFileSend('reopen');
+      await media.uploadStarted;
+      expect(
+        (cubit.state as ActiveThreadLoaded).uploadProgress['reopen']?.phase,
+        MediaSendPhase.uploading,
+      );
+
+      await open();
+
+      final state = cubit.state as ActiveThreadLoaded;
+      expect(state.uploadProgress['reopen']?.phase, MediaSendPhase.uploading);
+      expect(state.messages.single.status, MessageStatus.sending);
+
+      media.holdUpload!.complete();
+      await send;
+      expect(messages.sent.single.messageId, 'reopen');
+      expect((cubit.state as ActiveThreadLoaded).uploadProgress, isEmpty);
+    });
+
+    test(
+      'a send outlives its cubit and a new cubit shows its progress',
+      () async {
+        await open();
+        final send = startHeldFileSend('closed');
+        await media.uploadStarted;
+        final reopened = build();
+        addTearDown(reopened.close);
+
+        await cubit.close();
+        await reopened.openThread(thread: _thread, otherUser: _other);
+
+        expect(
+          (reopened.state as ActiveThreadLoaded).uploadProgress['closed'],
+          isNotNull,
+        );
+
+        // Publishing after the old cubit closed must not throw.
+        media.holdUpload!.complete();
+        await send;
+        expect(messages.sent.single.messageId, 'closed');
+        expect((reopened.state as ActiveThreadLoaded).uploadProgress, isEmpty);
+      },
+    );
+
+    test('a new cubit can cancel a send started by another', () async {
+      await open();
+      final send = startHeldFileSend('cancel-me');
+      await media.uploadStarted;
+      final second = build();
+      addTearDown(second.close);
+      await second.openThread(thread: _thread, otherUser: _other);
+
+      await second.cancelUpload('cancel-me');
+      await send;
+
+      expect(messages.sent, isEmpty);
+      expect(outbox.items, isEmpty);
+      expect(uploads.statuses, isEmpty);
+    });
+
+    test('opening the thread mid-preparation leaves the send alone', () async {
+      final compressor = _HeldVideoCompressor();
+      await cubit.close();
+      cubit = build(videoCompressor: compressor);
+      await open();
+      final directory = await Directory.systemTemp.createTemp('video-nav-');
+      try {
+        final source = File(p.join(directory.path, 'source.mp4'));
+        await source.writeAsBytes([1, 2, 3]);
+        final send = cubit.sendMedia(
+          messageId: 'preparing',
+          type: MessageType.video,
+          videoPath: source.path,
+        );
+        await compressor.started;
+
+        // Re-entering the thread, resuming and reconnecting all drain the
+        // outbox while the attachment is still being prepared.
+        await open();
+        await cubit.drainOutbox();
+
+        final state = cubit.state as ActiveThreadLoaded;
+        expect(state.uploadProgress['preparing']?.phase, isNotNull);
+        expect(state.actionError, isNull);
+        expect(outbox.items['preparing']?.attempts, 0);
+        expect(messages.sent, isEmpty);
+
+        compressor.release();
+        await send;
+        expect(messages.sent.single.messageId, 'preparing');
+        expect(outbox.items, isEmpty);
+      } finally {
+        await directory.delete(recursive: true);
+      }
+    });
+
+    test('an upload retried from the outbox can be cancelled', () async {
+      final staging = MemoryAttachmentStagingStore();
+      await staging.writeMedia('queued', Uint8List.fromList([9, 9, 9]));
+      await outbox.enqueue(
+        OutboxItem(
+          messageId: 'queued',
+          threadId: 'me_other',
+          senderId: 'me',
+          encryptedText: 'file',
+          recipientUid: 'other',
+          preview: 'queued.pdf',
+          mediaType: MessageType.file,
+          hasStagedMedia: true,
+          queuedAt: DateTime.utc(2024, 1, 1),
+        ),
+      );
+      media.holdUpload = Completer<void>();
+      await cubit.close();
+      // Building the cubit drains the outbox, which starts the upload.
+      cubit = build(attachmentStagingStore: staging);
+      await media.uploadStarted;
+      await open();
+      expect(uploads.statusOf('queued')?.phase, MediaSendPhase.uploading);
+
+      await cubit.cancelUpload('queued');
+      await pumpEventQueue();
+
+      expect(messages.sent, isEmpty);
+      expect(outbox.items, isEmpty);
+      expect(uploads.statuses, isEmpty);
+      expect(uploads.isActive('queued'), isFalse);
+    });
+  });
 }
 
 class _FakeUserRepository implements UserRepository {
@@ -1151,6 +1438,14 @@ class _FakeMediaRepository implements MediaRepository {
   /// in a batch does not stop the others.
   String? failOnMessageId;
 
+  /// While set, uploads report half progress and then wait on it, so a test
+  /// can act while a send is mid-upload. Cancelling aborts the wait.
+  Completer<void>? holdUpload;
+  final Completer<void> _uploadStarted = Completer<void>();
+
+  /// Completes once an upload is waiting on [holdUpload].
+  Future<void> get uploadStarted => _uploadStarted.future;
+
   @override
   Future<String> uploadEncryptedMedia({
     required String threadId,
@@ -1164,7 +1459,19 @@ class _FakeMediaRepository implements MediaRepository {
       throw const UploadCancelledException();
     }
     if (messageId == failOnMessageId) {
+      failOnMessageId = null;
       throw Exception('upload refused');
+    }
+    final hold = holdUpload;
+    if (hold != null) {
+      onProgress?.call(0.5);
+      cancelToken?.onCancel = () {
+        if (!hold.isCompleted) {
+          hold.completeError(const UploadCancelledException());
+        }
+      };
+      if (!_uploadStarted.isCompleted) _uploadStarted.complete();
+      await hold.future;
     }
     uploadedNames.add(filename);
     onProgress?.call(0.5);

@@ -60,4 +60,14 @@ class InMemorySettingsRepository implements SettingsRepository {
   Future<void> setChatImageQuality(String quality) async {
     _chatImageQuality = quality;
   }
+
+  String? _chatVideoQuality;
+
+  @override
+  Future<String?> getChatVideoQuality() async => _chatVideoQuality;
+
+  @override
+  Future<void> setChatVideoQuality(String quality) async {
+    _chatVideoQuality = quality;
+  }
 }

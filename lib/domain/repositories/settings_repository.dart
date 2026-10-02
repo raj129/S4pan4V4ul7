@@ -15,4 +15,7 @@ abstract class SettingsRepository {
   /// Last attachment quality the user picked, preselected next time.
   Future<String?> getChatImageQuality();
   Future<void> setChatImageQuality(String quality);
+
+  Future<String?> getChatVideoQuality();
+  Future<void> setChatVideoQuality(String quality);
 }

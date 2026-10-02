@@ -279,6 +279,17 @@ class OutboxMessages extends Table {
   /// Storage path if the upload already succeeded, otherwise null.
   TextColumn get mediaRef => text().nullable()();
 
+  /// Whether the encrypted payload is available in the local staging directory.
+  BoolColumn get hasStagedMedia =>
+      boolean().withDefault(const Constant(false))();
+
+  /// Whether the encrypted preview is available in the local staging directory.
+  BoolColumn get hasStagedThumbnail =>
+      boolean().withDefault(const Constant(false))();
+
+  /// Expiring lease prevents foreground and WorkManager from delivering twice.
+  IntColumn get claimUntilMs => integer().nullable()();
+
   /// `MessageReply.toFirestore()` JSON, if this is a reply.
   TextColumn get replyJson => text().nullable()();
 
@@ -324,7 +335,7 @@ class VaultDatabase extends _$VaultDatabase {
   VaultDatabase.forTesting(super.executor);
 
   @override
-  int get schemaVersion => 5;
+  int get schemaVersion => 6;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -351,6 +362,11 @@ class VaultDatabase extends _$VaultDatabase {
       // with the column already, so only add it to pre-existing tables.
       if (from >= 3 && from < 5) {
         await m.addColumn(outboxMessages, outboxMessages.mediaMetaJson);
+      }
+      if (from >= 3 && from < 6) {
+        await m.addColumn(outboxMessages, outboxMessages.hasStagedMedia);
+        await m.addColumn(outboxMessages, outboxMessages.hasStagedThumbnail);
+        await m.addColumn(outboxMessages, outboxMessages.claimUntilMs);
       }
     },
   );
@@ -408,10 +424,8 @@ class VaultDatabase extends _$VaultDatabase {
     final query = select(photos)
       ..where((p) => p.isTrashed.equals(0))
       ..orderBy([
-        (p) => OrderingTerm(
-          expression: p.importedTimeMs,
-          mode: OrderingMode.desc,
-        ),
+        (p) =>
+            OrderingTerm(expression: p.importedTimeMs, mode: OrderingMode.desc),
       ]);
     if (limit != null) {
       query.limit(limit, offset: offset);
@@ -766,7 +780,10 @@ class VaultDatabase extends _$VaultDatabase {
 
   /// Number of cached messages in a thread, optionally only those strictly
   /// older than [beforeSentAtMs].
-  Future<int> countCachedMessages(String threadId, {int? beforeSentAtMs}) async {
+  Future<int> countCachedMessages(
+    String threadId, {
+    int? beforeSentAtMs,
+  }) async {
     final count = chatMessages.messageId.count();
     final query = selectOnly(chatMessages)
       ..addColumns([count])
@@ -865,10 +882,9 @@ class VaultDatabase extends _$VaultDatabase {
       'DELETE FROM chat_search_tokens WHERE thread_id = ?',
       [threadId],
     );
-    await customStatement(
-      'DELETE FROM chat_search_state WHERE thread_id = ?',
-      [threadId],
-    );
+    await customStatement('DELETE FROM chat_search_state WHERE thread_id = ?', [
+      threadId,
+    ]);
   }
 
   /// Ids and send times of messages containing *every* token, newest first.
@@ -947,10 +963,8 @@ class VaultDatabase extends _$VaultDatabase {
     return (select(chatMessages)
           ..where((m) => m.threadId.equals(threadId))
           ..orderBy([
-            (m) => OrderingTerm(
-              expression: m.sentAtMs,
-              mode: OrderingMode.desc,
-            ),
+            (m) =>
+                OrderingTerm(expression: m.sentAtMs, mode: OrderingMode.desc),
           ]))
         .get();
   }
@@ -975,10 +989,9 @@ class VaultDatabase extends _$VaultDatabase {
   }
 
   Future<List<OutboxEntry>> getOutboxEntries() {
-    return (select(outboxMessages)..orderBy([
-          (o) => OrderingTerm(expression: o.queuedAtMs),
-        ]))
-        .get();
+    return (select(
+      outboxMessages,
+    )..orderBy([(o) => OrderingTerm(expression: o.queuedAtMs)])).get();
   }
 
   Future<List<OutboxEntry>> getOutboxForThread(String threadId) {
@@ -1000,14 +1013,41 @@ class VaultDatabase extends _$VaultDatabase {
       outboxMessages,
     )..where((o) => o.messageId.equals(messageId))).getSingleOrNull();
     if (row == null) return;
-    await (update(outboxMessages)
-          ..where((o) => o.messageId.equals(messageId)))
-        .write(
-          OutboxMessagesCompanion(
-            attempts: Value(row.attempts + 1),
-            lastError: Value(error),
-          ),
-        );
+    await (update(
+      outboxMessages,
+    )..where((o) => o.messageId.equals(messageId))).write(
+      OutboxMessagesCompanion(
+        attempts: Value(row.attempts + 1),
+        lastError: Value(error),
+      ),
+    );
+  }
+
+  Future<bool> claimOutboxEntry(
+    String messageId, {
+    required DateTime now,
+    required Duration lease,
+  }) async {
+    final nowMs = now.toUtc().millisecondsSinceEpoch;
+    final updated = await customUpdate(
+      'UPDATE outbox_messages SET claim_until_ms = ? '
+      'WHERE message_id = ? AND (claim_until_ms IS NULL OR claim_until_ms <= ?)',
+      variables: [
+        Variable<int>(nowMs + lease.inMilliseconds),
+        Variable<String>(messageId),
+        Variable<int>(nowMs),
+      ],
+      updates: {outboxMessages},
+    );
+    return updated == 1;
+  }
+
+  Future<void> releaseOutboxClaim(String messageId) async {
+    await customUpdate(
+      'UPDATE outbox_messages SET claim_until_ms = NULL WHERE message_id = ?',
+      variables: [Variable<String>(messageId)],
+      updates: {outboxMessages},
+    );
   }
 
   /// Generic key/value settings row, reused for small per-device flags (e.g.

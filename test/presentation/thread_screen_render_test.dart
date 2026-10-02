@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:typed_data';
 
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -21,6 +22,8 @@ import 'package:photo_vault/domain/repositories/typing_repository.dart';
 import 'package:photo_vault/domain/repositories/user_repository.dart';
 import 'package:photo_vault/presentation/screens/chat_screens/thread_screen.dart';
 import 'package:photo_vault/presentation/state/chat/active_thread_cubit.dart';
+import 'package:photo_vault/presentation/state/chat/active_upload_registry.dart';
+import 'package:photo_vault/presentation/state/chat/media_send_status.dart';
 import 'package:photo_vault/presentation/widgets/chat/chat_bubble_shape.dart';
 import 'package:photo_vault/presentation/widgets/chat/chat_media_preview.dart';
 import 'package:photo_vault/presentation/widgets/chat/message_bubble.dart';
@@ -144,11 +147,15 @@ class _Presence implements PresenceRepository {
 class _Outbox implements OutboxRepository {
   final Map<String, OutboxItem> items = {};
 
+  /// Keeps drainOutbox from delivering, so a queued item stays sending.
+  bool hiddenFromDrain = false;
+
   @override
   Future<void> enqueue(OutboxItem item) async => items[item.messageId] = item;
 
   @override
-  Future<List<OutboxItem>> pending() async => items.values.toList();
+  Future<List<OutboxItem>> pending() async =>
+      hiddenFromDrain ? const [] : items.values.toList();
 
   @override
   Future<List<OutboxItem>> pendingForThread(String threadId) async =>
@@ -159,6 +166,13 @@ class _Outbox implements OutboxRepository {
 
   @override
   Future<void> markFailed(String messageId, String error) async {}
+
+  @override
+  Future<bool> tryClaim(String messageId, DateTime now, Duration lease) async =>
+      true;
+
+  @override
+  Future<void> releaseClaim(String messageId) async {}
 }
 
 class _Unused implements UserRepository, MediaRepository, ChatVaultBridge {
@@ -277,5 +291,175 @@ void main() {
     await cubit.close();
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pump(const Duration(seconds: 2));
+  });
+
+  group('outgoing attachment progress', () {
+    Future<ActiveThreadCubit> pumpPendingDocument(
+      WidgetTester tester, {
+      required ActiveUploadRegistry uploads,
+      StreamController<List<ConnectivityResult>>? connectivity,
+    }) async {
+      tester.view.physicalSize = const Size(1080, 2400);
+      tester.view.devicePixelRatio = 3.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      final unused = _Unused();
+      final outbox = _Outbox()..hiddenFromDrain = true;
+      await outbox.enqueue(
+        OutboxItem(
+          messageId: 'doc1',
+          threadId: 't',
+          senderId: 'me',
+          encryptedText: 'report.pdf',
+          recipientUid: 'other',
+          preview: 'report.pdf',
+          mediaType: MessageType.file,
+          hasStagedMedia: true,
+          queuedAt: DateTime.now().toUtc().subtract(const Duration(minutes: 1)),
+        ),
+      );
+      final cubit = ActiveThreadCubit(
+        messageRepository: _Messages(),
+        threadRepository: _Threads(),
+        userRepository: unused,
+        typingRepository: _Typing(),
+        presenceRepository: _Presence(),
+        mediaRepository: unused,
+        messageCache: const NoopMessageCacheRepository(),
+        outbox: outbox,
+        cryptoService: _Crypto(),
+        myUid: 'me',
+        connectivityStream: connectivity?.stream,
+        uploads: uploads,
+      );
+
+      final thread = ChatThread(
+        threadId: 't',
+        participantIds: const ['me', 'other'],
+        lastMessage: '',
+        createdAt: DateTime.utc(2024),
+        lastMessageAt: DateTime.utc(2024),
+        unreadCounts: const {},
+      );
+      final other = ChatUser(
+        uid: 'other',
+        email: 'other@example.com',
+        displayName: 'Other',
+        publicKey: '',
+        createdAt: DateTime.utc(2024),
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          home: BlocProvider.value(
+            value: cubit,
+            child: ThreadScreen(
+              thread: thread,
+              otherUser: other,
+              mediaLoader: ChatMediaLoader(
+                mediaRepository: unused,
+                cryptoService: _Crypto(),
+              ),
+              vaultBridge: unused,
+              onLock: () {},
+            ),
+          ),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 50));
+      await tester.pump(const Duration(milliseconds: 50));
+      return cubit;
+    }
+
+    // Closes the cubit and unmounts the screen inside the test body, so the
+    // thread's open timeout cannot outlive it.
+    Future<void> finish(WidgetTester tester, ActiveThreadCubit cubit) async {
+      await cubit.close();
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump(const Duration(seconds: 2));
+    }
+
+    testWidgets('re-entering the thread shows the running upload progress', (
+      tester,
+    ) async {
+      final uploads = ActiveUploadRegistry()
+        ..register('doc1')
+        ..setStatus(
+          'doc1',
+          const MediaSendStatus(
+            phase: MediaSendPhase.encrypting,
+            progress: 0.4,
+          ),
+        );
+      final cubit = await pumpPendingDocument(tester, uploads: uploads);
+
+      expect(find.text('Encrypting…'), findsOneWidget);
+      expect(find.byType(LinearProgressIndicator), findsOneWidget);
+      expect(find.byTooltip('Cancel'), findsOneWidget);
+
+      uploads.setStatus(
+        'doc1',
+        const MediaSendStatus(phase: MediaSendPhase.uploading, progress: 0.7),
+      );
+      await tester.pump(const Duration(milliseconds: 50));
+      await tester.pump(const Duration(milliseconds: 50));
+
+      expect(find.text('Uploading…'), findsOneWidget);
+      expect(
+        tester
+            .widget<LinearProgressIndicator>(
+              find.byType(LinearProgressIndicator),
+            )
+            .value,
+        0.7,
+      );
+      await finish(tester, cubit);
+    });
+
+    testWidgets('an unreported pending attachment shows an indeterminate bar', (
+      tester,
+    ) async {
+      final cubit = await pumpPendingDocument(
+        tester,
+        uploads: ActiveUploadRegistry(),
+      );
+
+      expect(find.text('Uploading…'), findsOneWidget);
+      expect(
+        tester
+            .widget<LinearProgressIndicator>(
+              find.byType(LinearProgressIndicator),
+            )
+            .value,
+        isNull,
+      );
+      // Nobody in this process owns the transfer, so there is nothing to cancel.
+      expect(find.byTooltip('Cancel'), findsNothing);
+      await finish(tester, cubit);
+    });
+
+    testWidgets('no progress is implied while the device is offline', (
+      tester,
+    ) async {
+      final connectivity =
+          StreamController<List<ConnectivityResult>>.broadcast();
+      addTearDown(connectivity.close);
+      // The test font is far wider than the real one; shrink it so the
+      // status row fits the narrow document bubble.
+      tester.platformDispatcher.textScaleFactorTestValue = 0.5;
+      addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+      final cubit = await pumpPendingDocument(
+        tester,
+        uploads: ActiveUploadRegistry(),
+        connectivity: connectivity,
+      );
+      connectivity.add(const [ConnectivityResult.none]);
+      await tester.pump(const Duration(milliseconds: 50));
+      await tester.pump(const Duration(milliseconds: 50));
+
+      expect(find.byType(LinearProgressIndicator), findsNothing);
+      expect(find.text('Waiting for connection'), findsOneWidget);
+      await finish(tester, cubit);
+    });
   });
 }

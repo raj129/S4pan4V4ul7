@@ -10,6 +10,7 @@ import 'package:google_sign_in/google_sign_in.dart';
 
 import 'application/services/chat_backup_scheduler.dart';
 import 'application/services/push_notification_service.dart';
+import 'application/services/video_compressor.dart';
 import 'firebase_options.dart';
 import 'presentation/app/vault_app.dart';
 import 'presentation/widgets/chat/animated_emoji.dart';
@@ -45,6 +46,15 @@ Future<void> main() async {
   unawaited(AnimatedEmojiRegistry.ensureLoaded());
 
   runApp(const VaultApp());
+
+  unawaited(
+    VideoCompressor.cleanStaleOutputs().then(
+      (_) {},
+      onError: (Object e, StackTrace s) {
+        FirebaseCrashlytics.instance.recordError(e, s);
+      },
+    ),
+  );
 
   // Nightly (~2 AM) chat backup, even while the app is closed.
   unawaited(

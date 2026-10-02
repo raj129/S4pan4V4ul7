@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:typed_data';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:equatable/equatable.dart';
@@ -14,7 +15,11 @@ import '../../../domain/entities/message_metadata.dart';
 import '../../../domain/entities/message_reply.dart';
 import '../../../domain/entities/user_presence.dart';
 import '../../../application/services/chat_search_indexer.dart';
+import '../../../application/services/chat_attachment_staging.dart';
+import '../../../application/services/chat_backup_scheduler.dart';
 import '../../../application/services/image_compressor.dart';
+import '../../../application/services/chat_outbox_delivery.dart';
+import '../../../application/services/video_compressor.dart';
 import '../../../domain/repositories/chat_search_index_repository.dart';
 import '../../../domain/repositories/message_cache_repository.dart';
 import '../../../domain/repositories/message_repository.dart';
@@ -24,6 +29,7 @@ import '../../../domain/repositories/thread_repository.dart';
 import '../../../domain/repositories/typing_repository.dart';
 import '../../../domain/repositories/user_repository.dart';
 import '../../../crypto/services/chat_crypto_service.dart';
+import 'active_upload_registry.dart';
 import 'media_send_status.dart';
 
 // ── States ──────────────────────────────────────────────────────────────────
@@ -247,16 +253,23 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
     required this.cryptoService,
     required this.myUid,
     this.imageCompressor = const ImageCompressor(),
+    this.videoCompressor = const VideoCompressor(),
+    this.attachmentStagingStore,
+    this.outboxDeliveryService,
+    this.scheduleBackgroundUpload = scheduleChatAttachmentUpload,
     this.onMediaReady,
     ChatSearchIndexRepository searchIndex =
         const NoopChatSearchIndexRepository(),
     Stream<List<ConnectivityResult>>? connectivityStream,
+    ActiveUploadRegistry? uploads,
   }) : _indexer = ChatSearchIndexer(
          index: searchIndex,
          cryptoService: cryptoService,
        ),
+       _uploads = uploads ?? ActiveUploadRegistry.shared,
        super(const ActiveThreadLoading()) {
     WidgetsBinding.instance.addObserver(this);
+    _uploadsSub = _uploads.changes.listen(_onUploadsChanged);
     // Auto-drain the outbox the moment connectivity is restored, instead of
     // only retrying the next time the user happens to reopen the thread —
     // this is what makes queued offline messages "send automatically once
@@ -289,6 +302,25 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
 
   /// Downscales outgoing photos and builds their previews.
   final ImageCompressor imageCompressor;
+
+  /// Transcodes outgoing videos without loading the source into memory first.
+  final VideoCompressor videoCompressor;
+
+  final AttachmentStagingStore? attachmentStagingStore;
+  final ChatOutboxDeliveryService? outboxDeliveryService;
+  final Future<void> Function(String messageId) scheduleBackgroundUpload;
+
+  late final AttachmentStagingStore _stagingStore =
+      attachmentStagingStore ?? MemoryAttachmentStagingStore();
+  late final ChatOutboxDeliveryService _outboxDelivery =
+      outboxDeliveryService ??
+      ChatOutboxDeliveryService(
+        outbox: outbox,
+        mediaRepository: mediaRepository,
+        messageRepository: messageRepository,
+        threadRepository: threadRepository,
+        stagingStore: _stagingStore,
+      );
 
   /// Publishes locally prepared bytes under their storage path, so the
   /// sender's own attachment renders without downloading it back.
@@ -353,14 +385,18 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
   static const _pageSize = 30;
 
   static const _uuid = Uuid();
-  static final Set<String> _inFlightMessageIds = {};
+
+  /// Progress, cancel tokens and delivery ownership of attachments being sent.
+  /// Lives outside this cubit so a send outlasts leaving and re-opening the
+  /// thread.
+  final ActiveUploadRegistry _uploads;
+  StreamSubscription<Map<String, MediaSendStatus>>? _uploadsSub;
 
   /// Locally-queued messages not yet acknowledged by Firestore, newest first.
   ///
   /// Kept separate from [_buffer] so that when the real message arrives on the
   /// stream the optimistic copy disappears without a merge conflict.
   final Map<String, ChatMessage> _pending = {};
-  final Map<String, UploadCancelToken> _uploadTokens = {};
 
   /// Local-only "clear chat" watermark for the open thread (null if the chat
   /// has never been cleared on this device). Messages sent at or before this
@@ -478,7 +514,7 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
         preview = '🔒 Encrypted message';
       }
       var message = item.toOptimisticMessage().withDecryptedText(preview);
-      if (_inFlightMessageIds.contains(item.messageId)) {
+      if (_uploads.isActive(item.messageId)) {
         message = message.copyWith(status: MessageStatus.sending);
       }
       _pending[item.messageId] = message;
@@ -659,34 +695,35 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
     await _deliver(item, decryptedPreview: decryptedPreview);
   }
 
-  Future<void> _deliver(OutboxItem item, {String? decryptedPreview}) async {
-    if (!_inFlightMessageIds.add(item.messageId)) return;
+  Future<ChatMessage?> _deliver(
+    OutboxItem item, {
+    String? decryptedPreview,
+  }) async {
+    if (!_uploads.tryBeginDelivery(item.messageId)) return null;
+    // A send started by sendMedia already owns a token; one retried from the
+    // outbox gets its own so Cancel reaches the transfer either way.
+    final ownsToken = _uploads.tokenOf(item.messageId) == null;
+    final token = _uploads.register(item.messageId);
     if (item.threadId == _currentThreadId &&
         (item.attempts > 0 || !_pending.containsKey(item.messageId))) {
       _showPending(item, decryptedPreview, status: MessageStatus.sending);
     }
     try {
-      final msg = await messageRepository.sendMessage(
-        threadId: item.threadId,
-        senderId: item.senderId,
-        encryptedText: item.encryptedText,
-        messageId: item.messageId,
-        sentAt: item.queuedAt,
-        mediaRef: item.mediaRef,
-        mediaType: item.mediaType,
-        mediaMeta: item.mediaMeta,
-        replyTo: item.replyTo,
+      if (item.mediaType != null && _uploads.statusOf(item.messageId) == null) {
+        _uploads.setStatus(item.messageId, const MediaSendStatus.preparing());
+      }
+      final delivery = await _outboxDelivery.deliver(
+        item: item,
+        uid: myUid,
+        cancelToken: token,
+        onUploadProgress: (progress) => _uploads.advance(
+          item.messageId,
+          MediaSendPhase.uploading,
+          progress,
+        ),
       );
-      await outbox.remove(item.messageId);
-      await threadRepository.updateLastMessage(
-        threadId: item.threadId,
-        preview: item.preview,
-        sentAt: msg.sentAt,
-      );
-      await threadRepository.incrementUnread(
-        threadId: item.threadId,
-        recipientUid: item.recipientUid,
-      );
+      if (delivery == null) return null;
+      final msg = delivery.message;
       // Keep a sent local copy until the matching Firestore snapshot arrives.
       // Removing it here could make a successful message disappear briefly
       // while the listener is still catching up.
@@ -696,17 +733,37 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
             : msg.withDecryptedText(decryptedPreview);
         _emitMessages();
       }
+      return msg;
     } catch (e) {
+      if (e is UploadCancelledException) {
+        // sendMedia handles its own cancellation; cancelUpload already
+        // discarded a retried send.
+        if (ownsToken) return null;
+        rethrow;
+      }
       await outbox.markFailed(item.messageId, e.toString());
       _showPending(
-        item.copyWith(attempts: item.attempts + 1),
+        item.copyWith(attempts: item.attempts + 1, lastError: e.toString()),
         decryptedPreview,
       );
       if (item.threadId == _currentThreadId) {
-        _reportActionError('Not sent — will retry when you are back online.');
+        _reportActionError(
+          e is StagedAttachmentMissingException
+              ? 'Attachment unavailable — select it again and resend.'
+              : 'Not sent — will retry when you are back online.',
+        );
       }
+      if (item.mediaType != null) {
+        unawaited(_scheduleBackgroundUpload(item.messageId));
+      }
+      return null;
     } finally {
-      _inFlightMessageIds.remove(item.messageId);
+      _uploads.endDelivery(item.messageId);
+      if (ownsToken) {
+        _uploads.release(item.messageId);
+      } else {
+        _uploads.setStatus(item.messageId, null);
+      }
     }
   }
 
@@ -734,13 +791,36 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
     } catch (_) {
       return;
     }
+    try {
+      await _stagingStore.cleanOrphans({
+        ...queued.map((item) => item.messageId),
+        ..._uploads.activeIds,
+      });
+    } catch (e) {
+      _reportActionError('Attachment cache cleanup failed: $e');
+    }
     for (final item in queued) {
       if (item.senderId != myUid) continue;
-      // A queued media message whose upload never finished cannot be retried
-      // from here — the plaintext bytes are gone. Surface it as failed instead
-      // of silently sending a message that points at nothing.
-      if (item.mediaType != null && item.mediaRef == null) {
-        _showPending(item.copyWith(attempts: item.attempts + 1), null);
+      // A live sender (preparing, encrypting or uploading) finishes or fails
+      // its own message; delivering a half-prepared attachment here would
+      // fail it and wipe its progress.
+      if (_uploads.isActive(item.messageId)) continue;
+      // A media send interrupted before its encrypted payload was staged
+      // cannot be reconstructed; never deliver a message without its media.
+      if (item.mediaType != null &&
+          item.mediaRef == null &&
+          !item.hasStagedMedia) {
+        const error =
+            'Attachment payload is unavailable; select it again and resend.';
+        if (item.attempts == 0) {
+          await outbox.markFailed(item.messageId, error);
+        }
+        _showPending(
+          item.attempts == 0
+              ? item.copyWith(attempts: 1, lastError: error)
+              : item,
+          null,
+        );
         continue;
       }
       await _deliver(item);
@@ -754,6 +834,7 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
     final queued = await outbox.pendingForThread(threadId);
     for (final item in queued) {
       if (item.messageId == messageId) {
+        if (_uploads.isActive(messageId)) return;
         await _deliver(item);
         return;
       }
@@ -762,7 +843,21 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
 
   /// Abandon a failed message.
   Future<void> discardMessage(String messageId) async {
-    await outbox.remove(messageId);
+    final threadId = _currentThreadId;
+    OutboxItem? item;
+    if (threadId != null) {
+      for (final pendingItem in await outbox.pendingForThread(threadId)) {
+        if (pendingItem.messageId == messageId) {
+          item = pendingItem;
+          break;
+        }
+      }
+    }
+    if (item == null) {
+      await outbox.remove(messageId);
+    } else {
+      await _outboxDelivery.discard(item);
+    }
     _pending.remove(messageId);
     _emitMessages();
   }
@@ -1581,7 +1676,8 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
         storagePath = await mediaRepository.uploadEncryptedMedia(
           threadId: targetThreadId,
           messageId: forwardedId,
-          filename: '$forwardedId.${_storageExtension(message.mediaType)}',
+          filename:
+              '$forwardedId.${ChatOutboxDeliveryService.storageExtension(message.mediaType)}',
           encryptedBytes: reEncrypted,
         );
         preview = message.mediaPreview;
@@ -1627,14 +1723,7 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
   /// Largest attachment accepted, kept just under the 64 MB Storage rule so
   /// the AES-GCM nonce and tag never push an upload over the limit.
   static const maxAttachmentBytes = 64 * 1024 * 1024 - 1024;
-
-  /// Storage object extension. Documents deliberately use a neutral one so the
-  /// bucket listing does not reveal the file type.
-  static String _storageExtension(MessageType? type) => switch (type) {
-    MessageType.video => 'mp4.enc',
-    MessageType.file => 'bin.enc',
-    _ => 'jpg.enc',
-  };
+  static const maxVideoSourceBytes = 512 * 1024 * 1024;
 
   /// Clear-text layout hints for an attachment. Best effort: an unreadable
   /// header only costs the placeholder its exact aspect ratio.
@@ -1643,6 +1732,7 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
     Uint8List bytes, {
     int? width,
     int? height,
+    int? durationMs,
   }) {
     if (type == MessageType.image && (width == null || height == null)) {
       try {
@@ -1651,52 +1741,31 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
         height = info?.height;
       } catch (_) {}
     }
-    return MediaMeta(width: width, height: height, sizeBytes: bytes.length);
-  }
-
-  /// Publishes (or clears, when [status] is null) the progress of an outgoing
-  /// attachment.
-  void _setUploadStatus(String messageId, MediaSendStatus? status) {
-    final current = state;
-    if (current is! ActiveThreadLoaded) return;
-    final next = Map<String, MediaSendStatus>.from(current.uploadProgress);
-    if (status == null) {
-      if (next.remove(messageId) == null) return;
-    } else {
-      if (next[messageId] == status) return;
-      next[messageId] = status;
-    }
-    emit(current.copyWith(uploadProgress: next));
-  }
-
-  /// Advances the bar within one phase, never backwards.
-  void _advanceUpload(String messageId, MediaSendPhase phase, double progress) {
-    final current = state;
-    if (current is! ActiveThreadLoaded) return;
-    final existing = current.uploadProgress[messageId];
-    // A late callback from an earlier phase must not rewind the ring.
-    if (existing != null && progress < existing.progress) return;
-    _setUploadStatus(
-      messageId,
-      MediaSendStatus(phase: phase, progress: progress),
+    return MediaMeta(
+      width: width,
+      height: height,
+      sizeBytes: bytes.length,
+      durationMs: durationMs,
     );
+  }
+
+  /// Mirrors the registry's progress into the loaded state. The registry, not
+  /// the state, is the source of truth, so progress survives re-opening the
+  /// thread and cubits created after the send started.
+  void _onUploadsChanged(Map<String, MediaSendStatus> statuses) {
+    final current = state;
+    if (current is! ActiveThreadLoaded) return;
+    emit(current.copyWith(uploadProgress: statuses));
   }
 
   /// Abort a send that is still being prepared or uploaded, and remove its
   /// bubble. Has no effect once delivery has started.
   Future<void> cancelUpload(String messageId) async {
-    final token = _uploadTokens[messageId];
+    final token = _uploads.tokenOf(messageId);
     if (token == null) return;
     token.cancel();
-    _setUploadStatus(messageId, null);
+    _uploads.setStatus(messageId, null);
     await discardMessage(messageId);
-  }
-
-  Future<void> _deleteQuietly(String? storagePath) async {
-    if (storagePath == null) return;
-    try {
-      await mediaRepository.deleteMedia(storagePath);
-    } catch (_) {}
   }
 
   /// Encrypt, upload and send an attachment.
@@ -1712,36 +1781,49 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
   /// would leave the screen unchanged for seconds after the user tapped send.
   Future<void> sendMedia({
     required String messageId,
-    required List<int> rawBytes,
+    List<int>? rawBytes,
     required MessageType type,
     String? filename,
     ImageQuality quality = ImageQuality.high,
+    String? videoPath,
+    ChatVideoQuality videoQuality = ChatVideoQuality.high,
   }) async {
     final threadId = _currentThreadId;
     if (threadId == null) return;
-    if (rawBytes.isEmpty) {
+    var bytes = rawBytes == null
+        ? Uint8List(0)
+        : rawBytes is Uint8List
+        ? rawBytes
+        : Uint8List.fromList(rawBytes);
+    if (rawBytes == null && videoPath == null) {
       _reportActionError('That file is empty.');
       return;
     }
     final preview = ChatMessage.mediaPreviewFor(type, filename: filename);
-    final token = _uploadTokens[messageId] = UploadCancelToken();
+    final token = _uploads.register(messageId);
+    OutboxItem? queuedItem;
+    var stagedInOutbox = false;
     void throwIfCancelled() {
       if (token.isCancelled) throw const UploadCancelledException();
     }
 
-    String? thumbPath;
-    String? storagePath;
     try {
-      var bytes = rawBytes is Uint8List
-          ? rawBytes
-          : Uint8List.fromList(rawBytes);
+      final sourceSize = videoPath == null
+          ? bytes.length
+          : await File(videoPath).length();
+      if (sourceSize == 0) {
+        _reportActionError('That file is empty.');
+        return;
+      }
+      if (videoPath != null && sourceSize > maxVideoSourceBytes) {
+        _reportActionError('Videos must be smaller than 512 MB.');
+        return;
+      }
 
       final encryptedText = await cryptoService.encryptMessage(
         threadId: threadId,
         plaintext: preview,
       );
-      // Queued with no mediaRef yet: an entry without one is not deliverable
-      // and drainOutbox deliberately refuses to send it.
       var item = OutboxItem(
         messageId: messageId,
         threadId: threadId,
@@ -1750,132 +1832,152 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
         recipientUid: _otherUser!.uid,
         preview: preview,
         mediaType: type,
-        mediaMeta: _buildMediaMeta(type, bytes),
+        mediaMeta: MediaMeta(sizeBytes: sourceSize),
         queuedAt: DateTime.now().toUtc(),
       );
       await outbox.enqueue(item);
+      queuedItem = item;
       throwIfCancelled();
       _showPending(item, preview);
-      _setUploadStatus(messageId, const MediaSendStatus.preparing());
+      _uploads.setStatus(messageId, const MediaSendStatus.preparing());
 
-      try {
-        Uint8List? thumbnail;
-        if (type == MessageType.image) {
-          final prepared = await imageCompressor.prepare(
-            bytes: bytes,
-            quality: quality,
-          );
-          bytes = prepared.bytes;
-          thumbnail = prepared.thumbnail.isEmpty ? null : prepared.thumbnail;
-          // Re-published so the bubble reserves the final aspect ratio using
-          // the compressed dimensions rather than the originals.
-          item = item.copyWith(
-            mediaMeta: _buildMediaMeta(
-              type,
-              bytes,
-              width: prepared.width == 0 ? null : prepared.width,
-              height: prepared.height == 0 ? null : prepared.height,
-            ),
-          );
-          throwIfCancelled();
-          _showPending(item, preview);
-        }
-        throwIfCancelled();
-        _advanceUpload(
-          messageId,
-          MediaSendPhase.encrypting,
-          MediaSendWeights.compressEnd,
-        );
-
-        // Checked after compression, so a large photo can still go through at
-        // a lower quality. The bubble already exists, so it has to be taken
-        // back rather than simply not created.
-        if (bytes.length > maxAttachmentBytes) {
-          await discardMessage(messageId);
-          _reportActionError('Attachments must be smaller than 64 MB.');
-          return;
-        }
-
-        if (thumbnail != null) {
-          final encryptedThumb = await cryptoService.encryptMedia(
-            threadId: threadId,
-            bytes: thumbnail,
-          );
-          thumbPath = await mediaRepository.uploadEncryptedMedia(
-            threadId: threadId,
-            messageId: messageId,
-            filename: '$messageId.thumb.enc',
-            encryptedBytes: encryptedThumb,
-            cancelToken: token,
-            onProgress: (p) => _advanceUpload(
-              messageId,
-              MediaSendPhase.uploading,
-              MediaSendWeights.span(
-                MediaSendWeights.compressEnd,
-                MediaSendWeights.thumbEnd,
-                p,
-              ),
-            ),
-          );
-          // The device already has these bytes; publishing them means the
-          // sender's own bubble never downloads its own thumbnail.
-          onMediaReady?.call(thumbPath, thumbnail);
-        }
-        _advanceUpload(
-          messageId,
-          MediaSendPhase.encrypting,
-          MediaSendWeights.thumbEnd,
-        );
-
-        throwIfCancelled();
-        final encrypted = await cryptoService.encryptMedia(
-          threadId: threadId,
+      Uint8List? thumbnail;
+      if (type == MessageType.image) {
+        final prepared = await imageCompressor.prepare(
           bytes: bytes,
+          quality: quality,
         );
-        throwIfCancelled();
-        storagePath = await mediaRepository.uploadEncryptedMedia(
-          threadId: threadId,
-          messageId: messageId,
-          filename: '$messageId.${_storageExtension(type)}',
-          encryptedBytes: encrypted,
-          cancelToken: token,
-          onProgress: (p) => _advanceUpload(
-            messageId,
-            MediaSendPhase.uploading,
-            MediaSendWeights.span(MediaSendWeights.thumbEnd, 1, p),
+        bytes = prepared.bytes;
+        thumbnail = prepared.thumbnail.isEmpty ? null : prepared.thumbnail;
+        item = item.copyWith(
+          mediaMeta: _buildMediaMeta(
+            type,
+            bytes,
+            width: prepared.width == 0 ? null : prepared.width,
+            height: prepared.height == 0 ? null : prepared.height,
           ),
         );
+        await outbox.enqueue(item);
+        queuedItem = item;
         throwIfCancelled();
-        if (type == MessageType.image) {
-          onMediaReady?.call(storagePath, bytes);
-        }
-
-        // Recorded so a retry reuses the upload instead of repeating it.
+        _showPending(item, preview);
+      } else if (type == MessageType.video && videoPath != null) {
+        token.onCancel = () => unawaited(videoCompressor.cancelCompression());
+        final prepared = await videoCompressor.prepare(
+          path: videoPath,
+          quality: videoQuality,
+          onProgress: (progress) => _uploads.advance(
+            messageId,
+            MediaSendPhase.preparing,
+            MediaSendWeights.span(0, MediaSendWeights.compressEnd, progress),
+          ),
+        );
+        token.onCancel = null;
+        bytes = prepared.bytes;
         item = item.copyWith(
-          mediaRef: storagePath,
-          mediaMeta: thumbPath == null
-              ? item.mediaMeta
-              : item.mediaMeta?.copyWith(thumbRef: thumbPath) ??
-                    MediaMeta(thumbRef: thumbPath),
+          mediaMeta: _buildMediaMeta(
+            type,
+            bytes,
+            width: prepared.width,
+            height: prepared.height,
+            durationMs: prepared.durationMs,
+          ),
         );
         await outbox.enqueue(item);
-      } finally {
-        _setUploadStatus(messageId, null);
+        queuedItem = item;
+        throwIfCancelled();
+        _showPending(item, preview);
       }
-      // Past this point the message is being written; cancelling is over.
-      _uploadTokens.remove(messageId);
-      await _deliver(item, decryptedPreview: preview);
+
+      throwIfCancelled();
+      _uploads.advance(
+        messageId,
+        MediaSendPhase.encrypting,
+        MediaSendWeights.compressEnd,
+      );
+      if (bytes.length > maxAttachmentBytes) {
+        await discardMessage(messageId);
+        _reportActionError('Attachments must be smaller than 64 MB.');
+        return;
+      }
+
+      Uint8List? encryptedThumbnail;
+      if (thumbnail != null) {
+        encryptedThumbnail = await cryptoService.encryptMedia(
+          threadId: threadId,
+          bytes: thumbnail,
+        );
+      }
+      _uploads.advance(
+        messageId,
+        MediaSendPhase.encrypting,
+        MediaSendWeights.thumbEnd,
+      );
+      throwIfCancelled();
+      final encryptedMedia = await cryptoService.encryptMedia(
+        threadId: threadId,
+        bytes: bytes,
+      );
+      if (encryptedThumbnail != null) {
+        await _stagingStore.writeThumbnail(messageId, encryptedThumbnail);
+      }
+      await _stagingStore.writeMedia(messageId, encryptedMedia);
+      item = item.copyWith(
+        hasStagedMedia: true,
+        hasStagedThumbnail: encryptedThumbnail != null,
+      );
+      await outbox.enqueue(item);
+      queuedItem = item;
+      stagedInOutbox = true;
+      _showPending(item, preview);
+      await _scheduleBackgroundUpload(messageId);
+
+      final sent = await _deliver(item, decryptedPreview: preview);
+      if (sent != null && type == MessageType.image) {
+        final thumbRef = sent.mediaMeta?.thumbRef;
+        if (thumbnail != null && thumbRef != null) {
+          onMediaReady?.call(thumbRef, thumbnail);
+        }
+        if (sent.mediaRef != null) onMediaReady?.call(sent.mediaRef!, bytes);
+      }
     } on UploadCancelledException {
-      _setUploadStatus(messageId, null);
+      _uploads.setStatus(messageId, null);
       await discardMessage(messageId);
-      await _deleteQuietly(thumbPath);
-      await _deleteQuietly(storagePath);
     } catch (e) {
-      _setUploadStatus(messageId, null);
+      _uploads.setStatus(messageId, null);
+      if (token.isCancelled) {
+        await discardMessage(messageId);
+        return;
+      }
+      if (!stagedInOutbox) {
+        await discardMessage(messageId);
+        _reportActionError('Attachment could not be prepared: $e');
+        return;
+      }
       await outbox.markFailed(messageId, e.toString());
+      final failed = queuedItem;
+      if (failed != null) {
+        _showPending(
+          failed.copyWith(
+            attempts: failed.attempts + 1,
+            lastError: e.toString(),
+          ),
+          preview,
+        );
+      }
       _reportActionError('Media send failed: $e');
     } finally {
-      _uploadTokens.remove(messageId);
+      _uploads.release(messageId);
+    }
+  }
+
+  Future<void> _scheduleBackgroundUpload(String messageId) async {
+    try {
+      await scheduleBackgroundUpload(messageId);
+    } catch (e) {
+      _reportActionError(
+        'Attachment queued; background retry could not be scheduled: $e',
+      );
     }
   }
 
@@ -2050,6 +2152,7 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
           actionError: actionError,
           isOffline: _isOffline,
           isDetached: _detached,
+          uploadProgress: _uploads.statuses,
         ),
       );
     }
@@ -2197,9 +2300,18 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
     }
   }
 
+  /// A send that outlives a route-scoped cubit keeps publishing; those late
+  /// updates must not throw once the cubit is closed.
+  @override
+  void emit(ActiveThreadState state) {
+    if (isClosed) return;
+    super.emit(state);
+  }
+
   @override
   Future<void> close() async {
     WidgetsBinding.instance.removeObserver(this);
+    _uploadsSub?.cancel();
     _messageSub?.cancel();
     _typingSub?.cancel();
     _presenceSub?.cancel();

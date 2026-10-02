@@ -283,6 +283,10 @@ GoRoute _chatRoute(AppDependencies deps, AppSessionState session) {
                 messageCache: deps.chatDependencies.messageCache,
                 searchIndex: deps.chatDependencies.searchIndex,
                 outbox: deps.chatDependencies.outbox,
+                attachmentStagingStore:
+                    deps.chatDependencies.attachmentStagingStore,
+                outboxDeliveryService:
+                    deps.chatDependencies.outboxDeliveryService,
                 cryptoService: deps.chatDependencies.cryptoService,
                 myUid: deps.chatDependencies.authService.currentUid ?? '',
                 connectivityStream: Connectivity().onConnectivityChanged,
@@ -363,24 +367,30 @@ GoRoute _chatRoute(AppDependencies deps, AppSessionState session) {
               BlocProvider.value(value: providedCubit, child: screen),
             );
           }
-          return withThreadList(BlocProvider<ActiveThreadCubit>(
-            create: (_) => ActiveThreadCubit(
-              messageRepository: deps.chatDependencies.messageRepository,
-              threadRepository: deps.chatDependencies.threadRepository,
-              userRepository: deps.chatDependencies.userRepository,
-              typingRepository: deps.chatDependencies.typingRepository,
-              presenceRepository: deps.chatDependencies.presenceRepository,
-              mediaRepository: deps.chatDependencies.mediaRepository,
-              messageCache: deps.chatDependencies.messageCache,
-              searchIndex: deps.chatDependencies.searchIndex,
-              outbox: deps.chatDependencies.outbox,
-              cryptoService: deps.chatDependencies.cryptoService,
-              myUid: deps.chatDependencies.authService.currentUid ?? '',
-              connectivityStream: Connectivity().onConnectivityChanged,
-              onMediaReady: deps.chatDependencies.mediaLoader.seed,
+          return withThreadList(
+            BlocProvider<ActiveThreadCubit>(
+              create: (_) => ActiveThreadCubit(
+                messageRepository: deps.chatDependencies.messageRepository,
+                threadRepository: deps.chatDependencies.threadRepository,
+                userRepository: deps.chatDependencies.userRepository,
+                typingRepository: deps.chatDependencies.typingRepository,
+                presenceRepository: deps.chatDependencies.presenceRepository,
+                mediaRepository: deps.chatDependencies.mediaRepository,
+                messageCache: deps.chatDependencies.messageCache,
+                searchIndex: deps.chatDependencies.searchIndex,
+                outbox: deps.chatDependencies.outbox,
+                attachmentStagingStore:
+                    deps.chatDependencies.attachmentStagingStore,
+                outboxDeliveryService:
+                    deps.chatDependencies.outboxDeliveryService,
+                cryptoService: deps.chatDependencies.cryptoService,
+                myUid: deps.chatDependencies.authService.currentUid ?? '',
+                connectivityStream: Connectivity().onConnectivityChanged,
+                onMediaReady: deps.chatDependencies.mediaLoader.seed,
+              ),
+              child: screen,
             ),
-            child: screen,
-          ));
+          );
         },
       ),
     ],
@@ -487,7 +497,9 @@ GoRoute _lockRoute(AppDependencies deps, AppSessionState session) {
             unawaited(deps.importManager.reconcileVaultFiles());
             final target = deps.importManager.hasPendingShareFiles
                 ? '/import/share-intent'
-                : (decodedReturnTo == '/chat/thread' ? '/chat' : decodedReturnTo);
+                : (decodedReturnTo == '/chat/thread'
+                      ? '/chat'
+                      : decodedReturnTo);
             context.go(target);
           },
         ),

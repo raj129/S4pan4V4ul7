@@ -9,19 +9,26 @@ import 'package:google_sign_in/google_sign_in.dart';
 import 'package:workmanager/workmanager.dart';
 
 import '../../crypto/services/chat_crypto_service.dart';
+import '../../data/repositories_impl/drift_outbox_repository.dart';
 import '../../data/repositories_impl/drift_message_cache_repository.dart';
 import '../../data/repositories_impl/firebase_auth_repository.dart';
+import '../../data/repositories_impl/firestore_message_repository.dart';
+import '../../data/repositories_impl/firestore_thread_repository.dart';
 import '../../data/repositories_impl/google_drive_chat_backup_store.dart';
 import '../../data/repositories_impl/local_chat_backup_store.dart';
+import '../../domain/repositories/outbox_repository.dart';
 import '../../firebase_options.dart';
 import '../../storage/local_db/vault_database.dart';
+import 'chat_attachment_staging.dart';
 import 'chat_backup_service.dart';
+import 'chat_outbox_delivery.dart';
 
 /// OAuth web client id used by Google Sign-In (shared with `main.dart`).
 const googleServerClientId =
     '209716874258-p9n2n9jmu87oqqu84703hf9kvuodokdn.apps.googleusercontent.com';
 
 const _nightlyTaskName = 'photo_vault.chat_backup.nightly';
+const _mediaUploadTaskName = 'photo_vault.chat_media.upload';
 
 /// Target local time of the nightly backup.
 const _backupHour = 2;
@@ -30,16 +37,88 @@ const _backupHour = 2;
 @pragma('vm:entry-point')
 void chatBackupCallbackDispatcher() {
   Workmanager().executeTask((task, inputData) async {
-    if (task != _nightlyTaskName) return true;
-    try {
-      await runBackgroundChatBackup();
-    } catch (e) {
-      debugPrint('Nightly chat backup failed: $e');
+    if (task == _mediaUploadTaskName) {
+      final messageId = inputData?['messageId'];
+      if (messageId is! String || messageId.isEmpty) return true;
+      return runBackgroundChatMediaUpload(messageId);
     }
-    // Always report success: a failed run is simply retried the next night,
-    // and the app backs up on open when a run was missed.
+    if (task == _nightlyTaskName) {
+      try {
+        await runBackgroundChatBackup();
+      } catch (e) {
+        debugPrint('Nightly chat backup failed: $e');
+      }
+      // A failed backup is retried the next night and on the next app open.
+      return true;
+    }
     return true;
   });
+}
+
+Future<void>? _workmanagerInitialization;
+
+Future<void> _ensureWorkmanagerInitialized() => _workmanagerInitialization ??=
+    Workmanager().initialize(chatBackupCallbackDispatcher);
+
+/// Schedules one network-constrained attempt for a durable queued attachment.
+Future<void> scheduleChatAttachmentUpload(String messageId) async {
+  if (kIsWeb || !Platform.isAndroid) return;
+  await _ensureWorkmanagerInitialized();
+  await Workmanager().registerOneOffTask(
+    'chat-media-$messageId',
+    _mediaUploadTaskName,
+    inputData: {'messageId': messageId},
+    constraints: Constraints(networkType: NetworkType.connected),
+    existingWorkPolicy: ExistingWorkPolicy.keep,
+    backoffPolicy: BackoffPolicy.exponential,
+    backoffPolicyDelay: const Duration(seconds: 30),
+  );
+}
+
+/// Uploads and delivers one staged attachment without needing plaintext keys.
+Future<bool> runBackgroundChatMediaUpload(String messageId) async {
+  WidgetsFlutterBinding.ensureInitialized();
+  if (Firebase.apps.isEmpty) {
+    await Firebase.initializeApp(
+      options: DefaultFirebaseOptions.currentPlatform,
+    );
+  }
+  final uid = FirebaseAuth.instance.currentUser?.uid;
+  if (uid == null) return true;
+
+  final db = VaultDatabase();
+  final outbox = DriftOutboxRepository(db);
+  try {
+    OutboxItem? item;
+    for (final queued in await outbox.pending()) {
+      if (queued.messageId == messageId) {
+        item = queued;
+        break;
+      }
+    }
+    if (item == null || item.senderId != uid) return true;
+
+    final delivery = ChatOutboxDeliveryService(
+      outbox: outbox,
+      mediaRepository: FirebaseMediaRepository(),
+      messageRepository: FirestoreMessageRepository(),
+      threadRepository: FirestoreThreadRepository(),
+      stagingStore: FileAttachmentStagingStore(),
+    );
+    try {
+      final result = await delivery.deliver(item: item, uid: uid);
+      return result != null;
+    } on StagedAttachmentMissingException catch (e) {
+      await outbox.markFailed(messageId, e.toString());
+      return true;
+    } catch (e) {
+      await outbox.markFailed(messageId, e.toString());
+      debugPrint('Background attachment delivery failed: $e');
+      return false;
+    }
+  } finally {
+    await db.close();
+  }
 }
 
 /// Performs one backup outside the UI (own Firebase + database instances).
@@ -82,7 +161,7 @@ Future<void> runBackgroundChatBackup() async {
 /// Schedules the nightly backup (Android only; desktop backs up on open).
 Future<void> scheduleNightlyChatBackup() async {
   if (kIsWeb || !Platform.isAndroid) return;
-  await Workmanager().initialize(chatBackupCallbackDispatcher);
+  await _ensureWorkmanagerInitialized();
   await Workmanager().registerPeriodicTask(
     _nightlyTaskName,
     _nightlyTaskName,

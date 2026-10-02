@@ -67,7 +67,10 @@ class PersistentSettingsRepository implements SettingsRepository {
 
   @override
   Future<void> setDriveEncryptedBackupEnabled(bool enabled) {
-    return _kv.write(StorageKeys.driveEncryptedBackupEnabled, enabled.toString());
+    return _kv.write(
+      StorageKeys.driveEncryptedBackupEnabled,
+      enabled.toString(),
+    );
   }
 
   @override
@@ -77,4 +80,12 @@ class PersistentSettingsRepository implements SettingsRepository {
   @override
   Future<void> setChatImageQuality(String quality) =>
       _kv.write(StorageKeys.chatImageQuality, quality);
+
+  @override
+  Future<String?> getChatVideoQuality() =>
+      _kv.read(StorageKeys.chatVideoQuality);
+
+  @override
+  Future<void> setChatVideoQuality(String quality) =>
+      _kv.write(StorageKeys.chatVideoQuality, quality);
 }

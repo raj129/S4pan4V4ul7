@@ -15,6 +15,7 @@ import 'package:uuid/uuid.dart';
 import '../../../application/services/chat_notification_service.dart';
 import '../../../application/services/chat_vault_bridge.dart';
 import '../../../application/services/image_compressor.dart';
+import '../../../application/services/video_compressor.dart';
 import '../../../application/services/profile_service.dart';
 import '../../../domain/entities/chat_message.dart';
 import '../../../domain/entities/message_metadata.dart';
@@ -23,6 +24,7 @@ import '../../../domain/entities/chat_user.dart';
 import '../../../domain/repositories/settings_repository.dart';
 import '../../../core/widgets/app_state_views.dart';
 import '../../state/chat/active_thread_cubit.dart';
+import '../../state/chat/media_send_status.dart';
 import '../../state/chat/thread_list_cubit.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_spacing.dart';
@@ -31,6 +33,7 @@ import '../../widgets/chat/chat_media_preview.dart';
 import '../../widgets/chat/chat_scrollbar.dart';
 import '../../widgets/chat/chat_wallpaper.dart';
 import '../../widgets/chat/image_quality_sheet.dart';
+import '../../widgets/chat/video_quality_sheet.dart';
 import '../../widgets/chat/contact_info_sheet.dart';
 import '../../widgets/chat/message_bubble.dart';
 import '../../widgets/chat/user_avatar.dart';
@@ -82,6 +85,28 @@ Future<void> openThreadScreen(
   } else {
     return context.push('/chat/thread', extra: args);
   }
+}
+
+/// Progress to show on an outgoing attachment.
+///
+/// When no sender in this process reports it (for example WorkManager owns the
+/// upload), an indeterminate status keeps the bubble from sitting at a bare
+/// "Sending" with nothing to say it is working.
+MediaSendStatus? _sendStatusFor(
+  ChatMessage msg,
+  ActiveThreadLoaded state,
+  bool isMine,
+) {
+  final reported = state.uploadProgress[msg.messageId];
+  if (reported != null) return reported;
+  if (isMine &&
+      !state.isOffline &&
+      msg.hasMediaSlot &&
+      msg.mediaRef == null &&
+      msg.status == MessageStatus.sending) {
+    return const MediaSendStatus(phase: MediaSendPhase.uploading, progress: 0);
+  }
+  return null;
 }
 
 /// The 1:1 chat thread screen.
@@ -205,20 +230,33 @@ class _ThreadScreenState extends State<ThreadScreen> {
     if (images.isNotEmpty) await _sendImages(cubit, images, messenger);
     for (final video in videos) {
       if (!mounted) return;
-      if (await video.length() > ActiveThreadCubit.maxAttachmentBytes) {
+      final length = await video.length();
+      if (length > ActiveThreadCubit.maxVideoSourceBytes) {
+        messenger.showSnackBar(
+          const SnackBar(content: Text('Videos must be smaller than 512 MB.')),
+        );
+        continue;
+      }
+      final quality = await _askVideoQuality(length);
+      if (quality == null || !mounted) return;
+      if (quality == ChatVideoQuality.original &&
+          length > ActiveThreadCubit.maxAttachmentBytes) {
         messenger.showSnackBar(
           const SnackBar(
-            content: Text('Attachments must be smaller than 64 MB.'),
+            content: Text(
+              'Original videos must be smaller than 64 MB. '
+              'Choose a compressed option.',
+            ),
           ),
         );
         continue;
       }
-      final bytes = await video.readAsBytes();
       if (!mounted) return;
       await cubit.sendMedia(
         messageId: _uuid.v4(),
-        rawBytes: bytes,
         type: MessageType.video,
+        videoPath: video.path,
+        videoQuality: quality,
       );
     }
   }
@@ -713,7 +751,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
               otherUid: widget.otherUser.uid,
               isOffline: state.isOffline,
               mediaLoader: widget.mediaLoader,
-              sendStatus: state.uploadProgress[msg.messageId],
+              sendStatus: _sendStatusFor(msg, state, isMine),
               onCancelUpload: state.uploadProgress[msg.messageId] == null
                   ? null
                   : () {
@@ -1551,21 +1589,35 @@ class _ThreadScreenState extends State<ThreadScreen> {
       return;
     }
 
+    if (type != MessageType.video) return;
     final length = await file.length();
     if (!mounted) return;
-    // Videos are sent as-is, so the limit still applies up front. Photos are
-    // checked after compression instead, which can bring a large one under it.
-    if (length > ActiveThreadCubit.maxAttachmentBytes) {
+    if (length > ActiveThreadCubit.maxVideoSourceBytes) {
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Videos must be smaller than 512 MB.')),
+      );
+      return;
+    }
+    final videoQuality = await _askVideoQuality(length);
+    if (videoQuality == null || !mounted) return;
+    if (videoQuality == ChatVideoQuality.original &&
+        length > ActiveThreadCubit.maxAttachmentBytes) {
       messenger.showSnackBar(
         const SnackBar(
-          content: Text('Attachments must be smaller than 64 MB.'),
+          content: Text(
+            'Original videos must be smaller than 64 MB. Choose a compressed option.',
+          ),
         ),
       );
       return;
     }
-    final bytes = await file.readAsBytes();
     if (!mounted) return;
-    await cubit.sendMedia(messageId: _uuid.v4(), rawBytes: bytes, type: type);
+    await cubit.sendMedia(
+      messageId: _uuid.v4(),
+      type: MessageType.video,
+      videoPath: file.path,
+      videoQuality: videoQuality,
+    );
   }
 
   /// Most photos anyone sends at once; beyond this the batch is trimmed rather
@@ -1627,6 +1679,27 @@ class _ThreadScreenState extends State<ThreadScreen> {
     if (chosen == null) return null;
     if (chosen != remembered) {
       await settings?.setChatImageQuality(chosen.name);
+    }
+    return chosen;
+  }
+
+  Future<ChatVideoQuality?> _askVideoQuality(int originalBytes) async {
+    final settings = widget.settingsRepository;
+    final remembered = ChatVideoQualityX.parse(
+      await settings?.getChatVideoQuality(),
+    );
+    if (!mounted) return null;
+    final allowCompression = VideoCompressor.isSupported;
+    final selected = allowCompression ? remembered : ChatVideoQuality.original;
+    final chosen = await VideoQualitySheet.show(
+      context,
+      originalBytes: originalBytes,
+      selected: selected,
+      allowCompression: allowCompression,
+    );
+    if (chosen == null) return null;
+    if (allowCompression && chosen != remembered) {
+      await settings?.setChatVideoQuality(chosen.name);
     }
     return chosen;
   }

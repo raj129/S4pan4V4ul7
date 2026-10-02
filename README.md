@@ -37,6 +37,31 @@ Prerequisites: Flutter SDK >= 3.12
 - Tests: flutter test
 - Codegen: flutter pub run build_runner build --delete-conflicting-outputs
 
+## Chat attachments
+
+Failed and offline attachments are kept as encrypted payloads in app-private
+storage and can be retried from the message bubble. Android schedules a
+network-constrained WorkManager retry; delivery remains best-effort and may be
+delayed by battery policy or a force-stop. Opening chat also drains queued
+uploads. Staged attachments share a 512 MB local-storage limit.
+
+Upload progress (Preparing, Encrypting, Uploading) is tracked in an app-wide
+in-memory registry rather than per screen, so leaving and re-opening a chat
+keeps the running progress and Cancel button. After the app process ends,
+WorkManager continues the upload in a separate isolate and the bubble shows an
+indeterminate "Uploading…" bar instead of a percentage.
+
+Videos can be sent as Original, High (up to 1080p), Medium (up to 720p), or Low
+(up to 540p). Compressed profiles are lossy; the source is retained when
+Original is selected. The uploaded payload must fit the existing 64 MB limit,
+so large originals require a compressed profile. Compression is available on
+Android, iOS, and macOS; other platforms offer Original only. Android
+background upload is not available on iOS or desktop.
+
+Video compression uses a native temporary output file. The app deletes that
+file after preparation and clears stale compressor cache on startup, but an
+unexpected process termination can leave it until the next launch.
+
 ## Docs
 
 See STORAGE_ARCHITECTURE.md and PERSISTENCE_FIX_SUMMARY.md for persistence design notes and rationale.

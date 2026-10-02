@@ -307,6 +307,8 @@ class _ChatAppState extends State<ChatApp> with WidgetsBindingObserver {
                         messageCache: _deps.messageCache,
                         searchIndex: _deps.searchIndex,
                         outbox: _deps.outbox,
+                        attachmentStagingStore: _deps.attachmentStagingStore,
+                        outboxDeliveryService: _deps.outboxDeliveryService,
                         cryptoService: _deps.cryptoService,
                         myUid: currentUser.uid,
                         connectivityStream:
