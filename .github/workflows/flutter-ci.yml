@@ -5,6 +5,7 @@ on:
     branches: [ main ]
   pull_request:
     branches: [ main ]
+  workflow_dispatch:
 
 jobs:
   analyze_and_test:
@@ -18,10 +19,13 @@ jobs:
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.12.2'
+          flutter-version: '3.44.5'
 
       - name: Install dependencies
         run: flutter pub get
+
+      - name: Run build_runner (codegen)
+        run: flutter pub run build_runner build --delete-conflicting-outputs
 
       - name: Run analyzer
         run: flutter analyze
@@ -29,5 +33,114 @@ jobs:
       - name: Run tests
         run: flutter test
 
-      - name: Run build_runner (codegen)
-        run: flutter pub run build_runner build --delete-conflicting-outputs
+  distribute_android:
+    if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
+    needs: analyze_and_test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: firebase-app-distribution-main
+      cancel-in-progress: false
+    env:
+      FIREBASE_TESTER_GROUPS: ${{ vars.FIREBASE_TESTER_GROUPS }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.44.5'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies and generate code
+        run: |
+          flutter pub get
+          flutter pub run build_runner build --delete-conflicting-outputs
+
+      - name: Configure tester signing key
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          for secret_name in ANDROID_KEYSTORE_BASE64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
+            if [[ -z "${!secret_name}" ]]; then
+              echo "::error::Set the GitHub Actions secret $secret_name."
+              exit 1
+            fi
+          done
+          umask 077
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/tester-signing-key.jks"
+
+      - name: Determine next tester version
+        id: version
+        shell: bash
+        run: |
+          git fetch --force --tags
+          LAST_TAG="$(git tag --list 'v0.9.[0-9][0-9][0-9]' --sort=-version:refname | head -n 1)"
+          if [[ -n "$LAST_TAG" ]]; then
+            LAST_PATCH="${LAST_TAG##*.}"
+            NEXT_PATCH=$((10#$LAST_PATCH + 1))
+          else
+            NEXT_PATCH=1
+          fi
+          if (( NEXT_PATCH > 999 )); then
+            echo "::error::Version counter exceeded 999; update the 0.9 version series."
+            exit 1
+          fi
+          VERSION="$(printf '0.9.%03d' "$NEXT_PATCH")"
+          BUILD_NUMBER=$((NEXT_PATCH + 1))
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "build_number=$BUILD_NUMBER" >> "$GITHUB_OUTPUT"
+
+      - name: Build release APK
+        env:
+          ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/tester-signing-key.jks
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          flutter build apk --release \
+            --build-name="${{ steps.version.outputs.version }}" \
+            --build-number="${{ steps.version.outputs.build_number }}"
+
+      - name: Authenticate to Firebase
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+
+      - name: Install Firebase CLI
+        run: npm install --global firebase-tools
+
+      - name: Upload APK to Firebase App Distribution
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if [[ -z "$FIREBASE_TESTER_GROUPS" ]]; then
+            echo "::error::Set the repository variable FIREBASE_TESTER_GROUPS to a Firebase tester group alias."
+            exit 1
+          fi
+          FIREBASE_APP_ID="$(node -e "process.stdout.write(require('./firebase.json').flutter.platforms.android.default.appId)")"
+          firebase appdistribution:distribute build/app/outputs/flutter-apk/app-release.apk \
+            --app "$FIREBASE_APP_ID" \
+            --groups "$FIREBASE_TESTER_GROUPS" \
+            --release-notes "Tester build $VERSION from ${GITHUB_SHA::7}"
+
+      - name: Tag successful tester build
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag "v$VERSION" "$GITHUB_SHA"
+          git push origin "v$VERSION"

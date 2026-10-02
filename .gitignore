@@ -39,6 +39,10 @@ app.*.symbols
 # Obfuscation related
 app.*.map.json
 
+# Android signing keys
+*.jks
+*.keystore
+
 # Android Studio will place build artifacts here
 /android/app/debug
 /android/app/profile
@@ -48,4 +52,3 @@ app.*.map.json
 /lib/storage/local_db/*.g.dart
 /lib/storage/local_db/*.drift
 # If other generated files are intentionally committed, document why in README.md
-

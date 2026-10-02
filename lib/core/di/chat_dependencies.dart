@@ -61,14 +61,27 @@ class ChatDependencies {
     if (pushTokenRepository != null) {
       this.pushTokenRepository = pushTokenRepository;
     }
-    if (userRepository != null) this.userRepository = userRepository;
-    if (threadRepository != null) this.threadRepository = threadRepository;
-    if (messageRepository != null) this.messageRepository = messageRepository;
-    if (mediaRepository != null) this.mediaRepository = mediaRepository;
-    if (presenceRepository != null)
+    if (userRepository != null) {
+      this.userRepository = userRepository;
+    }
+    if (threadRepository != null) {
+      this.threadRepository = threadRepository;
+    }
+    if (messageRepository != null) {
+      this.messageRepository = messageRepository;
+    }
+    if (mediaRepository != null) {
+      this.mediaRepository = mediaRepository;
+    }
+    if (presenceRepository != null) {
       this.presenceRepository = presenceRepository;
-    if (typingRepository != null) this.typingRepository = typingRepository;
-    if (cryptoService != null) this.cryptoService = cryptoService;
+    }
+    if (typingRepository != null) {
+      this.typingRepository = typingRepository;
+    }
+    if (cryptoService != null) {
+      this.cryptoService = cryptoService;
+    }
     _vaultSession.addListener(_onVaultSessionChanged);
   }
 

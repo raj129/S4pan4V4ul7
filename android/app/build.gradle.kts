@@ -8,6 +8,9 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
+val testerKeystorePath = System.getenv("ANDROID_KEYSTORE_PATH")
+    ?.takeIf { it.isNotBlank() }
+
 android {
     namespace = "com.system.calculator"
     compileSdk = 37
@@ -33,11 +36,27 @@ android {
         versionName = flutter.versionName
     }
 
+    signingConfigs {
+        if (testerKeystorePath != null) {
+            create("testerRelease") {
+                storeFile = file(testerKeystorePath)
+                storePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
+                    ?: error("ANDROID_KEYSTORE_PASSWORD is required for tester signing")
+                keyAlias = System.getenv("ANDROID_KEY_ALIAS")
+                    ?: error("ANDROID_KEY_ALIAS is required for tester signing")
+                keyPassword = System.getenv("ANDROID_KEY_PASSWORD")
+                    ?: error("ANDROID_KEY_PASSWORD is required for tester signing")
+            }
+        }
+    }
+
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = if (testerKeystorePath != null) {
+                signingConfigs.getByName("testerRelease")
+            } else {
+                signingConfigs.getByName("debug")
+            }
         }
     }
 }
