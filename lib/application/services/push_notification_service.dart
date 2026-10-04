@@ -1,16 +1,16 @@
 import 'dart:async';
 
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:flutter/foundation.dart';
 
-import '../../data/repositories_impl/firestore_message_repository.dart';
 import '../../domain/repositories/message_repository.dart';
 import '../../firebase_options.dart';
 import '../../domain/repositories/push_token_repository.dart';
 import 'chat_notification_service.dart';
+import 'chat_backup_scheduler.dart';
 
 @pragma('vm:entry-point')
 Future<void> handleChatPushInBackground(RemoteMessage message) async {
@@ -49,12 +49,7 @@ Future<void> handleChatPushInBackground(RemoteMessage message) async {
 
   final uid = FirebaseAuth.instance.currentUser?.uid;
   if (uid == null || messageId == null || messageId.isEmpty) return;
-  await FirestoreMessageRepository(
-    firestore: FirebaseFirestore.instanceFor(
-      app: Firebase.app(),
-      databaseId: 'default1',
-    ),
-  ).markDelivered(threadId: threadId, messageIds: [messageId], uid: uid);
+  await scheduleChatReceive(uid: uid, threadId: threadId, messageId: messageId);
 }
 
 /// Registers this device for FCM pushes sent by the `onChatMessageCreated`
@@ -71,12 +66,10 @@ class PushNotificationService {
     FirebaseMessaging? messaging,
   }) : _tokens = tokenRepository,
        _notifications = notificationService,
-       _messages = messageRepository,
        _messagingOverride = messaging;
 
   final PushTokenRepository _tokens;
   final ChatNotificationService _notifications;
-  final MessageRepository _messages;
   final FirebaseMessaging? _messagingOverride;
 
   FirebaseMessaging get _messaging =>
@@ -168,13 +161,13 @@ class PushNotificationService {
       return;
     }
     unawaited(
-      _messages
-          .markDelivered(
-            threadId: rawThreadId,
-            messageIds: [rawMessageId],
-            uid: uid,
-          )
-          .catchError((_) {}),
+      scheduleChatReceive(
+        uid: uid,
+        threadId: rawThreadId,
+        messageId: rawMessageId,
+      ).catchError((Object error, StackTrace stack) {
+        debugPrint('Chat background receive could not be scheduled.');
+      }),
     );
   }
 

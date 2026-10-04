@@ -71,11 +71,242 @@ class ImportManager extends ChangeNotifier {
   ImportJobProgress get progress => _progress;
   String? get lastImportedPhotoId => _lastImportedPhotoId;
   int get galleryEventRevision => _galleryEventRevision;
+  Listenable get chatVaultSessionChanges => _vaultSession;
+  bool get isChatVaultUnlocked => _vaultSession.isUnlocked;
   bool get hasPendingShareFiles => _pendingShareFiles.isNotEmpty;
   bool get hasPendingImportSelection => _pendingImportFiles.isNotEmpty;
   String? get pendingImportSource => _pendingImportSource;
   List<XFile> get pendingImportFiles =>
       List<XFile>.unmodifiable(_pendingImportFiles);
+
+  /// Shares the file/manifest writer with gallery jobs without their per-file
+  /// error swallowing. Chat callers must receive the actual commit failure.
+  Future<T> runChatImport<T>(Future<T> Function() operation) {
+    final result = _jobQueue.then((_) => operation());
+    _jobQueue = result.then<void>((_) {}, onError: (Object _, StackTrace _) {});
+    return result;
+  }
+
+  void requireChatImportUnlock() {
+    final vmk = _vaultSession.requireVmk();
+    vmk.fillRange(0, vmk.length, 0);
+  }
+
+  Future<VaultPhoto?> findChatImportDuplicate(String checksum) async {
+    requireChatImportUnlock();
+    final repository = _photoRepository;
+    if (repository is VaultAttachmentRepository) {
+      return (repository as VaultAttachmentRepository).findActiveChecksum(
+        checksum,
+      );
+    }
+    // Compatibility for image-only repository fakes.
+    for (var page = 0; ; page++) {
+      final items = await repository.listGalleryPage(page: page, pageSize: 200);
+      if (items.isEmpty) return null;
+      for (final item in items) {
+        if (!item.isTrashed && item.checksumSha256 == checksum) return item;
+      }
+    }
+  }
+
+  Future<List<VaultPhoto>> listChatVaultAttachments() async {
+    requireChatImportUnlock();
+    final repository = _photoRepository;
+    if (repository is VaultAttachmentRepository) {
+      final items = await (repository as VaultAttachmentRepository)
+          .listAttachments();
+      return items
+        ..sort((a, b) => b.importedTimeMs.compareTo(a.importedTimeMs));
+    }
+    return const [];
+  }
+
+  Future<VaultPhoto?> chatImportById(String id) =>
+      _photoRepository.getPhotoById(id);
+
+  /// Only ciphertext is written. Metadata is committed last, after the
+  /// encrypted mirror manifest, so a returned item is durable, not queued.
+  Future<VaultPhoto> commitChatAttachment({
+    required String id,
+    required Uint8List bytes,
+    required Uint8List thumbnail,
+    required String filename,
+    required String mimeType,
+    required String checksum,
+  }) async {
+    final vaultId = _vaultSession.vaultId;
+    final vmk = _vaultSession.requireVmk();
+    final dek = List<int>.from(await _cryptoService.generateSymmetricKey());
+    String? objectPath;
+    String? thumbPath;
+    try {
+      final version = _cryptoService.encryptionVersion;
+      final object = await _cryptoService.encrypt(
+        bytes,
+        dek,
+        aad: utf8.encode('$id:photo:v$version'),
+      );
+      final thumb = await _cryptoService.encrypt(
+        thumbnail,
+        dek,
+        aad: utf8.encode('$id:thumb:v$version'),
+      );
+      final wrapped = await _cryptoService.wrapKey(
+        dek,
+        vmk,
+        keyId: id,
+        aad: utf8.encode('$id:dek:v$version'),
+      );
+      requireChatImportUnlock();
+      if (_vaultSession.vaultId != vaultId) throw VaultLockedException();
+      objectPath = await _writePayloadFile(
+        id: id,
+        kind: 'photo',
+        payload: object,
+      );
+      thumbPath = await _writePayloadFile(
+        id: id,
+        kind: 'thumb',
+        payload: thumb,
+      );
+      final now = DateTime.now().millisecondsSinceEpoch;
+      final item = VaultPhoto(
+        id: id,
+        originalFilename: filename,
+        encryptedFilePath: objectPath,
+        thumbnailPath: thumbPath,
+        wrappedDek: _wrappedDekToJson(wrapped),
+        photoNonce: base64Encode(object.nonce),
+        thumbnailNonce: base64Encode(thumb.nonce),
+        encryptionVersion: version,
+        checksumSha256: checksum,
+        fileSize: bytes.length,
+        mimeType: mimeType,
+        createdTimeMs: now,
+        importedTimeMs: now,
+        modifiedTimeMs: now,
+        favorite: false,
+        isTrashed: false,
+      );
+      await _upsertExternalManifest(
+        id: id,
+        originalFilename: filename,
+        photoPath: objectPath,
+        thumbPath: thumbPath,
+        checksum: checksum,
+        wrappedDekJson: item.wrappedDek,
+        photoNonce: item.photoNonce,
+        thumbNonce: item.thumbnailNonce,
+        encryptionVersion: version,
+        fileSize: bytes.length,
+        mimeType: mimeType,
+        source: 'chat',
+        atomic: true,
+      );
+      requireChatImportUnlock();
+      if (_vaultSession.vaultId != vaultId) throw VaultLockedException();
+      await _photoRepository.upsertPhoto(item);
+      _lastImportedPhotoId = id;
+      notifyGalleryChanged();
+      return item;
+    } catch (_) {
+      // A repository may commit and then throw. Never delete such a commit.
+      final committed = await _photoRepository.getPhotoById(id);
+      if (committed == null) {
+        for (final path in [objectPath, thumbPath]) {
+          if (path != null && await File(path).exists()) {
+            await File(path).delete();
+          }
+        }
+        await _removeManifestEntry(id);
+      }
+      rethrow;
+    } finally {
+      vmk.fillRange(0, vmk.length, 0);
+      dek.fillRange(0, dek.length, 0);
+    }
+  }
+
+  Future<void> verifyChatVaultItem(VaultPhoto item, String checksum) async {
+    requireChatImportUnlock();
+    if (item.isTrashed || item.checksumSha256 != checksum) {
+      throw StateError('Vault attachment identity mismatch.');
+    }
+    final bytes = await loadPhotoBytes(item);
+    if (bytes == null) throw StateError('Vault attachment could not be read.');
+    try {
+      if (crypto.sha256.convert(bytes).toString() != checksum) {
+        throw StateError('Vault attachment checksum mismatch.');
+      }
+    } finally {
+      bytes.fillRange(0, bytes.length, 0);
+    }
+  }
+
+  /// The move checkpoint contains source identities, never plaintext bytes.
+  /// Seal metadata under the unlocked VMK; recovery cannot unlock a vault.
+  Future<File> _chatMoveFile(String sourceId) async {
+    final base = await getApplicationSupportDirectory();
+    final key = crypto.sha256.convert(
+      utf8.encode('${_vaultSession.vaultId}:$sourceId'),
+    );
+    final directory = Directory(p.join(base.path, 'chat_vault_moves'));
+    await directory.create(recursive: true);
+    return File(p.join(directory.path, '$key.enc'));
+  }
+
+  Future<Map<String, dynamic>?> readChatMove(String sourceId) async {
+    final vmk = _vaultSession.requireVmk();
+    try {
+      final file = await _chatMoveFile(sourceId);
+      if (!await file.exists()) return null;
+      final plain = await _cryptoService.decrypt(
+        await _readPayloadFile(file.path),
+        vmk,
+        aad: utf8.encode('chat-move:${_vaultSession.vaultId}:$sourceId:v1'),
+      );
+      try {
+        return jsonDecode(utf8.decode(plain)) as Map<String, dynamic>;
+      } finally {
+        try {
+          plain.fillRange(0, plain.length, 0);
+        } catch (_) {
+          // Cryptography may return immutable sensitive buffers.
+        }
+      }
+    } finally {
+      vmk.fillRange(0, vmk.length, 0);
+    }
+  }
+
+  Future<void> writeChatMove(
+    String sourceId,
+    Map<String, dynamic> record,
+  ) async {
+    final vaultId = _vaultSession.vaultId;
+    final vmk = _vaultSession.requireVmk();
+    final plain = utf8.encode(jsonEncode(record));
+    try {
+      final payload = await _cryptoService.encrypt(
+        plain,
+        vmk,
+        aad: utf8.encode('chat-move:$vaultId:$sourceId:v1'),
+      );
+      requireChatImportUnlock();
+      if (_vaultSession.vaultId != vaultId) throw VaultLockedException();
+      final target = await _chatMoveFile(sourceId);
+      final staging = File('${target.path}.next');
+      await staging.writeAsString(
+        jsonEncode(_payloadToJson(payload)),
+        flush: true,
+      );
+      await staging.rename(target.path);
+    } finally {
+      plain.fillRange(0, plain.length, 0);
+      vmk.fillRange(0, vmk.length, 0);
+    }
+  }
 
   void notifyGalleryChanged() {
     _galleryEventRevision += 1;
@@ -174,7 +405,10 @@ class ImportManager extends ChangeNotifier {
       try {
         final thumbFile = File(photo.thumbnailPath);
         if (!await thumbFile.exists()) {
-          final regenerated = await _regenerateThumbnail(photo: photo, dek: dek);
+          final regenerated = await _regenerateThumbnail(
+            photo: photo,
+            dek: dek,
+          );
           _thumbnailMemoryCache[photo.id] = regenerated;
           return regenerated;
         }
@@ -185,7 +419,7 @@ class ImportManager extends ChangeNotifier {
           aad: utf8.encode('${photo.id}:thumb:v${photo.encryptionVersion}'),
         );
         final bytes = Uint8List.fromList(plain);
-        
+
         // LRU-ish cache limit: if cache too big, clear it to prevent OOM
         if (_thumbnailMemoryCache.length > 200) {
           _thumbnailMemoryCache.clear();
@@ -447,6 +681,11 @@ class ImportManager extends ChangeNotifier {
     required VaultPhoto photo,
     required List<int> dek,
   }) async {
+    if (!photo.mimeType.startsWith('image/')) {
+      throw UnsupportedError(
+        'Attachment thumbnails cannot be regenerated as photos.',
+      );
+    }
     final photoPayload = await _readPayloadFile(photo.encryptedFilePath);
     final plainPhoto = await _cryptoService.decrypt(
       photoPayload,
@@ -533,6 +772,7 @@ class ImportManager extends ChangeNotifier {
     required int fileSize,
     required String mimeType,
     required String source,
+    bool atomic = false,
   }) async {
     if (!_useExternalStorageMirror) return;
     final root = await _resolveVaultRoot();
@@ -569,7 +809,13 @@ class ImportManager extends ChangeNotifier {
       'updatedAtMs': DateTime.now().millisecondsSinceEpoch,
     };
     doc['photos'] = photosMap;
-    await manifestFile.writeAsString(jsonEncode(doc), flush: true);
+    if (atomic) {
+      final next = File('${manifestFile.path}.next');
+      await next.writeAsString(jsonEncode(doc), flush: true);
+      await next.rename(manifestFile.path);
+    } else {
+      await manifestFile.writeAsString(jsonEncode(doc), flush: true);
+    }
   }
 
   Future<void> _removeManifestEntry(String id) async {

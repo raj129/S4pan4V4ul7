@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:provider/provider.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 
 import '../../core/di/chat_dependencies.dart';
@@ -183,6 +184,8 @@ class _ChatAppState extends State<ChatApp> with WidgetsBindingObserver {
                 prev.identitySync != next.identitySync),
         listener: (context, authState) {
           if (authState is! ChatAuthAuthenticated) return;
+          _deps.mediaLoader.setAccount(authState.user.uid);
+          _deps.uploads?.start(authState.user.uid);
           if (_sessionPrepared) {
             unawaited(_maybeOfferRestore(authState));
           } else {
@@ -202,6 +205,8 @@ class _ChatAppState extends State<ChatApp> with WidgetsBindingObserver {
                 // Firebase unavailable (tests); local notifications still work.
               }
             } else {
+              _deps.uploads?.stop();
+              _deps.mediaLoader.setAccount('');
               _deps.notificationService.stop();
             }
             if (widget.userMode != UserMode.localOnly) return;
@@ -266,7 +271,7 @@ class _ChatAppState extends State<ChatApp> with WidgetsBindingObserver {
               return MultiRepositoryProvider(
                 key: ValueKey(_restoreGeneration),
                 providers: [
-                  RepositoryProvider<ChatMediaLoader>.value(
+                  ChangeNotifierProvider<ChatMediaLoader>.value(
                     value: _deps.mediaLoader,
                   ),
                   RepositoryProvider<ChatVaultBridge>.value(
@@ -298,6 +303,7 @@ class _ChatAppState extends State<ChatApp> with WidgetsBindingObserver {
                     ),
                     BlocProvider(
                       create: (_) => ActiveThreadCubit(
+                        androidUploads: _deps.uploads,
                         messageRepository: _deps.messageRepository,
                         threadRepository: _deps.threadRepository,
                         userRepository: _deps.userRepository,

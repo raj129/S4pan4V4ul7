@@ -1,4 +1,8 @@
 import '../../application/services/chat_auth_service.dart';
+import '../../application/services/android_chat_uploads.dart';
+import '../../application/services/android_chat_secure_media_service.dart';
+import 'dart:io';
+import 'package:flutter/foundation.dart';
 import '../../application/services/chat_backup_service.dart';
 import '../../application/services/chat_identity_service.dart';
 import '../../application/services/chat_notification_service.dart';
@@ -87,7 +91,18 @@ class ChatDependencies {
 
   /// Drop in-memory chat keys as soon as the vault locks.
   void _onVaultSessionChanged() {
-    if (!_vaultSession.isUnlocked) cryptoService.clearKeyCache();
+    if (!_vaultSession.isUnlocked) {
+      cryptoService.clearKeyCache();
+      mediaLoader.clear();
+      if (Platform.isAndroid) {
+        const AndroidChatSecureMediaService().close().catchError((
+          Object error,
+        ) {
+          // Surface cleanup failure without exposing attachment content.
+          debugPrint('Secure chat viewer cleanup unavailable.');
+        });
+      }
+    }
   }
 
   final AuthRepository _authRepository;
@@ -104,6 +119,9 @@ class ChatDependencies {
   late MessageRepository messageRepository = FirestoreMessageRepository();
   late MediaRepository mediaRepository = FirebaseMediaRepository();
   late ChatCryptoService cryptoService = ChatCryptoService();
+  late final AndroidChatUploads? uploads = Platform.isAndroid
+      ? AndroidChatUploads()
+      : null;
 
   /// Swap point for presence: replacing these two bindings with Realtime
   /// Database implementations is the whole cost of that migration.
@@ -183,6 +201,9 @@ class ChatDependencies {
     identityService: identityService,
     readPin: () => _vaultSession.pin,
     beforeSignOut: () async {
+      mediaLoader.setAccount('');
+      uploads?.stop();
+      cryptoService.clearKeyCache();
       await _pushService?.stop();
       await mediaLoader.clearAll();
     },
@@ -201,6 +222,7 @@ class ChatDependencies {
   );
 
   void dispose() {
+    uploads?.dispose();
     _vaultSession.removeListener(_onVaultSessionChanged);
     presenceService.dispose();
     _pushService?.dispose();

@@ -9,13 +9,68 @@ import 'package:equatable/equatable.dart';
 /// measure instead of sitting frozen at zero.
 enum MediaSendPhase { preparing, encrypting, uploading }
 
+/// Durable lifecycle owned by the Android upload journal.
+enum MediaUploadLifecycle {
+  queued,
+  uploading,
+  paused,
+  completed,
+  failed,
+  cancelled,
+  retrying,
+  resumed,
+}
+
+extension MediaUploadLifecycleTransitions on MediaUploadLifecycle {
+  bool canTransitionTo(MediaUploadLifecycle next) => switch (this) {
+    MediaUploadLifecycle.queued =>
+      next == MediaUploadLifecycle.uploading ||
+          next == MediaUploadLifecycle.cancelled ||
+          next == MediaUploadLifecycle.failed,
+    MediaUploadLifecycle.uploading =>
+      next == MediaUploadLifecycle.paused ||
+          next == MediaUploadLifecycle.completed ||
+          next == MediaUploadLifecycle.failed ||
+          next == MediaUploadLifecycle.cancelled ||
+          next == MediaUploadLifecycle.retrying,
+    MediaUploadLifecycle.paused =>
+      next == MediaUploadLifecycle.resumed ||
+          next == MediaUploadLifecycle.cancelled,
+    MediaUploadLifecycle.failed =>
+      next == MediaUploadLifecycle.retrying ||
+          next == MediaUploadLifecycle.cancelled,
+    MediaUploadLifecycle.retrying =>
+      next == MediaUploadLifecycle.resumed ||
+          next == MediaUploadLifecycle.uploading ||
+          next == MediaUploadLifecycle.paused ||
+          next == MediaUploadLifecycle.failed ||
+          next == MediaUploadLifecycle.cancelled,
+    MediaUploadLifecycle.resumed =>
+      next == MediaUploadLifecycle.uploading ||
+          next == MediaUploadLifecycle.paused ||
+          next == MediaUploadLifecycle.completed ||
+          next == MediaUploadLifecycle.failed ||
+          next == MediaUploadLifecycle.cancelled,
+    MediaUploadLifecycle.completed || MediaUploadLifecycle.cancelled => false,
+  };
+}
+
 /// Progress of one outgoing attachment.
 class MediaSendStatus extends Equatable {
-  const MediaSendStatus({required this.phase, required this.progress});
+  const MediaSendStatus({
+    required this.phase,
+    required this.progress,
+    this.lifecycle,
+    this.processedBytes,
+    this.totalBytes,
+  });
 
   const MediaSendStatus.preparing()
     : phase = MediaSendPhase.preparing,
-      progress = 0;
+      progress = 0,
+      lifecycle = null,
+      processedBytes = null,
+      totalBytes = null;
 
   final MediaSendPhase phase;
 
@@ -23,24 +78,72 @@ class MediaSendStatus extends Equatable {
   /// per phase, so the ring only ever moves forwards.
   final double progress;
 
+  /// Durable upload state, populated for jobs reported by Android.
+  final MediaUploadLifecycle? lifecycle;
+
+  /// Ciphertext bytes reported by the native uploader.
+  final int? processedBytes;
+
+  /// Total ciphertext bytes, including any preview blob.
+  final int? totalBytes;
+
   /// True while no meaningful fraction can be reported yet.
-  bool get isIndeterminate =>
-      phase != MediaSendPhase.uploading || progress <= 0;
+  bool get isIndeterminate {
+    if (lifecycle == MediaUploadLifecycle.completed ||
+        lifecycle == MediaUploadLifecycle.failed ||
+        lifecycle == MediaUploadLifecycle.cancelled ||
+        lifecycle == MediaUploadLifecycle.paused) {
+      return false;
+    }
+    if (lifecycle != null && lifecycle != MediaUploadLifecycle.uploading) {
+      return true;
+    }
+    return phase != MediaSendPhase.uploading || progress <= 0;
+  }
 
-  String get label => switch (phase) {
-    MediaSendPhase.preparing => 'Preparing…',
-    MediaSendPhase.encrypting => 'Encrypting…',
-    MediaSendPhase.uploading => 'Uploading…',
-  };
+  String get label {
+    final state = lifecycle;
+    if (state != null) {
+      return switch (state) {
+        MediaUploadLifecycle.queued => 'Queued',
+        MediaUploadLifecycle.uploading => 'Uploading…',
+        MediaUploadLifecycle.paused => 'Paused',
+        MediaUploadLifecycle.completed => 'Sent',
+        MediaUploadLifecycle.failed => 'Upload failed',
+        MediaUploadLifecycle.cancelled => 'Cancelled',
+        MediaUploadLifecycle.retrying => 'Retrying…',
+        MediaUploadLifecycle.resumed => 'Resuming…',
+      };
+    }
+    return switch (phase) {
+      MediaSendPhase.preparing => 'Preparing…',
+      MediaSendPhase.encrypting => 'Encrypting…',
+      MediaSendPhase.uploading => 'Uploading…',
+    };
+  }
 
-  MediaSendStatus copyWith({MediaSendPhase? phase, double? progress}) =>
-      MediaSendStatus(
-        phase: phase ?? this.phase,
-        progress: progress ?? this.progress,
-      );
+  MediaSendStatus copyWith({
+    MediaSendPhase? phase,
+    double? progress,
+    MediaUploadLifecycle? lifecycle,
+    int? processedBytes,
+    int? totalBytes,
+  }) => MediaSendStatus(
+    phase: phase ?? this.phase,
+    progress: progress ?? this.progress,
+    lifecycle: lifecycle ?? this.lifecycle,
+    processedBytes: processedBytes ?? this.processedBytes,
+    totalBytes: totalBytes ?? this.totalBytes,
+  );
 
   @override
-  List<Object?> get props => [phase, progress];
+  List<Object?> get props => [
+    phase,
+    progress,
+    lifecycle,
+    processedBytes,
+    totalBytes,
+  ];
 }
 
 /// How much of the overall bar each phase is worth.

@@ -3,7 +3,7 @@ import 'package:equatable/equatable.dart';
 import 'message_metadata.dart';
 import 'message_reply.dart';
 
-enum MessageType { text, image, video, file }
+enum MessageType { text, image, video, audio, file }
 
 enum DeleteScope { forMe, forEveryone }
 
@@ -105,7 +105,7 @@ class ChatMessage extends Equatable {
   /// Photos and videos carry no label: the attachment speaks for itself.
   static String mediaPreviewFor(MessageType? type, {String? filename}) =>
       switch (type) {
-        MessageType.file =>
+        MessageType.file || MessageType.audio =>
           filename == null || filename.isEmpty ? 'Document' : filename,
         _ => '',
       };

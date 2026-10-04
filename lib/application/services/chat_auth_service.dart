@@ -124,6 +124,7 @@ class ChatAuthService {
     if (!await authRepository.isSignedIn()) return null;
     final firebaseUser = FirebaseAuth.instance.currentUser;
     if (firebaseUser == null) return null;
+    await cryptoService.bindAccount(firebaseUser.uid);
     if (!await cryptoService.hasIdentityKey()) return null;
     final email = (firebaseUser.email ?? '').toLowerCase().trim();
     if (email.isEmpty) return null;

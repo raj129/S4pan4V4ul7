@@ -1,113 +1,161 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart' as crypto;
+import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
+import 'package:uuid/uuid.dart';
 
-/// On-disk cache for chat attachments, so a thread does not re-download every
-/// image each time the app restarts.
-///
-/// Only *ciphertext* is cached. The bytes are exactly what Storage returned, so
-/// the cache is no more revealing than the bucket itself, and a decrypted photo
-/// never reaches the filesystem — the same rule the vault follows.
+/// An account-scoped ciphertext cache. Callers include the account in the key.
 class ChatMediaCache {
-  ChatMediaCache({Directory? directory, this.maxBytes = _defaultMaxBytes})
+  ChatMediaCache({Directory? directory, this.maxBytes = 150 * 1024 * 1024})
     : _directory = directory;
 
-  static const _defaultMaxBytes = 150 * 1024 * 1024;
-  static const _dirName = 'chat_media_cache';
-
-  /// Eviction ceiling for the whole cache directory.
   final int maxBytes;
-
   Directory? _directory;
   Future<Directory>? _pending;
+  Future<void> _writes = Future<void>.value();
+  final Set<String> _pinned = {};
 
-  Future<Directory> _dir() {
-    final ready = _directory;
-    if (ready != null) return Future.value(ready);
-    return _pending ??= _create();
-  }
+  Future<Directory> _dir() => _pending ??= _create();
 
   Future<Directory> _create() async {
-    final base = await getApplicationSupportDirectory();
-    final dir = Directory(p.join(base.path, _dirName));
-    if (!await dir.exists()) await dir.create(recursive: true);
+    final base = _directory;
+    final dir =
+        base ??
+        Directory(
+          p.join(
+            (await getApplicationSupportDirectory()).path,
+            'chat_media_cache',
+          ),
+        );
+    await dir.create(recursive: true);
     _directory = dir;
     return dir;
   }
 
-  /// Storage paths contain slashes and unbounded IDs, so address files by a
-  /// hash instead of trying to sanitise the path.
   String _key(String storagePath) =>
       crypto.sha256.convert(utf8.encode(storagePath)).toString();
 
-  Future<File> _fileFor(String storagePath) async {
-    final dir = await _dir();
-    return File(p.join(dir.path, _key(storagePath)));
-  }
+  Future<File> _fileFor(String storagePath) async =>
+      File(p.join((await _dir()).path, _key(storagePath)));
+
+  Future<bool> wasMoved(String storagePath) async =>
+      File('${(await _fileFor(storagePath)).path}.moved').exists();
+
+  void pin(String storagePath) => _pinned.add(_key(storagePath));
+  void unpin(String storagePath) => _pinned.remove(_key(storagePath));
 
   Future<Uint8List?> read(String storagePath) async {
+    final file = await _fileFor(storagePath);
     try {
-      final file = await _fileFor(storagePath);
+      if (await wasMoved(storagePath)) return null;
       if (!await file.exists()) return null;
+      if (await file.length() > 64 * 1024 * 1024) {
+        await file.delete();
+        return null;
+      }
       final bytes = await file.readAsBytes();
       if (bytes.isEmpty) return null;
-      // Touch so eviction treats this as recently used.
-      unawaited(file.setLastModified(DateTime.now()).catchError((_) {}));
+      await file.setLastModified(DateTime.now());
       return bytes;
-    } catch (_) {
+    } on FileSystemException {
+      debugPrint('Chat ciphertext cache read unavailable.');
       return null;
     }
   }
 
-  Future<void> write(String storagePath, Uint8List encryptedBytes) async {
-    try {
-      final file = await _fileFor(storagePath);
-      await file.writeAsBytes(encryptedBytes, flush: true);
-      await _evictIfNeeded();
-    } catch (_) {
-      // A cache miss is always survivable; never fail a download over it.
-    }
+  Future<T> _serialize<T>(Future<T> Function() action) {
+    final result = _writes.then((_) => action());
+    // The caller receives the failure; a failed operation must not poison
+    // every subsequent cache operation.
+    _writes = result.then<void>((_) {}, onError: (Object _, StackTrace _) {});
+    return result;
   }
 
-  /// Drops the least recently used entries until the directory fits again.
+  Future<void> write(String storagePath, Uint8List encryptedBytes) =>
+      _serialize(() async {
+        if (encryptedBytes.isEmpty || encryptedBytes.length > maxBytes) {
+          throw const ChatCacheCapacityException();
+        }
+        if (await wasMoved(storagePath)) return;
+        final file = await _fileFor(storagePath);
+        final temp = File('${file.path}.${const Uuid().v4()}.part');
+        try {
+          await temp.writeAsBytes(encryptedBytes, flush: true);
+          // A background isolate may have recorded a move during the write.
+          if (await wasMoved(storagePath)) return;
+          await temp.rename(file.path);
+          if (await wasMoved(storagePath)) {
+            await remove(storagePath);
+            return;
+          }
+          await _evictIfNeeded();
+        } finally {
+          if (await temp.exists()) await temp.delete();
+        }
+      });
+
+  Future<void> remove(String storagePath) async {
+    final file = await _fileFor(storagePath);
+    if (await file.exists()) await file.delete();
+  }
+
+  /// The marker precedes deletion: a crash cannot trigger a new full download.
+  /// Only call after the vault has durably committed the imported attachment.
+  Future<void> markMoved(String storagePath) => _serialize(() async {
+    final file = await _fileFor(storagePath);
+    await File('${file.path}.moved').writeAsString('1', flush: true);
+    await remove(storagePath);
+  });
+
   Future<void> _evictIfNeeded() async {
-    try {
-      final dir = await _dir();
-      final files = <File>[];
-      var total = 0;
-      await for (final entity in dir.list()) {
-        if (entity is! File) continue;
-        files.add(entity);
-        total += await entity.length();
+    final files = <(File, FileStat)>[];
+    var total = 0;
+    await for (final entity in (await _dir()).list()) {
+      if (entity is! File ||
+          !RegExp(r'^[0-9a-f]{64}$').hasMatch(p.basename(entity.path))) {
+        continue;
       }
-      if (total <= maxBytes) return;
-
-      final stamped = <MapEntry<File, DateTime>>[];
-      for (final f in files) {
-        stamped.add(MapEntry(f, (await f.stat()).modified));
+      try {
+        final stat = await entity.stat();
+        if (stat.type != FileSystemEntityType.file) continue;
+        total += stat.size;
+        files.add((entity, stat));
+      } on FileSystemException {
+        debugPrint('Chat cache entry changed during eviction.');
       }
-      stamped.sort((a, b) => a.value.compareTo(b.value));
-      for (final entry in stamped) {
-        if (total <= maxBytes) break;
-        total -= await entry.key.length();
-        await entry.key.delete();
+    }
+    files.sort((a, b) => a.$2.modified.compareTo(b.$2.modified));
+    for (final (file, stat) in files) {
+      if (total <= maxBytes) break;
+      if (_pinned.contains(p.basename(file.path))) continue;
+      try {
+        await file.delete();
+        total -= stat.size;
+      } on FileSystemException {
+        debugPrint('Chat cache entry could not be evicted.');
       }
-    } catch (_) {}
+    }
+    if (total > maxBytes) throw const ChatCacheCapacityException();
   }
 
-  /// Wipes the cache, e.g. on sign-out.
-  Future<void> clear() async {
-    try {
-      final dir = await _dir();
-      if (await dir.exists()) await dir.delete(recursive: true);
-      // Recreated rather than forgotten: the same instance keeps being used
-      // after a sign-out, and the next write must land somewhere.
-      await dir.create(recursive: true);
-    } catch (_) {}
-  }
+  /// Remove ciphertext, but preserve moved markers across sign-out/restarts.
+  Future<void> clear() => _serialize(() async {
+    await for (final entity in (await _dir()).list()) {
+      if (entity is File &&
+          RegExp(r'^[0-9a-f]{64}$').hasMatch(p.basename(entity.path))) {
+        await entity.delete();
+      }
+    }
+  });
+}
+
+class ChatCacheCapacityException implements Exception {
+  const ChatCacheCapacityException();
+
+  @override
+  String toString() => 'Not enough space in the attachment cache.';
 }

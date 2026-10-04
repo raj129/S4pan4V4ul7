@@ -55,9 +55,11 @@ class AppDependencies {
         ? SecureStorageFlutterRepository(defaultSecureStorage)
         : InMemorySecureStorageRepository();
     final settingsRepository = persistentState
-        ? PersistentSettingsRepository(FlutterSecureStringKv(defaultSecureStorage))
+        ? PersistentSettingsRepository(
+            FlutterSecureStringKv(defaultSecureStorage),
+          )
         : InMemorySettingsRepository();
-    final photoRepository = persistentState
+    final PhotoRepository photoRepository = persistentState
         ? PersistentPhotoRepositoryImpl()
         : InMemoryPhotoRepository();
     final authRepository = persistentState

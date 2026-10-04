@@ -43,10 +43,7 @@ class ChatImageViewerScreen extends StatefulWidget {
 class _ChatImageViewerScreenState extends State<ChatImageViewerScreen>
     with SingleTickerProviderStateMixin {
   final _controller = TransformationController();
-  late final AnimationController _animation = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 200),
-  )..addListener(() => _controller.value = _zoomAnimation!.value);
+  late final AnimationController _animation;
 
   Animation<Matrix4>? _zoomAnimation;
   Future<Uint8List>? _full;
@@ -56,17 +53,54 @@ class _ChatImageViewerScreenState extends State<ChatImageViewerScreen>
   @override
   void initState() {
     super.initState();
+    _animation =
+        AnimationController(
+          vsync: this,
+          duration: const Duration(milliseconds: 200),
+        )..addListener(() {
+          final animation = _zoomAnimation;
+          if (animation != null) _controller.value = animation.value;
+        });
+    widget.loader.addListener(_onMediaChanged);
+    _loadFull();
+  }
+
+  void _loadFull() {
     final ref = widget.message.mediaRef;
-    if (ref != null) {
-      _full = widget.loader.load(
-        threadId: widget.message.threadId,
-        storagePath: ref,
-      );
+    _full = ref == null
+        ? null
+        : widget.loader.load(
+            threadId: widget.message.threadId,
+            storagePath: ref,
+          );
+  }
+
+  void _onMediaChanged() {
+    if (!mounted) return;
+    final ref = widget.message.mediaRef;
+    final bytes = ref == null ? null : widget.loader.cached(ref);
+    setState(() {
+      if (bytes != null) _full = Future.value(bytes);
+    });
+  }
+
+  @override
+  void didUpdateWidget(ChatImageViewerScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.loader != widget.loader) {
+      oldWidget.loader.removeListener(_onMediaChanged);
+      widget.loader.addListener(_onMediaChanged);
+    }
+    if (oldWidget.message.mediaRef != widget.message.mediaRef ||
+        oldWidget.message.threadId != widget.message.threadId ||
+        oldWidget.loader != widget.loader) {
+      _loadFull();
     }
   }
 
   @override
   void dispose() {
+    widget.loader.removeListener(_onMediaChanged);
     _animation.dispose();
     _controller.dispose();
     super.dispose();
@@ -147,7 +181,20 @@ class _ChatImageViewerScreenState extends State<ChatImageViewerScreen>
       future: future,
       builder: (context, snap) {
         if (snap.hasData && snap.data!.isNotEmpty) {
-          return Image.memory(snap.data!, fit: BoxFit.contain);
+          return Image.memory(
+            snap.data!,
+            fit: BoxFit.contain,
+            errorBuilder: (_, _, _) => const Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.broken_image_outlined, color: Colors.white54),
+                Text(
+                  'Unsupported or damaged image.',
+                  style: TextStyle(color: Colors.white70),
+                ),
+              ],
+            ),
+          );
         }
         if (snap.hasError) {
           return IconButton(
@@ -155,22 +202,18 @@ class _ChatImageViewerScreenState extends State<ChatImageViewerScreen>
             color: Colors.white54,
             tooltip: 'Retry',
             icon: const Icon(Icons.refresh_rounded),
-            onPressed: () => setState(() {
-              final ref = widget.message.mediaRef;
-              if (ref != null) {
-                _full = widget.loader.load(
-                  threadId: widget.message.threadId,
-                  storagePath: ref,
-                );
-              }
-            }),
+            onPressed: () => setState(_loadFull),
           );
         }
         return Stack(
           alignment: Alignment.center,
           children: [
             if (thumb != null)
-              Image.memory(thumb, fit: BoxFit.contain)
+              Image.memory(
+                thumb,
+                fit: BoxFit.contain,
+                errorBuilder: (_, _, _) => const SizedBox.shrink(),
+              )
             else
               const SizedBox.shrink(),
             const CircularProgressIndicator(color: Colors.white70),

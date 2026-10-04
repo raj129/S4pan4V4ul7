@@ -1,118 +1,14 @@
 import 'dart:async';
-import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
-import 'package:open_filex/open_filex.dart';
-import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
+import 'package:flutter/services.dart';
 
-import '../../../application/services/chat_media_cache.dart';
-import '../../../crypto/services/chat_crypto_service.dart';
+import '../../../application/services/chat_media_loader.dart';
+import '../../../application/services/android_chat_secure_media_service.dart';
 import '../../../domain/entities/chat_message.dart';
-import '../../../domain/repositories/message_repository.dart';
 import '../../state/chat/media_send_status.dart';
 
-/// Decrypts and caches chat media for display.
-///
-/// Attachments are stored encrypted, so every preview needs a download plus a
-/// decrypt. Without a cache that work would repeat on each rebuild — and a
-/// `ListView` rebuilds constantly while scrolling.
-class ChatMediaLoader {
-  ChatMediaLoader({
-    required this.mediaRepository,
-    required this.cryptoService,
-    ChatMediaCache? diskCache,
-  }) : diskCache = diskCache ?? ChatMediaCache();
-
-  final MediaRepository mediaRepository;
-  final ChatCryptoService cryptoService;
-
-  /// Keeps downloaded ciphertext across app restarts.
-  final ChatMediaCache diskCache;
-
-  final Map<String, Uint8List> _cache = {};
-  final Map<String, Future<Uint8List>> _inFlight = {};
-
-  /// Bounded so a long media-heavy thread cannot exhaust memory.
-  static const _maxCachedItems = 40;
-
-  Uint8List? cached(String storagePath) => _cache[storagePath];
-
-  /// Publishes bytes the device already holds, so the sender's own attachment
-  /// renders instantly instead of being downloaded back from Storage.
-  void seed(String storagePath, Uint8List bytes) {
-    if (bytes.isEmpty) return;
-    _evictIfFull();
-    _cache[storagePath] = bytes;
-  }
-
-  Future<Uint8List> load({
-    required String threadId,
-    required String storagePath,
-  }) {
-    final hit = _cache[storagePath];
-    if (hit != null) return Future.value(hit);
-
-    // Share one download between every widget asking for the same object.
-    return _inFlight[storagePath] ??= _download(
-      threadId,
-      storagePath,
-    ).whenComplete(() => _inFlight.remove(storagePath));
-  }
-
-  Future<Uint8List> _download(String threadId, String storagePath) async {
-    final encrypted = await _encryptedBytes(storagePath);
-    final plain = await cryptoService.decryptMedia(
-      threadId: threadId,
-      encryptedBytes: encrypted,
-    );
-    _evictIfFull();
-    _cache[storagePath] = plain;
-    return plain;
-  }
-
-  /// Ciphertext from the disk cache when present, otherwise from Storage.
-  Future<Uint8List> _encryptedBytes(String storagePath) async {
-    final cached = await diskCache.read(storagePath);
-    if (cached != null) return cached;
-    final encrypted = await mediaRepository.downloadEncryptedMedia(storagePath);
-    await diskCache.write(storagePath, encrypted);
-    return encrypted;
-  }
-
-  void _evictIfFull() {
-    if (_cache.length >= _maxCachedItems) {
-      _cache.remove(_cache.keys.first);
-    }
-  }
-
-  /// Download and decrypt without caching, for documents that are opened once
-  /// and may be far larger than a thumbnail.
-  Future<Uint8List> fetchUncached({
-    required String threadId,
-    required String storagePath,
-  }) async {
-    final hit = _cache[storagePath];
-    if (hit != null) return hit;
-    final encrypted = await _encryptedBytes(storagePath);
-    return cryptoService.decryptMedia(
-      threadId: threadId,
-      encryptedBytes: encrypted,
-    );
-  }
-
-  void clear() {
-    _cache.clear();
-    _inFlight.clear();
-  }
-
-  /// Also drops the persisted ciphertext; used on sign-out.
-  Future<void> clearAll() async {
-    clear();
-    await diskCache.clear();
-  }
-}
+export '../../../application/services/chat_media_loader.dart';
 
 /// Renders decrypted image/video attachments inside a bubble.
 class ChatMediaPreview extends StatefulWidget {
@@ -145,65 +41,46 @@ class _ChatMediaPreviewState extends State<ChatMediaPreview> {
 
   static const _maxAutoRetries = 3;
 
-  /// Kept after the send finishes so a very fast upload does not flash.
-  MediaSendStatus? _visibleStatus;
-  Timer? _linger;
   Timer? _retryTimer;
-  DateTime? _shownAt;
-
-  /// How long the overlay stays up once it has appeared.
-  static const _minVisible = Duration(milliseconds: 450);
 
   @override
   void initState() {
     super.initState();
+    widget.loader.addListener(_onLoaderChanged);
     _future = _start();
-    _visibleStatus = widget.sendStatus;
-    if (_visibleStatus != null) _shownAt = DateTime.now();
   }
 
   @override
   void didUpdateWidget(ChatMediaPreview oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.message.previewRef != widget.message.previewRef) {
+    if (oldWidget.loader != widget.loader) {
+      oldWidget.loader.removeListener(_onLoaderChanged);
+      widget.loader.addListener(_onLoaderChanged);
+    }
+    if (oldWidget.message.previewRef != widget.message.previewRef ||
+        oldWidget.message.threadId != widget.message.threadId ||
+        oldWidget.message.messageId != widget.message.messageId ||
+        oldWidget.loader != widget.loader ||
+        (oldWidget.sendStatus != null && widget.sendStatus == null)) {
       _attempt = 0;
       _retryTimer?.cancel();
       _future = _start();
     }
-    if (oldWidget.sendStatus != widget.sendStatus) _syncStatus();
   }
 
-  /// Mirrors the incoming status, but holds the last frame long enough to be
-  /// seen when a small attachment finishes almost instantly.
-  void _syncStatus() {
-    final incoming = widget.sendStatus;
-    _linger?.cancel();
-    if (incoming != null) {
-      _shownAt ??= DateTime.now();
-      setState(() => _visibleStatus = incoming);
-      return;
-    }
-    final shownAt = _shownAt;
-    if (shownAt == null) {
-      setState(() => _visibleStatus = null);
-      return;
-    }
-    final elapsed = DateTime.now().difference(shownAt);
-    if (elapsed >= _minVisible) {
-      _shownAt = null;
-      setState(() => _visibleStatus = null);
-      return;
-    }
-    _linger = Timer(_minVisible - elapsed, () {
-      if (!mounted) return;
-      _shownAt = null;
-      setState(() => _visibleStatus = null);
+  void _onLoaderChanged() {
+    final ref = widget.message.previewRef;
+    final bytes = ref == null ? null : widget.loader.cached(ref);
+    if (!mounted || bytes == null) return;
+    _retryTimer?.cancel();
+    setState(() {
+      _future = Future.value(bytes);
     });
   }
 
   @override
   void dispose() {
-    _linger?.cancel();
+    widget.loader.removeListener(_onLoaderChanged);
     _retryTimer?.cancel();
     super.dispose();
   }
@@ -218,7 +95,9 @@ class _ChatMediaPreviewState extends State<ChatMediaPreview> {
   void _retryNow() {
     if (!mounted) return;
     _retryTimer?.cancel();
-    setState(() => _future = _start());
+    setState(() {
+      _future = _start();
+    });
   }
 
   /// Null while an outgoing attachment is still uploading: there is no object
@@ -227,6 +106,9 @@ class _ChatMediaPreviewState extends State<ChatMediaPreview> {
     final message = widget.message;
     final ref = message.previewRef;
     if (ref == null) return null;
+    final cached = widget.loader.cached(ref);
+    if (cached != null) return Future.value(cached);
+    if (widget.sendStatus != null) return null;
     // Without a poster thumbnail the only blob is the whole video, which
     // cannot be drawn as an image; don't download it just to fail decoding.
     if (message.mediaType == MessageType.video &&
@@ -243,24 +125,12 @@ class _ChatMediaPreviewState extends State<ChatMediaPreview> {
     // bubble does not jump when the decrypted image arrives.
     const width = 220.0;
     final height = (width / (meta?.aspectRatio ?? 4 / 3)).clamp(80.0, 320.0);
-    final status = _visibleStatus;
 
     return GestureDetector(
       onTap: widget.onTap,
       child: ClipRRect(
         borderRadius: BorderRadius.circular(10),
-        child: SizedBox(
-          width: width,
-          height: height,
-          child: Stack(
-            fit: StackFit.expand,
-            children: [
-              _buildImage(),
-              if (status != null)
-                _UploadOverlay(status: status, onCancel: widget.onCancel),
-            ],
-          ),
-        ),
+        child: SizedBox(width: width, height: height, child: _buildImage()),
       ),
     );
   }
@@ -274,7 +144,8 @@ class _ChatMediaPreviewState extends State<ChatMediaPreview> {
         color: Colors.black26,
         child:
             widget.message.mediaType == MessageType.video &&
-                widget.message.mediaRef != null
+                widget.message.mediaRef != null &&
+                widget.sendStatus == null
             ? const Center(
                 child: CircleAvatar(
                   backgroundColor: Colors.black54,
@@ -326,10 +197,16 @@ class _ChatMediaPreviewState extends State<ChatMediaPreview> {
               // neutral tile under the play button instead.
               errorBuilder: (_, _, _) => const ColoredBox(
                 color: Colors.black54,
-                child: SizedBox.expand(),
+                child: Center(
+                  child: Icon(
+                    Icons.broken_image_outlined,
+                    color: Colors.white70,
+                  ),
+                ),
               ),
             ),
-            if (widget.message.mediaType == MessageType.video)
+            if (widget.message.mediaType == MessageType.video &&
+                widget.sendStatus == null)
               const Center(
                 child: CircleAvatar(
                   backgroundColor: Colors.black54,
@@ -343,72 +220,9 @@ class _ChatMediaPreviewState extends State<ChatMediaPreview> {
   }
 }
 
-/// Dimmed progress ring drawn over an attachment while it is being sent.
-///
-/// Sending has phases that cannot report byte counts (compressing, encrypting),
-/// so the ring spins indeterminately there and switches to a percentage once
-/// the upload is actually moving.
-class _UploadOverlay extends StatelessWidget {
-  const _UploadOverlay({required this.status, this.onCancel});
-
-  final MediaSendStatus status;
-  final VoidCallback? onCancel;
-
-  @override
-  Widget build(BuildContext context) {
-    final indeterminate = status.isIndeterminate;
-    return ColoredBox(
-      color: Colors.black45,
-      child: Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            SizedBox(
-              width: 44,
-              height: 44,
-              child: Stack(
-                alignment: Alignment.center,
-                children: [
-                  CircularProgressIndicator(
-                    value: indeterminate ? null : status.progress,
-                    strokeWidth: 3,
-                    color: Colors.white,
-                    backgroundColor: Colors.white24,
-                  ),
-                  if (onCancel != null)
-                    IconButton(
-                      onPressed: onCancel,
-                      tooltip: 'Cancel',
-                      padding: EdgeInsets.zero,
-                      icon: const Icon(Icons.close, color: Colors.white),
-                    )
-                  else if (!indeterminate)
-                    Text(
-                      '${(status.progress * 100).clamp(0, 100).toStringAsFixed(0)}%',
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 10,
-                      ),
-                    ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 6),
-            Text(
-              status.label,
-              style: const TextStyle(color: Colors.white, fontSize: 11),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
 /// Renders an encrypted document attachment and opens it on tap.
 ///
-/// Opening needs a real file for the external viewer, so the decrypted bytes
-/// are written to a private cache folder that is emptied before every open.
+/// PDF viewing uses memory only; other formats remain securely storable.
 class ChatDocumentTile extends StatefulWidget {
   const ChatDocumentTile({
     super.key,
@@ -436,44 +250,42 @@ class ChatDocumentTile extends StatefulWidget {
 class _ChatDocumentTileState extends State<ChatDocumentTile> {
   bool _opening = false;
 
-  static const _openDirName = 'chat_open';
-
   Future<void> _open() async {
     final ref = widget.message.mediaRef;
     if (ref == null || _opening) return;
     final messenger = ScaffoldMessenger.maybeOf(context);
+    if (!(widget.message.documentName?.toLowerCase().endsWith('.pdf') ??
+        false)) {
+      messenger?.showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Preview unavailable for this format. You can move it to the vault.',
+          ),
+        ),
+      );
+      return;
+    }
     setState(() => _opening = true);
+    Uint8List? bytes;
     try {
-      final bytes = await widget.loader.fetchUncached(
+      bytes = await widget.loader.fetchUncached(
         threadId: widget.message.threadId,
         storagePath: ref,
       );
-      final tmp = await getTemporaryDirectory();
-      final dir = Directory(p.join(tmp.path, _openDirName));
-      if (await dir.exists()) await dir.delete(recursive: true);
-      await dir.create(recursive: true);
-      final file = File(p.join(dir.path, _safeName()));
-      await file.writeAsBytes(bytes, flush: true);
-      final result = await OpenFilex.open(file.path);
-      if (result.type != ResultType.done) {
-        messenger?.showSnackBar(
-          SnackBar(content: Text('No app can open this file: ${result.message}')),
-        );
-      }
+      if (!mounted) return;
+      await const AndroidChatSecureMediaService().showPdf(bytes);
+    } on PlatformException catch (error) {
+      messenger?.showSnackBar(
+        SnackBar(content: Text(error.message ?? 'PDF preview unavailable.')),
+      );
     } catch (e) {
       messenger?.showSnackBar(
         SnackBar(content: Text('Could not open document: $e')),
       );
     } finally {
+      bytes?.fillRange(0, bytes.length, 0);
       if (mounted) setState(() => _opening = false);
     }
-  }
-
-  /// A path-safe file name that keeps the original extension for the viewer.
-  String _safeName() {
-    final raw = widget.message.documentName ?? widget.message.messageId;
-    final cleaned = p.basename(raw).replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
-    return cleaned.isEmpty ? widget.message.messageId : cleaned;
   }
 
   @override
@@ -482,7 +294,9 @@ class _ChatDocumentTileState extends State<ChatDocumentTile> {
     final size = widget.message.mediaMeta?.readableSize ?? '';
     final color = widget.textColor;
     return InkWell(
-      onTap: widget.message.mediaRef == null ? null : _open,
+      onTap: widget.message.mediaRef == null || widget.sendStatus != null
+          ? null
+          : _open,
       borderRadius: BorderRadius.circular(10),
       child: Container(
         width: 240,
@@ -496,19 +310,16 @@ class _ChatDocumentTileState extends State<ChatDocumentTile> {
             SizedBox(
               width: 36,
               height: 36,
-              child: widget.sendStatus != null && widget.onCancel != null
-                  ? IconButton(
-                      onPressed: widget.onCancel,
-                      tooltip: 'Cancel',
-                      padding: EdgeInsets.zero,
-                      icon: Icon(Icons.close_rounded, color: color),
-                    )
-                  : _opening
+              child: _opening
                   ? const Padding(
                       padding: EdgeInsets.all(8),
                       child: CircularProgressIndicator(strokeWidth: 2),
                     )
-                  : Icon(Icons.insert_drive_file_rounded, color: color, size: 32),
+                  : Icon(
+                      Icons.insert_drive_file_rounded,
+                      color: color,
+                      size: 32,
+                    ),
             ),
             const SizedBox(width: 10),
             Expanded(
@@ -522,25 +333,7 @@ class _ChatDocumentTileState extends State<ChatDocumentTile> {
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(color: color, fontWeight: FontWeight.w600),
                   ),
-                  if (widget.sendStatus != null) ...[
-                    const SizedBox(height: 6),
-                    LinearProgressIndicator(
-                      value: widget.sendStatus!.isIndeterminate
-                          ? null
-                          : widget.sendStatus!.progress,
-                      minHeight: 4,
-                      color: color,
-                      backgroundColor: color.withValues(alpha: 0.2),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      widget.sendStatus!.label,
-                      style: TextStyle(
-                        color: color.withValues(alpha: 0.7),
-                        fontSize: 11,
-                      ),
-                    ),
-                  ] else if (size.isNotEmpty)
+                  if (size.isNotEmpty)
                     Text(
                       size,
                       style: TextStyle(

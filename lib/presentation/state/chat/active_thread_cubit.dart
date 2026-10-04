@@ -1,4 +1,5 @@
 import 'dart:async';
+import '../../../application/services/android_chat_uploads.dart';
 import 'dart:typed_data';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:equatable/equatable.dart';
@@ -248,6 +249,7 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
     required this.myUid,
     this.imageCompressor = const ImageCompressor(),
     this.onMediaReady,
+    this.androidUploads,
     ChatSearchIndexRepository searchIndex =
         const NoopChatSearchIndexRepository(),
     Stream<List<ConnectivityResult>>? connectivityStream,
@@ -257,6 +259,11 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
        ),
        super(const ActiveThreadLoading()) {
     WidgetsBinding.instance.addObserver(this);
+    _androidUploadSub = androidUploads?.changes.listen(
+      _syncAndroidUploads,
+      onError: (Object error) =>
+          _reportActionError('Could not read upload status.'),
+    );
     // Auto-drain the outbox the moment connectivity is restored, instead of
     // only retrying the next time the user happens to reopen the thread —
     // this is what makes queued offline messages "send automatically once
@@ -286,6 +293,78 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
   final OutboxRepository outbox;
   final ChatCryptoService cryptoService;
   final String myUid;
+  final AndroidChatUploads? androidUploads;
+  StreamSubscription<List<AndroidUploadJob>>? _androidUploadSub;
+  final Set<String> _acknowledgedUploads = {};
+
+  Future<void> _syncAndroidUploads(List<AndroidUploadJob> jobs) async {
+    if (isClosed) return;
+    final threadId = _currentThreadId;
+    for (final job in jobs) {
+      var message = job.message;
+      if (message.senderId != myUid ||
+          message.threadId != threadId ||
+          _afterClearWatermark([message]).isEmpty) {
+        continue;
+      }
+      if (job.status.lifecycle == MediaUploadLifecycle.cancelled) {
+        _pending.remove(message.messageId);
+        _setUploadStatus(message.messageId, null);
+        continue;
+      }
+      if (_buffer.containsKey(message.messageId)) {
+        _pending.remove(message.messageId);
+        _setUploadStatus(message.messageId, null);
+        if (job.status.lifecycle == MediaUploadLifecycle.completed &&
+            _acknowledgedUploads.add(message.messageId)) {
+          try {
+            // Retire the native intent only after the canonical server copy
+            // (including edits, receipts and tombstones) is durable locally.
+            await messageCache.save([_buffer[message.messageId]!]);
+            await androidUploads!.acknowledge(message.messageId);
+          } catch (_) {
+            _acknowledgedUploads.remove(message.messageId);
+            _reportActionError(
+              'Upload sent; local recovery checkpoint could not be saved.',
+            );
+          }
+          if (isClosed || _currentThreadId != threadId) return;
+        }
+        continue;
+      }
+      final existing = _pending[message.messageId];
+      if (existing?.localDecryptedText == null) {
+        message = (await _decryptAll([message], message.threadId)).single;
+        if (isClosed || _currentThreadId != threadId) return;
+      } else {
+        message = message.withDecryptedText(existing!.localDecryptedText!);
+      }
+      _pending[message.messageId] = message;
+      _setUploadStatus(
+        message.messageId,
+        job.status.lifecycle == MediaUploadLifecycle.completed
+            ? null
+            : job.status,
+      );
+    }
+    _emitMessages();
+  }
+
+  Future<void> pauseUpload(String messageId) async {
+    try {
+      await androidUploads?.pause(messageId);
+    } catch (_) {
+      _reportActionError('Could not pause the upload. Retry from the chat.');
+    }
+  }
+
+  Future<void> resumeUpload(String messageId) async {
+    try {
+      await androidUploads?.resume(messageId);
+    } catch (_) {
+      _reportActionError('Could not resume the upload. Retry from the chat.');
+    }
+  }
 
   /// Downscales outgoing photos and builds their previews.
   final ImageCompressor imageCompressor;
@@ -483,6 +562,7 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
       }
       _pending[item.messageId] = message;
     }
+    if (androidUploads != null) await _syncAndroidUploads(androidUploads!.jobs);
 
     // Paint from the local cache before Firestore answers. Without this the
     // thread shows a spinner on every open, even for conversations whose
@@ -666,6 +746,21 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
       _showPending(item, decryptedPreview, status: MessageStatus.sending);
     }
     try {
+      if (androidUploads != null && item.mediaType != null) {
+        if (item.mediaRef == null) {
+          _reportActionError(
+            'This older attachment cannot be recovered. Reattach the original file.',
+          );
+          return;
+        }
+        await androidUploads!.recoverUploaded(
+          item.toOptimisticMessage(),
+          item.recipientUid,
+        );
+        await outbox.remove(item.messageId);
+        await _syncAndroidUploads(androidUploads!.jobs);
+        return;
+      }
       final msg = await messageRepository.sendMessage(
         threadId: item.threadId,
         senderId: item.senderId,
@@ -749,11 +844,22 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
 
   /// Retry a single failed message from its bubble.
   Future<void> retryMessage(String messageId) async {
+    if (androidUploads?.jobs.any((job) => job.message.messageId == messageId) ==
+        true) {
+      await androidUploads!.retry(messageId);
+      return;
+    }
     final threadId = _currentThreadId;
     if (threadId == null) return;
     final queued = await outbox.pendingForThread(threadId);
     for (final item in queued) {
       if (item.messageId == messageId) {
+        if (item.mediaType != null && item.mediaRef == null) {
+          _reportActionError(
+            'Original file unavailable. Reattach or discard this message.',
+          );
+          return;
+        }
         await _deliver(item);
         return;
       }
@@ -762,6 +868,11 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
 
   /// Abandon a failed message.
   Future<void> discardMessage(String messageId) async {
+    if (androidUploads?.jobs.any((job) => job.message.messageId == messageId) ==
+        true) {
+      await cancelUpload(messageId);
+      return;
+    }
     await outbox.remove(messageId);
     _pending.remove(messageId);
     _emitMessages();
@@ -1560,6 +1671,72 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
     if (message.deletedForEveryone) return;
 
     try {
+      if (androidUploads != null && message.mediaRef != null) {
+        final ciphertext = await mediaRepository.downloadEncryptedMedia(
+          message.mediaRef!,
+        );
+        final plain = await cryptoService.decryptMedia(
+          threadId: message.threadId,
+          encryptedBytes: ciphertext,
+        );
+        Uint8List? thumbnail;
+        try {
+          final id = _uuid.v4();
+          final sourceThumb = message.mediaMeta?.thumbRef;
+          var meta = message.mediaMeta;
+          if (sourceThumb != null) {
+            thumbnail = await cryptoService.decryptMedia(
+              threadId: message.threadId,
+              encryptedBytes: await mediaRepository.downloadEncryptedMedia(
+                sourceThumb,
+              ),
+            );
+            meta = MediaMeta(
+              width: meta?.width,
+              height: meta?.height,
+              sizeBytes: plain.length,
+              thumbRef: 'chat_media/$targetThreadId/$id/thumb.enc',
+            );
+          } else {
+            meta = MediaMeta(
+              width: meta?.width,
+              height: meta?.height,
+              sizeBytes: plain.length,
+            );
+          }
+          await androidUploads!.enqueue(
+            message: ChatMessage(
+              messageId: id,
+              threadId: targetThreadId,
+              senderId: myUid,
+              encryptedText: await cryptoService.encryptMessage(
+                threadId: targetThreadId,
+                plaintext: message.mediaPreview,
+              ),
+              sentAt: DateTime.now().toUtc(),
+              deletedFor: const [],
+              mediaType: message.mediaType,
+              mediaMeta: meta,
+              isForwarded: true,
+            ),
+            recipientUid: targetRecipientUid,
+            ciphertext: await cryptoService.encryptMedia(
+              threadId: targetThreadId,
+              bytes: plain,
+            ),
+            thumbnail: thumbnail == null
+                ? null
+                : await cryptoService.encryptMedia(
+                    threadId: targetThreadId,
+                    bytes: thumbnail,
+                  ),
+          );
+        } finally {
+          plain.fillRange(0, plain.length, 0);
+          thumbnail?.fillRange(0, thumbnail.length, 0);
+        }
+        return;
+      }
       String preview;
       String? storagePath;
 
@@ -1686,8 +1863,14 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
   /// bubble. Has no effect once delivery has started.
   Future<void> cancelUpload(String messageId) async {
     final token = _uploadTokens[messageId];
+    if (token != null) token.cancel();
+    if (androidUploads?.jobs.any((job) => job.message.messageId == messageId) ==
+        true) {
+      await androidUploads!.cancel(messageId);
+      await _syncAndroidUploads(androidUploads!.jobs);
+      return;
+    }
     if (token == null) return;
-    token.cancel();
     _setUploadStatus(messageId, null);
     await discardMessage(messageId);
   }
@@ -1697,6 +1880,150 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
     try {
       await mediaRepository.deleteMedia(storagePath);
     } catch (_) {}
+  }
+
+  Future<void> _sendAndroidMedia({
+    required String messageId,
+    required List<int> rawBytes,
+    required MessageType type,
+    String? filename,
+    required ImageQuality quality,
+    bool propagateFailure = false,
+  }) async {
+    final uploads = androidUploads!;
+    final threadId = _currentThreadId;
+    final recipient = _otherUser?.uid;
+    if (threadId == null || recipient == null) {
+      if (propagateFailure) throw StateError('Open a chat before recording.');
+      return;
+    }
+    if (_uploadTokens.containsKey(messageId) ||
+        uploads.jobs.any((job) => job.message.messageId == messageId)) {
+      _reportActionError('This attachment is already queued.');
+      if (propagateFailure)
+        throw StateError('This attachment is already queued.');
+      return;
+    }
+    if (rawBytes.isEmpty || rawBytes.length > maxAttachmentBytes) {
+      _reportActionError(
+        'Attachments must be nonempty and smaller than 64 MB.',
+      );
+      if (propagateFailure)
+        throw StateError('Attachment is empty or too large.');
+      return;
+    }
+    final token = _uploadTokens[messageId] = UploadCancelToken();
+    final bytes = Uint8List.fromList(rawBytes);
+    Uint8List? preparedBytes;
+    Uint8List? thumb;
+    try {
+      _setUploadStatus(messageId, const MediaSendStatus.preparing());
+      final preview = ChatMessage.mediaPreviewFor(type, filename: filename);
+      final text = await cryptoService.encryptMessage(
+        threadId: threadId,
+        plaintext: preview,
+      );
+      if (token.isCancelled) throw const UploadCancelledException();
+      var meta = _buildMediaMeta(type, bytes);
+      _pending[messageId] = ChatMessage(
+        messageId: messageId,
+        threadId: threadId,
+        senderId: myUid,
+        encryptedText: text,
+        sentAt: DateTime.now().toUtc(),
+        deletedFor: const [],
+        mediaType: type,
+        mediaRef: 'chat_media/$threadId/$messageId/media.enc',
+        mediaMeta: meta,
+        localDecryptedText: preview,
+        status: MessageStatus.sending,
+      );
+      _emitMessages();
+      if (type == MessageType.image) {
+        final prepared = await imageCompressor.prepare(
+          bytes: bytes,
+          quality: quality,
+        );
+        preparedBytes = prepared.bytes;
+        thumb = prepared.thumbnail.isEmpty ? null : prepared.thumbnail;
+        meta = _buildMediaMeta(
+          type,
+          preparedBytes,
+          width: prepared.width,
+          height: prepared.height,
+        );
+      } else {
+        preparedBytes = bytes;
+      }
+      if (token.isCancelled) throw const UploadCancelledException();
+      if (preparedBytes.length > maxAttachmentBytes) {
+        throw StateError('Attachments must be smaller than 64 MB.');
+      }
+      final mediaRef = 'chat_media/$threadId/$messageId/media.enc';
+      if (thumb != null) {
+        final ref = 'chat_media/$threadId/$messageId/thumb.enc';
+        meta = meta.copyWith(thumbRef: ref);
+        onMediaReady?.call(ref, thumb);
+      } else if (type == MessageType.image) {
+        onMediaReady?.call(mediaRef, preparedBytes);
+      }
+      final message = ChatMessage(
+        messageId: messageId,
+        threadId: threadId,
+        senderId: myUid,
+        encryptedText: text,
+        sentAt: DateTime.now().toUtc(),
+        deletedFor: const [],
+        mediaType: type,
+        mediaRef: mediaRef,
+        mediaMeta: meta,
+        localDecryptedText: preview,
+        status: MessageStatus.sending,
+      );
+      _pending[messageId] = message;
+      _emitMessages();
+      _setUploadStatus(
+        messageId,
+        const MediaSendStatus(phase: MediaSendPhase.encrypting, progress: 0),
+      );
+      final ciphertext = await cryptoService.encryptMedia(
+        threadId: threadId,
+        bytes: preparedBytes,
+      );
+      final encryptedThumb = thumb == null
+          ? null
+          : await cryptoService.encryptMedia(threadId: threadId, bytes: thumb);
+      if (token.isCancelled) throw const UploadCancelledException();
+      await uploads.enqueue(
+        message: message,
+        recipientUid: recipient,
+        ciphertext: ciphertext,
+        thumbnail: encryptedThumb,
+      );
+      // Deletion during the channel commit must cancel the newly accepted
+      // native intent rather than leave an unseen upload running.
+      if (token.isCancelled) {
+        await uploads.cancel(messageId);
+        throw const UploadCancelledException();
+      }
+      await _syncAndroidUploads(uploads.jobs);
+    } on UploadCancelledException {
+      _pending.remove(messageId);
+      _setUploadStatus(messageId, null);
+      _emitMessages();
+      if (propagateFailure) rethrow;
+    } catch (error) {
+      _pending.remove(messageId);
+      _setUploadStatus(messageId, null);
+      _emitMessages();
+      _reportActionError('Could not queue encrypted attachment: $error');
+      if (propagateFailure) rethrow;
+    } finally {
+      bytes.fillRange(0, bytes.length, 0);
+      preparedBytes?.fillRange(0, preparedBytes.length, 0);
+      thumb?.fillRange(0, thumb.length, 0);
+      _uploadTokens.remove(messageId);
+    }
   }
 
   /// Encrypt, upload and send an attachment.
@@ -1716,9 +2043,24 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
     required MessageType type,
     String? filename,
     ImageQuality quality = ImageQuality.high,
+    bool propagateFailure = false,
   }) async {
     final threadId = _currentThreadId;
-    if (threadId == null) return;
+    if (threadId == null) {
+      if (propagateFailure) throw StateError('Chat is no longer open.');
+      return;
+    }
+    if (androidUploads != null) {
+      await _sendAndroidMedia(
+        messageId: messageId,
+        rawBytes: rawBytes,
+        type: type,
+        filename: filename,
+        quality: quality,
+        propagateFailure: propagateFailure,
+      );
+      return;
+    }
     if (rawBytes.isEmpty) {
       _reportActionError('That file is empty.');
       return;
@@ -2128,6 +2470,16 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
 
   Future<void> deleteMessageForMe(ChatMessage message) async {
     if (_currentThreadId == null) return;
+    if (_uploadTokens.containsKey(message.messageId) ||
+        androidUploads?.jobs.any(
+              (job) =>
+                  job.message.messageId == message.messageId &&
+                  job.status.lifecycle != MediaUploadLifecycle.completed,
+            ) ==
+            true) {
+      await cancelUpload(message.messageId);
+      return;
+    }
     await messageRepository.deleteMessageForUser(
       threadId: _currentThreadId!,
       messageId: message.messageId,
@@ -2137,6 +2489,16 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
 
   Future<void> deleteMessageForEveryone(ChatMessage message) async {
     if (_currentThreadId == null) return;
+    if (_uploadTokens.containsKey(message.messageId) ||
+        androidUploads?.jobs.any(
+              (job) =>
+                  job.message.messageId == message.messageId &&
+                  job.status.lifecycle != MediaUploadLifecycle.completed,
+            ) ==
+            true) {
+      await cancelUpload(message.messageId);
+      return;
+    }
     if (message.mediaRef != null) {
       await mediaRepository.deleteMedia(message.mediaRef!);
     }
@@ -2209,6 +2571,7 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
     _openGeneration++;
     _openTimeoutTimer?.cancel();
     _connectivitySub?.cancel();
+    await _androidUploadSub?.cancel();
     if (_currentThreadId != null) {
       await typingRepository.setTyping(
         threadId: _currentThreadId!,

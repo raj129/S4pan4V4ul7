@@ -1,5 +1,8 @@
 import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'attachment_upload_progress.dart';
 import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:intl/intl.dart';
@@ -16,6 +19,7 @@ import '../../theme/chat_theme.dart';
 import 'animated_emoji.dart';
 import 'chat_bubble_shape.dart';
 import 'chat_media_preview.dart';
+import 'chat_audio_player.dart';
 import '../../state/chat/media_send_status.dart';
 
 /// Emoji offered in the quick reaction bar, matching WhatsApp's default set.
@@ -57,6 +61,8 @@ class MessageBubble extends StatelessWidget {
 
     this.sendStatus,
     this.onCancelUpload,
+    this.onPauseUpload,
+    this.onResumeUpload,
   });
 
   final ChatMessage message;
@@ -88,7 +94,7 @@ class MessageBubble extends StatelessWidget {
   final void Function(String messageId)? onTapQuote;
 
   /// Re-attempt delivery of a message still stuck in the outbox.
-  final VoidCallback? onRetry;
+  final FutureOr<void> Function()? onRetry;
 
   /// Drop a failed message from the outbox without sending it.
   final VoidCallback? onDiscard;
@@ -110,7 +116,9 @@ class MessageBubble extends StatelessWidget {
   final MediaSendStatus? sendStatus;
 
   /// Stops an attachment that is still being sent.
-  final VoidCallback? onCancelUpload;
+  final FutureOr<void> Function()? onCancelUpload;
+  final FutureOr<void> Function()? onPauseUpload;
+  final FutureOr<void> Function()? onResumeUpload;
 
   @override
   Widget build(BuildContext context) {
@@ -158,7 +166,6 @@ class MessageBubble extends StatelessWidget {
               isOffline: isOffline,
               mediaLoader: mediaLoader,
               sendStatus: sendStatus,
-              onCancelUpload: onCancelUpload,
               onTapQuote: onTapQuote,
               textColor: cs.onSurface,
               metaColor: cs.onSurfaceVariant,
@@ -188,7 +195,6 @@ class MessageBubble extends StatelessWidget {
                 isOffline: isOffline,
                 mediaLoader: mediaLoader,
                 sendStatus: sendStatus,
-                onCancelUpload: onCancelUpload,
                 onTapQuote: onTapQuote,
                 textColor: isHighlighted ? cs.onTertiaryContainer : textColor,
                 metaColor: isHighlighted ? cs.onTertiaryContainer : textColor,
@@ -250,6 +256,14 @@ class MessageBubble extends StatelessWidget {
                 ),
               ),
             ),
+            if (sendStatus != null)
+              AttachmentUploadProgress(
+                status: sendStatus!,
+                onPause: onPauseUpload,
+                onResume: onResumeUpload,
+                onRetry: onRetry,
+                onCancel: onCancelUpload,
+              ),
             if (grouped.isNotEmpty)
               _ReactionRow(grouped: grouped, myUid: myUid, onTap: onReact),
           ],
@@ -374,7 +388,7 @@ class MessageBubble extends StatelessWidget {
             if (onSaveToVault != null)
               ListTile(
                 leading: const Icon(Icons.lock_outline_rounded),
-                title: const Text('Save to vault'),
+                title: const Text('Move to vault'),
                 onTap: () {
                   Navigator.pop(sheetContext);
                   onSaveToVault!();
@@ -426,7 +440,6 @@ class _BubbleContent extends StatelessWidget {
     this.highlightQuery = '',
 
     this.sendStatus,
-    this.onCancelUpload,
   });
 
   final ChatMessage message;
@@ -444,7 +457,6 @@ class _BubbleContent extends StatelessWidget {
 
   /// Send progress of this attachment, null once it is sent.
   final MediaSendStatus? sendStatus;
-  final VoidCallback? onCancelUpload;
 
   @override
   Widget build(BuildContext context) {
@@ -487,13 +499,25 @@ class _BubbleContent extends StatelessWidget {
                 ? null
                 : () => onTapQuote!(message.replyTo!.messageId),
           ),
-        if (message.isDocument)
+        if (message.mediaType == MessageType.audio && sendStatus != null)
+          const ListTile(
+            leading: Icon(Icons.audio_file_outlined),
+            title: Text('Audio recording'),
+          )
+        else if (message.mediaType == MessageType.audio &&
+            message.mediaRef != null)
+          ChatAudioPlayer(
+            loadBytes: () => mediaLoader.fetchUncached(
+              threadId: message.threadId,
+              storagePath: message.mediaRef!,
+            ),
+          )
+        else if (message.isDocument)
           ChatDocumentTile(
             message: message,
             loader: mediaLoader,
             textColor: textColor,
             sendStatus: sendStatus,
-            onCancel: onCancelUpload,
           )
         else if (message.hasMediaSlot)
           ClipRRect(
@@ -502,8 +526,7 @@ class _BubbleContent extends StatelessWidget {
               message: message,
               loader: mediaLoader,
               sendStatus: sendStatus,
-              onCancel: onCancelUpload,
-              onTap: message.mediaRef == null
+              onTap: message.mediaRef == null || sendStatus != null
                   ? null
                   : message.mediaType == MessageType.image
                   ? () => ChatImageViewerScreen.open(

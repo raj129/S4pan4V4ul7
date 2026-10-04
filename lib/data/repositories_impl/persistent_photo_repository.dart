@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'package:drift/drift.dart';
 import 'package:flutter/foundation.dart';
 
 import '../../domain/entities/vault_photo.dart';
@@ -18,7 +19,8 @@ abstract class PersistentPhotoRepository implements PhotoRepository {
 }
 
 /// Drift-backed implementation for persistent photo storage.
-class PersistentPhotoRepositoryImpl implements PersistentPhotoRepository {
+class PersistentPhotoRepositoryImpl
+    implements PersistentPhotoRepository, VaultAttachmentRepository {
   PersistentPhotoRepositoryImpl();
 
   late drift_db.VaultDatabase _db;
@@ -151,6 +153,26 @@ class PersistentPhotoRepositoryImpl implements PersistentPhotoRepository {
       debugPrint('❌ Failed to check checksum: $e');
       return false;
     }
+  }
+
+  @override
+  Future<VaultPhoto?> findActiveChecksum(String checksum) async {
+    _requireInitialized();
+    final rows =
+        await (_db.select(_db.photos)..where(
+              (p) => p.checksumSha256.equals(checksum) & p.isTrashed.equals(0),
+            ))
+            .get();
+    return rows.isEmpty ? null : _todomainPhoto(rows.first);
+  }
+
+  @override
+  Future<List<VaultPhoto>> listAttachments() async {
+    _requireInitialized();
+    final rows = await (_db.select(
+      _db.photos,
+    )..where((p) => p.isTrashed.equals(0))).get();
+    return rows.map(_todomainPhoto).toList();
   }
 
   @override

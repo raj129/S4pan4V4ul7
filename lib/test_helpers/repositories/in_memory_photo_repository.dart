@@ -3,8 +3,21 @@ import 'dart:io';
 import '../../domain/entities/vault_photo.dart';
 import '../../domain/repositories/photo_repository.dart';
 
-class InMemoryPhotoRepository implements PhotoRepository {
+class InMemoryPhotoRepository
+    implements PhotoRepository, VaultAttachmentRepository {
   final Map<String, VaultPhoto> _photos = {};
+
+  @override
+  Future<VaultPhoto?> findActiveChecksum(String checksum) async {
+    for (final item in _photos.values) {
+      if (!item.isTrashed && item.checksumSha256 == checksum) return item;
+    }
+    return null;
+  }
+
+  @override
+  Future<List<VaultPhoto>> listAttachments() async =>
+      _photos.values.where((p) => !p.isTrashed).toList();
 
   @override
   Future<VaultPhoto?> getPhotoById(String photoId) async => _photos[photoId];
@@ -26,6 +39,7 @@ class InMemoryPhotoRepository implements PhotoRepository {
     final start = page * pageSize;
     final filtered = _photos.values.where((p) {
       if (p.isTrashed) return false;
+      if (!p.mimeType.startsWith('image/')) return false;
       if (albumId != null && p.albumId != albumId) return false;
       if (favoritesOnly && !p.favorite) return false;
       return true;
@@ -37,9 +51,7 @@ class InMemoryPhotoRepository implements PhotoRepository {
 
   @override
   Future<List<VaultPhoto>> listTrashPhotos() async {
-    return _photos.values
-        .where((p) => p.isTrashed)
-        .toList()
+    return _photos.values.where((p) => p.isTrashed).toList()
       ..sort((a, b) => b.modifiedTimeMs.compareTo(a.modifiedTimeMs));
   }
 

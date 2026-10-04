@@ -37,6 +37,27 @@ Prerequisites: Flutter SDK >= 3.12
 - Tests: flutter test
 - Codegen: flutter pub run build_runner build --delete-conflicting-outputs
 
+## Android chat attachment privacy
+
+Received images and videos are downloaded to encrypted, app-private phone
+storage when Android permits background work. Receiving an attachment does not
+import it into the vault or make it visible in the gallery. The user chooses
+**Move to vault**, unlocks the vault, and the local full-media chat copy is removed
+only after the encrypted vault import succeeds. The chat message and remote
+attachment remain intact; a small encrypted thumbnail can remain in chat history.
+
+Chat attachment caches contain ciphertext only. Decryption is for in-app display
+and playback, not external opening or plaintext export. Existing gallery and
+document source files selected by the user are not deleted or modified.
+Unsupported formats can be stored securely even when an in-app preview is not
+available. Private storage and encryption do not protect against a compromised
+or rooted device, and managed-runtime memory cannot be guaranteed to be erased.
+
+Background work is subject to Android network, battery, Doze and execution limits.
+Force-stopping the application suspends work until Android permits it again,
+typically after the application is relaunched. A locked vault never causes an
+automatic vault import; background chat work uses separately protected chat keys.
+
 ## Android tester builds (Firebase App Distribution)
 
 The `Flutter CI` GitHub Actions workflow uploads a release APK to Firebase App
@@ -85,6 +106,46 @@ After an upload, testers in the configured group receive Firebase's invitation
 email and can install the build using the Firebase App Tester app on Android.
 
 ## Docs
+
+### Android chat attachments
+
+Android queues encrypted attachments in an app-private durable journal protected
+by Android Keystore. Transfers expose byte progress and queued, uploading, paused,
+completed, failed, cancelled, retrying and resumed states. Pause/resume/cancel and
+explicit retry retain the same message identity; restart recovery reconciles
+remote objects and commits messages transactionally to avoid duplicate messages
+and unread counts. Network-constrained WorkManager work retries offline queues,
+while active transfers use Android foreground-service notifications.
+Each pending attachment has one progress component with processed/total transfer
+bytes, percentage and applicable pause/resume/retry/cancel actions. Deleting a
+pending message cancels its transfer and removes its encrypted staging files.
+Expired Firebase upload sessions restart the same ciphertext safely; paused
+jobs do not resume merely because connectivity returns.
+
+Received images and videos download into an account-scoped ciphertext cache.
+They are **not automatically imported into the vault**. **Move to vault** requires
+an unlocked vault, encrypts the attachment directly, and removes the full chat
+cache copy only after a durable, authenticated import. Interrupted committed
+moves resume on thread reopen or vault unlock; moved markers prevent background
+redownload. Original files selected from other apps are not deleted.
+
+Document/gallery acquisition, recording, image preview, audio/video playback
+and supported PDF preview do not create chat plaintext files or launch external
+viewers. Chat keeps the original external Android camera experience: the camera
+app can create plaintext before handing the captured result back. Returned
+photos are encrypted promptly for lock/restart recovery; only camera-generated
+copies inside this app's temporary directory are removed, never gallery
+originals. Recovered captures require confirmation before sending.
+Recording supports start/pause/resume/cancel/stop, uses encrypted audio spools,
+and closes after durable queue acceptance (including offline). Videos preserve
+their aspect ratio and use modern Android Media3 playback controls. Native
+chat viewer dialogs do not trigger the background lock merely by taking window
+focus; sending the app to the background still applies the normal lock policy. Other
+attachment formats can be stored in the vault without preview. Attachments are
+limited to less than 64 MB; PDF preview requires Android 8 or newer. Background
+processing requires available chat keys and remains subject to Android network,
+foreground-service, battery and force-stop restrictions. Vault keys are never
+unlocked by background work.
 
 See STORAGE_ARCHITECTURE.md and PERSISTENCE_FIX_SUMMARY.md for persistence design notes and rationale.
 

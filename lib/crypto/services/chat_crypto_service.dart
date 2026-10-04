@@ -23,13 +23,14 @@ import '../../domain/entities/wrapped_identity_key.dart';
 /// Rekey: Delete the stored thread key to force a new ECDH round.
 class ChatCryptoService {
   ChatCryptoService({FlutterSecureStorage? storage})
-      : _storage = storage ?? const FlutterSecureStorage();
+    : _storage = storage ?? const FlutterSecureStorage();
 
   final FlutterSecureStorage _storage;
 
   static const _privateKeyStorageKey = 'chat_ecdh_private_key';
   static const _publicKeyStorageKey = 'chat_ecdh_public_key';
   static const _threadKeyPrefix = 'chat_thread_key_';
+  static const _accountStorageKey = 'chat_key_account';
 
   /// Iteration count for the PIN → key-encryption-key derivation. Deliberately
   /// high: the wrapped blob lives in Firestore and a PIN is low entropy.
@@ -60,6 +61,23 @@ class ChatCryptoService {
 
   static const _searchHkdfContext = 'photo_vault/chat/search-key/v1';
 
+  /// Foreground identity sync owns account changes; workers must never claim
+  /// keys left behind by a different Firebase account.
+  Future<void> bindAccount(String uid) async {
+    if (uid.isEmpty) throw ArgumentError.value(uid, 'uid');
+    final previous = await _storage.read(key: _accountStorageKey);
+    if (previous == uid) return;
+    if (previous != null) await clearIdentity();
+    clearKeyCache();
+    await _storage.write(key: _accountStorageKey, value: uid);
+  }
+
+  Future<void> requireAccount(String uid) async {
+    if (await _storage.read(key: _accountStorageKey) != uid) {
+      throw StateError('Chat keys are unavailable for this account.');
+    }
+  }
+
   // ---------------------------------------------------------------------------
   // Identity key pair
   // ---------------------------------------------------------------------------
@@ -85,7 +103,9 @@ class ChatCryptoService {
   Future<SimpleKeyPair> _loadLocalKeyPair() async {
     final privB64 = await _storage.read(key: _privateKeyStorageKey);
     if (privB64 == null) {
-      throw StateError('ECDH key pair not initialised. Call getOrCreatePublicKey first.');
+      throw StateError(
+        'ECDH key pair not initialised. Call getOrCreatePublicKey first.',
+      );
     }
     final privBytes = base64.decode(privB64);
     return _x25519.newKeyPairFromSeed(privBytes);
@@ -115,7 +135,9 @@ class ChatCryptoService {
       nonce: nonce,
     );
     return WrappedIdentityKey(
-      ciphertextB64: base64.encode(_concat(nonce, box.cipherText, box.mac.bytes)),
+      ciphertextB64: base64.encode(
+        _concat(nonce, box.cipherText, box.mac.bytes),
+      ),
       saltB64: base64.encode(salt),
       iterations: identityKdfIterations,
     );
@@ -149,7 +171,10 @@ class ChatCryptoService {
     final pair = await _x25519.newKeyPairFromSeed(privBytes);
     final pubBytes = await pair.extractPublicKey();
     final pubB64 = base64.encode(pubBytes.bytes);
-    await _storage.write(key: _privateKeyStorageKey, value: base64.encode(privBytes));
+    await _storage.write(
+      key: _privateKeyStorageKey,
+      value: base64.encode(privBytes),
+    );
     await _storage.write(key: _publicKeyStorageKey, value: pubB64);
     return pubB64;
   }
@@ -186,7 +211,10 @@ class ChatCryptoService {
 
     final localPair = await _loadLocalKeyPair();
     final remotePublicKeyBytes = base64.decode(otherPublicKeyB64);
-    final remotePublicKey = SimplePublicKey(remotePublicKeyBytes, type: KeyPairType.x25519);
+    final remotePublicKey = SimplePublicKey(
+      remotePublicKeyBytes,
+      type: KeyPairType.x25519,
+    );
 
     final sharedSecret = await _x25519.sharedSecretKey(
       keyPair: localPair,
@@ -211,7 +239,9 @@ class ChatCryptoService {
     if (cached != null) return cached;
     final b64 = await _storage.read(key: '$_threadKeyPrefix$threadId');
     if (b64 == null) {
-      throw StateError('No thread key for $threadId. Call deriveAndStoreThreadKey first.');
+      throw StateError(
+        'No thread key for $threadId. Call deriveAndStoreThreadKey first.',
+      );
     }
     return _threadKeyCache[threadId] = SecretKey(base64.decode(b64));
   }
@@ -291,7 +321,7 @@ class ChatCryptoService {
     final encoded = base64.encode(
       _concat(nonce, secretBox.cipherText, secretBox.mac.bytes),
     );
-    _cachePlaintext(encoded, plaintext);
+    _cachePlaintext(threadId, encoded, plaintext);
     return encoded;
   }
 
@@ -304,7 +334,7 @@ class ChatCryptoService {
     required String threadId,
     required String encryptedB64,
   }) async {
-    final cached = _plaintextCache[encryptedB64];
+    final cached = _plaintextCache['$threadId:$encryptedB64'];
     if (cached != null) return cached;
 
     final key = await _loadThreadKey(threadId);
@@ -313,16 +343,16 @@ class ChatCryptoService {
       secretKey: key,
     );
     final text = utf8.decode(plain);
-    _cachePlaintext(encryptedB64, text);
+    _cachePlaintext(threadId, encryptedB64, text);
     return text;
   }
 
-  void _cachePlaintext(String ciphertext, String plaintext) {
+  void _cachePlaintext(String threadId, String ciphertext, String plaintext) {
     if (_plaintextCache.length >= _plaintextCacheLimit) {
       // Cheap FIFO eviction — order is insertion order for a Dart LinkedHashMap.
       _plaintextCache.remove(_plaintextCache.keys.first);
     }
-    _plaintextCache[ciphertext] = plaintext;
+    _plaintextCache['$threadId:$ciphertext'] = plaintext;
   }
 
   // ---------------------------------------------------------------------------
@@ -337,7 +367,11 @@ class ChatCryptoService {
   }) async {
     final key = await _loadThreadKey(threadId);
     final nonce = _generateNonce();
-    final secretBox = await _aesGcm.encrypt(bytes, secretKey: key, nonce: nonce);
+    final secretBox = await _aesGcm.encrypt(
+      bytes,
+      secretKey: key,
+      nonce: nonce,
+    );
     return _concat(nonce, secretBox.cipherText, secretBox.mac.bytes);
   }
 

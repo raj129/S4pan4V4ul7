@@ -406,12 +406,10 @@ class VaultDatabase extends _$VaultDatabase {
   /// Get non-trashed photos with pagination, ordered by most recent imported first.
   Future<List<VaultPhoto>> getGalleryPhotos({int? limit, int? offset}) async {
     final query = select(photos)
-      ..where((p) => p.isTrashed.equals(0))
+      ..where((p) => p.isTrashed.equals(0) & p.mimeType.like('image/%'))
       ..orderBy([
-        (p) => OrderingTerm(
-          expression: p.importedTimeMs,
-          mode: OrderingMode.desc,
-        ),
+        (p) =>
+            OrderingTerm(expression: p.importedTimeMs, mode: OrderingMode.desc),
       ]);
     if (limit != null) {
       query.limit(limit, offset: offset);
@@ -766,7 +764,10 @@ class VaultDatabase extends _$VaultDatabase {
 
   /// Number of cached messages in a thread, optionally only those strictly
   /// older than [beforeSentAtMs].
-  Future<int> countCachedMessages(String threadId, {int? beforeSentAtMs}) async {
+  Future<int> countCachedMessages(
+    String threadId, {
+    int? beforeSentAtMs,
+  }) async {
     final count = chatMessages.messageId.count();
     final query = selectOnly(chatMessages)
       ..addColumns([count])
@@ -865,10 +866,9 @@ class VaultDatabase extends _$VaultDatabase {
       'DELETE FROM chat_search_tokens WHERE thread_id = ?',
       [threadId],
     );
-    await customStatement(
-      'DELETE FROM chat_search_state WHERE thread_id = ?',
-      [threadId],
-    );
+    await customStatement('DELETE FROM chat_search_state WHERE thread_id = ?', [
+      threadId,
+    ]);
   }
 
   /// Ids and send times of messages containing *every* token, newest first.
@@ -947,10 +947,8 @@ class VaultDatabase extends _$VaultDatabase {
     return (select(chatMessages)
           ..where((m) => m.threadId.equals(threadId))
           ..orderBy([
-            (m) => OrderingTerm(
-              expression: m.sentAtMs,
-              mode: OrderingMode.desc,
-            ),
+            (m) =>
+                OrderingTerm(expression: m.sentAtMs, mode: OrderingMode.desc),
           ]))
         .get();
   }
@@ -975,10 +973,9 @@ class VaultDatabase extends _$VaultDatabase {
   }
 
   Future<List<OutboxEntry>> getOutboxEntries() {
-    return (select(outboxMessages)..orderBy([
-          (o) => OrderingTerm(expression: o.queuedAtMs),
-        ]))
-        .get();
+    return (select(
+      outboxMessages,
+    )..orderBy([(o) => OrderingTerm(expression: o.queuedAtMs)])).get();
   }
 
   Future<List<OutboxEntry>> getOutboxForThread(String threadId) {
@@ -1000,14 +997,14 @@ class VaultDatabase extends _$VaultDatabase {
       outboxMessages,
     )..where((o) => o.messageId.equals(messageId))).getSingleOrNull();
     if (row == null) return;
-    await (update(outboxMessages)
-          ..where((o) => o.messageId.equals(messageId)))
-        .write(
-          OutboxMessagesCompanion(
-            attempts: Value(row.attempts + 1),
-            lastError: Value(error),
-          ),
-        );
+    await (update(
+      outboxMessages,
+    )..where((o) => o.messageId.equals(messageId))).write(
+      OutboxMessagesCompanion(
+        attempts: Value(row.attempts + 1),
+        lastError: Value(error),
+      ),
+    );
   }
 
   /// Generic key/value settings row, reused for small per-device flags (e.g.

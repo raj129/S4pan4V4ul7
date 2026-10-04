@@ -1,6 +1,11 @@
 import 'dart:async';
+import 'dart:io';
 
 import '../../../application/services/chat_share_inbox.dart';
+import '../../../application/services/chat_camera_recovery.dart';
+import '../../../application/services/chat_privacy_maintenance.dart';
+import '../../../application/services/chat_backup_scheduler.dart';
+import '../../../application/services/android_chat_secure_media_service.dart';
 import '../../../core/app/external_activity_guard.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
@@ -11,6 +16,8 @@ import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 import 'package:uuid/uuid.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 
 import '../../../application/services/chat_notification_service.dart';
 import '../../../application/services/chat_vault_bridge.dart';
@@ -36,6 +43,8 @@ import '../../widgets/chat/message_bubble.dart';
 import '../../widgets/chat/user_avatar.dart';
 import '../../widgets/chat/typing_indicator.dart';
 import '../../widgets/chat/vault_picker_sheet.dart';
+import '../../widgets/chat/chat_audio_recorder.dart';
+import 'chat_saved_attachments_screen.dart';
 
 /// Arguments needed to build [ThreadScreen].
 class ChatThreadArgs {
@@ -127,6 +136,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
   final _itemScrollCtrl = ItemScrollController();
   final _itemPositions = ItemPositionsListener.create();
   final _picker = ImagePicker();
+  final _secureMedia = const AndroidChatSecureMediaService();
   final _uuid = const Uuid();
   final _inputFocus = FocusNode();
 
@@ -134,6 +144,14 @@ class _ThreadScreenState extends State<ThreadScreen> {
   bool _searching = false;
   final _searchCtrl = TextEditingController();
   ChatMessage? _editingMessage;
+  bool _privacyReady = false;
+  Object? _privacyError;
+  final Set<String> _receiveScheduled = {};
+  final Set<String> _moveRecoveryChecked = {};
+  ChatCameraRecovery? _cameraRecovery;
+  bool _recoveringCamera = false;
+  bool _capturingCamera = false;
+  final Set<String> _cameraShown = {};
 
   bool get _isEditing => _editingMessage != null;
 
@@ -162,19 +180,123 @@ class _ThreadScreenState extends State<ThreadScreen> {
     super.initState();
     _inputFocus.addListener(_onInputFocusChanged);
     widget.profileService?.addListener(_onProfileChanged);
+    widget.vaultBridge.vaultSessionChanges.addListener(_recoverOnVaultUnlock);
     _textCtrl.addListener(_onTextControllerChanged);
-    context.read<ActiveThreadCubit>().openThread(
-      thread: widget.thread,
-      otherUser: widget.otherUser,
-    );
+    _prepareChat();
     _itemPositions.itemPositions.addListener(_onScroll);
     widget.notificationService?.setActiveThread(widget.thread.threadId);
-    // Opening the thread is itself a read: everything already on screen counts.
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+  }
+
+  Future<void> _prepareChat() async {
+    try {
+      await ChatPrivacyMaintenance.ensureClean();
       if (!mounted) return;
-      context.read<ActiveThreadCubit>().markVisibleAsRead();
-      _sendSharedFiles();
-    });
+      context.read<ActiveThreadCubit>().openThread(
+        thread: widget.thread,
+        otherUser: widget.otherUser,
+      );
+      setState(() {
+        _privacyReady = true;
+        _privacyError = null;
+      });
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        context.read<ActiveThreadCubit>().markVisibleAsRead();
+        _sendSharedFiles();
+      });
+    } on FileSystemException catch (error) {
+      if (mounted) setState(() => _privacyError = error);
+    } on PlatformException catch (error) {
+      if (mounted) setState(() => _privacyError = error);
+    }
+  }
+
+  Future<void> _scheduleReceivedMedia(ActiveThreadLoaded state) async {
+    if (!Platform.isAndroid) return;
+    unawaited(_recoverCameraResults());
+    unawaited(_recoverCommittedMoves(state));
+    final uid = context.read<ActiveThreadCubit>().myUid;
+    for (final message in state.messages) {
+      if (message.senderId == uid ||
+          message.isDeletedFor(uid) ||
+          message.mediaRef == null ||
+          (message.mediaType != MessageType.image &&
+              message.mediaType != MessageType.video) ||
+          !_receiveScheduled.add(message.messageId)) {
+        continue;
+      }
+
+      try {
+        await scheduleChatReceive(
+          uid: uid,
+          threadId: message.threadId,
+          messageId: message.messageId,
+        );
+      } on PlatformException {
+        _receiveScheduled.remove(message.messageId);
+        debugPrint(
+          'Received attachment background download could not be scheduled.',
+        );
+      }
+    }
+  }
+
+  void _recoverOnVaultUnlock() {
+    if (!mounted || !widget.vaultBridge.isUnlocked) return;
+    _moveRecoveryChecked.clear();
+    _cameraShown.clear();
+    unawaited(_recoverCameraResults());
+    final state = context.read<ActiveThreadCubit>().state;
+    if (state is ActiveThreadLoaded) unawaited(_recoverCommittedMoves(state));
+  }
+
+  Future<void> _recoverCommittedMoves(ActiveThreadLoaded state) async {
+    if (!Platform.isAndroid || !widget.vaultBridge.isUnlocked) return;
+    final uid = context.read<ActiveThreadCubit>().myUid;
+    for (final message in state.messages) {
+      final ref = message.mediaRef;
+      if (!mounted || !widget.vaultBridge.isUnlocked) return;
+      if (ref == null ||
+          message.senderId == uid ||
+          !_moveRecoveryChecked.add(ref)) {
+        continue;
+      }
+      final key = '$uid:$ref';
+      void checkOwner() {
+        if (!mounted || widget.mediaLoader.accountId != uid) {
+          throw StateError('Chat account changed during move recovery.');
+        }
+      }
+
+      try {
+        // Resume only a previously recorded, user-requested move. This never
+        // creates a new vault import or downloads attachment bytes.
+        final result = await widget.vaultBridge.resumeMove(
+          sourceId: '$uid:${message.threadId}:$ref',
+          onMarkMoved: () async {
+            checkOwner();
+            await widget.mediaLoader.diskCache.markMoved(key);
+          },
+          onSourceCleanup: () async {
+            checkOwner();
+            await widget.mediaLoader.removeAfterVaultMove(ref);
+          },
+        );
+        if (result?.cleanupPending == true) {
+          throw StateError('Committed attachment cleanup remains pending.');
+        }
+      } catch (_) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Previous vault move needs attention. Tap Move to vault to retry.',
+              ),
+            ),
+          );
+        }
+      }
+    }
   }
 
   static const _videoExtensions = {
@@ -288,6 +410,9 @@ class _ThreadScreenState extends State<ThreadScreen> {
   void dispose() {
     _inputFocus.removeListener(_onInputFocusChanged);
     widget.profileService?.removeListener(_onProfileChanged);
+    widget.vaultBridge.vaultSessionChanges.removeListener(
+      _recoverOnVaultUnlock,
+    );
     widget.notificationService?.setActiveThread(null);
     _textCtrl.removeListener(_onTextControllerChanged);
     _itemPositions.itemPositions.removeListener(_onScroll);
@@ -305,8 +430,34 @@ class _ThreadScreenState extends State<ThreadScreen> {
 
   @override
   Widget build(BuildContext context) {
+    if (!_privacyReady) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('Chat')),
+        body: Center(
+          child: _privacyError == null
+              ? const CircularProgressIndicator()
+              : Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Text('Could not remove old unencrypted chat copies.'),
+                    TextButton(
+                      onPressed: _prepareChat,
+                      child: const Text('Retry'),
+                    ),
+                  ],
+                ),
+        ),
+      );
+    }
     return MultiBlocListener(
       listeners: [
+        BlocListener<ActiveThreadCubit, ActiveThreadState>(
+          listener: (context, state) {
+            if (state is ActiveThreadLoaded) {
+              unawaited(_scheduleReceivedMedia(state));
+            }
+          },
+        ),
         BlocListener<ActiveThreadCubit, ActiveThreadState>(
           listenWhen: (prev, next) {
             final prevErr = prev is ActiveThreadLoaded
@@ -714,11 +865,13 @@ class _ThreadScreenState extends State<ThreadScreen> {
               isOffline: state.isOffline,
               mediaLoader: widget.mediaLoader,
               sendStatus: state.uploadProgress[msg.messageId],
+              onPauseUpload: () => cubit.pauseUpload(msg.messageId),
+              onResumeUpload: () => cubit.resumeUpload(msg.messageId),
               onCancelUpload: state.uploadProgress[msg.messageId] == null
                   ? null
-                  : () {
+                  : () async {
                       HapticFeedback.selectionClick();
-                      cubit.cancelUpload(msg.messageId);
+                      await cubit.cancelUpload(msg.messageId);
                     },
               isHighlighted:
                   _highlightedId == msg.messageId ||
@@ -746,7 +899,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
                   : null,
               canReplyFromLeftToRight: true,
               onTapQuote: _jumpToMessage,
-              onSaveToVault: msg.isMedia && !msg.isDocument
+              onSaveToVault: msg.isMedia && msg.senderId != cubit.myUid
                   ? () => _saveToVault(msg)
                   : null,
               onForward: () => _promptForward(msg),
@@ -1084,13 +1237,19 @@ class _ThreadScreenState extends State<ThreadScreen> {
   /// can outlive that context if the list rebuilds mid-dialog.
   Future<void> _confirmDeleteForMe(ChatMessage msg) async {
     final cubit = context.read<ActiveThreadCubit>();
+    final state = cubit.state;
+    final pending =
+        state is ActiveThreadLoaded &&
+        state.uploadProgress.containsKey(msg.messageId);
     final ok = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
         title: const Text('Delete message'),
-        content: const Text(
-          'Remove this message from your copy of the chat? '
-          'The other person will still see it.',
+        content: Text(
+          pending
+              ? 'Cancel this upload and delete the pending message and its temporary files?'
+              : 'Remove this message from your copy of the chat? '
+                    'The other person will still see it.',
         ),
         actions: [
           TextButton(
@@ -1105,7 +1264,15 @@ class _ThreadScreenState extends State<ThreadScreen> {
       ),
     );
     if (ok != true || !mounted) return;
-    await cubit.deleteMessageForMe(msg);
+    try {
+      await cubit.deleteMessageForMe(msg);
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not delete message: $error')),
+        );
+      }
+    }
   }
 
   /// "Delete for everyone" is destructive and irreversible, so it gets a
@@ -1138,7 +1305,15 @@ class _ThreadScreenState extends State<ThreadScreen> {
       ),
     );
     if (ok != true || !mounted) return;
-    await cubit.deleteMessageForEveryone(msg);
+    try {
+      await cubit.deleteMessageForEveryone(msg);
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not delete message: $error')),
+        );
+      }
+    }
   }
 
   /// Pick a conversation and re-send the message into it.
@@ -1441,6 +1616,188 @@ class _ThreadScreenState extends State<ThreadScreen> {
       ..showSnackBar(const SnackBar(content: Text('Message copied')));
   }
 
+  ChatCameraRecovery _cameraService(ActiveThreadCubit cubit) =>
+      _cameraRecovery ??= ChatCameraRecovery(
+        crypto: cubit.cryptoService,
+        currentUid: () => widget.mediaLoader.accountId,
+      );
+
+  Future<void> _deleteOwnedCameraCopy(XFile source) async {
+    final file = File(source.path);
+    if (!await file.exists()) return;
+    final root = await (await getTemporaryDirectory()).resolveSymbolicLinks();
+    final resolved = await file.resolveSymbolicLinks();
+    if (p.isWithin(root, resolved)) await file.delete();
+  }
+
+  Future<void> _persistCameraResult(
+    ChatCameraRecovery recovery,
+    String uid,
+    String thread,
+    String id,
+    XFile file,
+  ) async {
+    Uint8List? bytes;
+    try {
+      if (await file.length() > ActiveThreadCubit.maxAttachmentBytes) {
+        throw StateError('Captured photo is larger than 64 MB.');
+      }
+      bytes = await file.readAsBytes();
+      await recovery.save(uid, thread, id, bytes);
+    } finally {
+      bytes?.fillRange(0, bytes.length, 0);
+      await _deleteOwnedCameraCopy(file);
+    }
+  }
+
+  Future<void> _captureExternalCamera(ActiveThreadCubit cubit) async {
+    final recovery = _cameraService(cubit);
+    final uid = cubit.myUid;
+    final thread = widget.thread.threadId;
+    final id = _uuid.v4();
+    final messenger = ScaffoldMessenger.of(context);
+    _capturingCamera = true;
+    try {
+      await recovery.begin(uid, thread, id);
+      final file = await ExternalActivityGuard.run(
+        () => _picker.pickImage(source: ImageSource.camera),
+      );
+      if (file == null) {
+        await recovery.endIntent(uid, thread);
+      } else {
+        // Persist before checking mounted: locking may have disposed this route.
+        await _persistCameraResult(recovery, uid, thread, id, file);
+      }
+    } catch (error) {
+      if (mounted) {
+        messenger.showSnackBar(
+          SnackBar(content: Text('Could not recover captured photo: $error')),
+        );
+      } else {
+        debugPrint('Chat camera capture recovery failed.');
+      }
+    } finally {
+      _capturingCamera = false;
+    }
+    if (mounted) await _recoverCameraResults();
+  }
+
+  Future<void> _recoverCameraResults() async {
+    if (!mounted ||
+        !Platform.isAndroid ||
+        _recoveringCamera ||
+        _capturingCamera ||
+        !widget.vaultBridge.isUnlocked) {
+      return;
+    }
+    final cubit = context.read<ActiveThreadCubit>();
+    if (cubit.state is! ActiveThreadLoaded) return;
+    final recovery = _cameraService(cubit);
+    final uid = cubit.myUid;
+    final thread = widget.thread.threadId;
+    _recoveringCamera = true;
+    try {
+      final intent = await recovery.intent(uid, thread);
+      if (intent != null) {
+        final lost = await _picker.retrieveLostData();
+        if (lost.exception != null) throw lost.exception!;
+        final files = lost.files;
+        if (files != null && files.isNotEmpty) {
+          await _persistCameraResult(
+            recovery,
+            uid,
+            thread,
+            intent,
+            files.first,
+          );
+        } else {
+          await recovery.endIntent(uid, thread);
+        }
+      }
+      for (final id in await recovery.pending(uid, thread)) {
+        if (!mounted || !widget.vaultBridge.isUnlocked) return;
+        final state = cubit.state;
+        if ((state is ActiveThreadLoaded &&
+                state.messages.any(
+                  (message) =>
+                      message.messageId == id &&
+                      message.status != MessageStatus.sending &&
+                      message.status != MessageStatus.failed,
+                )) ||
+            cubit.androidUploads?.jobs.any(
+                  (job) => job.message.messageId == id,
+                ) ==
+                true) {
+          await recovery.remove(uid, thread, id);
+          continue;
+        }
+        if (!_cameraShown.add(id)) continue;
+        final bytes = await recovery.read(uid, thread, id);
+        try {
+          if (!mounted || !widget.vaultBridge.isUnlocked) return;
+          final attach = await showDialog<bool>(
+            context: context,
+            builder: (dialogContext) => AlertDialog(
+              title: const Text('Captured photo'),
+              content: AnimatedBuilder(
+                animation: widget.vaultBridge.vaultSessionChanges,
+                builder: (_, _) => widget.vaultBridge.isUnlocked
+                    ? Image.memory(
+                        bytes,
+                        fit: BoxFit.contain,
+                        errorBuilder: (_, _, _) => const Text(
+                          'Captured photo is corrupt or unsupported. Discard it and take another photo.',
+                        ),
+                      )
+                    : const Text('Unlock to view the captured photo.'),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(dialogContext, false),
+                  child: const Text('Discard'),
+                ),
+                FilledButton(
+                  onPressed: () => Navigator.pop(dialogContext, true),
+                  child: const Text('Attach'),
+                ),
+              ],
+            ),
+          );
+          if (!mounted || !widget.vaultBridge.isUnlocked) return;
+          if (attach == false) {
+            await recovery.remove(uid, thread, id);
+          } else if (attach == true) {
+            final quality = await _askImageQuality(bytes.length);
+            if (quality == null || !mounted || !widget.vaultBridge.isUnlocked) {
+              continue;
+            }
+            await cubit.sendMedia(
+              messageId: id,
+              rawBytes: bytes,
+              type: MessageType.image,
+              quality: quality,
+              propagateFailure: true,
+            );
+            await recovery.remove(uid, thread, id);
+          }
+        } finally {
+          await MemoryImage(bytes).evict();
+          bytes.fillRange(0, bytes.length, 0);
+        }
+      }
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Captured photo recovery needs attention: $error'),
+          ),
+        );
+      }
+    } finally {
+      _recoveringCamera = false;
+    }
+  }
+
   void _send() {
     final text = _textCtrl.text;
     if (text.trim().isEmpty) return;
@@ -1506,11 +1863,131 @@ class _ThreadScreenState extends State<ThreadScreen> {
               title: const Text('Document'),
               onTap: () => Navigator.pop(sheetContext, 'document'),
             ),
+            ListTile(
+              leading: const Icon(Icons.mic_none),
+              title: const Text('Record audio'),
+              onTap: () => Navigator.pop(sheetContext, 'audio'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.folder_special_outlined),
+              title: const Text('Vault attachments'),
+              onTap: () => Navigator.pop(sheetContext, 'saved'),
+            ),
           ],
         ),
       ),
     );
-    if (choice == null || !mounted) return;
+    if (choice == null || !mounted || !context.mounted) return;
+    if (choice == 'saved') {
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => ChatSavedAttachmentsScreen(
+            bridge: widget.vaultBridge,
+            onPreview: (item, bytes) async {
+              if (item.mimeType.startsWith('video/')) {
+                await _secureMedia.showVideo(bytes);
+              } else if (item.mimeType.startsWith('audio/')) {
+                await _secureMedia.showAudio(bytes);
+              } else if (item.mimeType == 'application/pdf') {
+                await _secureMedia.showPdf(bytes);
+              } else {
+                if (!mounted) return;
+                await showDialog<void>(
+                  context: this.context,
+                  builder: (_) => AlertDialog(
+                    title: Text(item.originalFilename),
+                    content: AnimatedBuilder(
+                      animation: widget.vaultBridge.vaultSessionChanges,
+                      builder: (_, _) => !widget.vaultBridge.isUnlocked
+                          ? const Text('Vault locked.')
+                          : item.mimeType.startsWith('image/')
+                          ? Image.memory(bytes)
+                          : const Text(
+                              'In-app preview unavailable for this format.',
+                            ),
+                    ),
+                  ),
+                );
+              }
+            },
+          ),
+        ),
+      );
+      return;
+    }
+    if (choice == 'audio') {
+      await showModalBottomSheet<void>(
+        context: context,
+        builder: (sheetContext) => SafeArea(
+          child: ChatAudioRecorder(
+            onDismiss: () {
+              if (sheetContext.mounted) Navigator.of(sheetContext).pop();
+            },
+            onError: (error) =>
+                messenger.showSnackBar(SnackBar(content: Text(error))),
+            onRecorded: (attachment) async {
+              await cubit.sendMedia(
+                messageId: _uuid.v4(),
+                rawBytes: attachment.bytes,
+                type: MessageType.audio,
+                filename: attachment.fileName,
+                propagateFailure: true,
+              );
+            },
+          ),
+        ),
+      );
+      return;
+    }
+    if (choice == 'camera' && Platform.isAndroid) {
+      await _captureExternalCamera(cubit);
+      return;
+    }
+    if (Platform.isAndroid && choice != 'vault') {
+      try {
+        final selected = choice == 'camera'
+            ? [?await _secureMedia.capturePhoto()]
+            : await ExternalActivityGuard.run(
+                () => _secureMedia.pickAttachments(
+                  mimeTypes: [
+                    switch (choice) {
+                      'photo' => 'image/*',
+                      'video' => 'video/*',
+                      _ => '*/*',
+                    },
+                  ],
+                ),
+              );
+        for (final attachment in selected) {
+          try {
+            if (!mounted) return;
+            if (choice == 'photo' || choice == 'camera') {
+              await _sendImageWithQuality(cubit, attachment.bytes);
+            } else {
+              await cubit.sendMedia(
+                messageId: _uuid.v4(),
+                rawBytes: attachment.bytes,
+                type: choice == 'video' ? MessageType.video : MessageType.file,
+                filename: attachment.fileName,
+              );
+            }
+          } finally {
+            attachment.bytes.fillRange(0, attachment.bytes.length, 0);
+          }
+        }
+      } on PlatformException catch (error) {
+        messenger.showSnackBar(
+          SnackBar(
+            content: Text(error.message ?? 'Could not acquire attachment.'),
+          ),
+        );
+      } catch (error) {
+        messenger.showSnackBar(
+          SnackBar(content: Text('Could not attach file: $error')),
+        );
+      }
+      return;
+    }
 
     if (choice == 'vault') {
       await _sendFromVault(cubit);
@@ -1702,21 +2179,80 @@ class _ThreadScreenState extends State<ThreadScreen> {
   /// Copy received media into the vault.
   Future<void> _saveToVault(ChatMessage message) async {
     final messenger = ScaffoldMessenger.of(context);
+    final ref = message.mediaRef;
+    if (ref == null) return;
+    if (!widget.vaultBridge.isUnlocked) {
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text('Unlock the vault before moving this attachment.'),
+        ),
+      );
+      return;
+    }
+    final uid = context.read<ActiveThreadCubit>().myUid;
+    widget.mediaLoader.setAccount(uid);
+    final key = widget.mediaLoader.diskKey(ref);
+    final sourceId = '$uid:${message.threadId}:$ref';
+    widget.mediaLoader.diskCache.pin(key);
+    Uint8List? bytes;
+    void checkAccount() {
+      if (widget.mediaLoader.accountId != uid) {
+        throw StateError('Chat account changed during vault move.');
+      }
+    }
+
+    Future<void> mark() async {
+      checkAccount();
+      await widget.mediaLoader.diskCache.markMoved(key);
+    }
+
+    Future<void> cleanup() async {
+      checkAccount();
+      await widget.mediaLoader.removeAfterVaultMove(ref);
+    }
+
     try {
-      final bytes = await widget.mediaLoader.load(
-        threadId: message.threadId,
-        storagePath: message.mediaRef!,
+      var result = await widget.vaultBridge.resumeMove(
+        sourceId: sourceId,
+        onMarkMoved: mark,
+        onSourceCleanup: cleanup,
       );
-      final extension = message.mediaType == MessageType.video ? 'mp4' : 'jpg';
-      await widget.vaultBridge.saveToVault(
-        bytes: bytes,
-        filename: '${message.messageId}.$extension',
+      if (result == null) {
+        bytes = await widget.mediaLoader.fetchUncached(
+          threadId: message.threadId,
+          storagePath: ref,
+        );
+        checkAccount();
+        final extension = switch (message.mediaType) {
+          MessageType.video => 'mp4',
+          MessageType.audio => 'wav',
+          _ => 'jpg',
+        };
+        result = await widget.vaultBridge.moveToVault(
+          bytes: bytes,
+          filename: message.documentName ?? '${message.messageId}.$extension',
+          sourceId: sourceId,
+          mediaType: message.mediaType?.name,
+          onMarkMoved: mark,
+          onSourceCleanup: cleanup,
+        );
+      }
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            result.cleanupPending
+                ? 'Stored in vault; local cleanup pending. Tap Move to vault to retry.'
+                : 'Moved to vault.',
+          ),
+        ),
       );
-      messenger.showSnackBar(const SnackBar(content: Text('Saved to vault.')));
     } catch (e) {
       messenger.showSnackBar(
-        SnackBar(content: Text('Could not save to vault: $e')),
+        SnackBar(content: Text('Could not move to vault: $e')),
       );
+    } finally {
+      bytes?.fillRange(0, bytes.length, 0);
+      widget.mediaLoader.diskCache.unpin(key);
     }
   }
 }

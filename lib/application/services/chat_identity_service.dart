@@ -49,6 +49,7 @@ class ChatIdentityService {
   /// is returned rather than silently creating a fresh key — creating one would
   /// orphan all existing history.
   Future<IdentitySyncResult> sync({required String uid, String? pin}) async {
+    await cryptoService.bindAccount(uid);
     final remote = await userRepository.getWrappedIdentityKey(uid);
     final hasLocal = await cryptoService.hasIdentityKey();
 

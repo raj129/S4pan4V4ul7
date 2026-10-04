@@ -62,4 +62,24 @@ void main() {
 
     expect(await cache.read('a'), isNull);
   });
+
+  test('moved markers survive clearing and prevent cache recreation', () async {
+    final cache = cacheWith();
+    await cache.write('alice:a', Uint8List.fromList([1]));
+    await cache.markMoved('alice:a');
+    await cache.clear();
+    final reopened = cacheWith();
+    await reopened.write('alice:a', Uint8List.fromList([2]));
+    expect(await reopened.wasMoved('alice:a'), isTrue);
+    expect(await reopened.read('alice:a'), isNull);
+  });
+
+  test('storage budget rejects oversized writes explicitly', () async {
+    final cache = cacheWith(maxBytes: 1);
+    await expectLater(
+      cache.write('a', Uint8List(2)),
+      throwsA(isA<ChatCacheCapacityException>()),
+    );
+    expect(await cache.read('a'), isNull);
+  });
 }

@@ -7,6 +7,7 @@ import 'package:flutter/widgets.dart';
 import 'package:image/image.dart' as img;
 import 'package:photo_vault/crypto/services/chat_crypto_service.dart';
 import 'package:photo_vault/application/services/image_compressor.dart';
+import 'package:photo_vault/application/services/android_chat_uploads.dart';
 import 'package:photo_vault/domain/entities/chat_message.dart';
 import 'package:photo_vault/domain/entities/chat_thread.dart';
 import 'package:photo_vault/domain/entities/chat_user.dart';
@@ -64,6 +65,46 @@ class _PassThroughCrypto implements ChatCryptoService {
   @override
   dynamic noSuchMethod(Invocation invocation) =>
       throw UnimplementedError('${invocation.memberName} not needed');
+}
+
+class _FakeAndroidUploads extends AndroidChatUploads {
+  final records = <AndroidUploadJob>[];
+  Object? failure;
+  Future<void> Function()? beforeAccept;
+  final cancelled = <String>[];
+  @override
+  List<AndroidUploadJob> get jobs => records;
+  @override
+  Future<void> enqueue({
+    required ChatMessage message,
+    required String recipientUid,
+    required Uint8List ciphertext,
+    Uint8List? thumbnail,
+  }) async {
+    if (failure case final error?) throw error;
+    await beforeAccept?.call();
+    records.add(
+      AndroidUploadJob(
+        message: message,
+        status: const MediaSendStatus(
+          phase: MediaSendPhase.uploading,
+          lifecycle: MediaUploadLifecycle.queued,
+          progress: 0,
+        ),
+      ),
+    );
+  }
+
+  @override
+  Future<void> cancel(String id) async {
+    cancelled.add(id);
+    final index = records.indexWhere((job) => job.message.messageId == id);
+    final old = records[index];
+    records[index] = AndroidUploadJob(
+      message: old.message,
+      status: old.status.copyWith(lifecycle: MediaUploadLifecycle.cancelled),
+    );
+  }
 }
 
 class _FakeMessageRepository implements MessageRepository {
@@ -297,11 +338,13 @@ void main() {
   late List<MediaSendStatus> progressSeen;
 
   ActiveThreadCubit build({
+    AndroidChatUploads? uploads,
     Stream<List<ConnectivityResult>>? connectivityStream,
     MessageCacheRepository messageCache = const NoopMessageCacheRepository(),
     ChatSearchIndexRepository searchIndex =
         const NoopChatSearchIndexRepository(),
   }) => ActiveThreadCubit(
+    androidUploads: uploads,
     messageRepository: messages,
     threadRepository: threads,
     userRepository: _FakeUserRepository(),
@@ -920,6 +963,67 @@ void main() {
   });
 
   group('attachments', () {
+    test(
+      'pending delete cancels native intent without deleting a remote message',
+      () async {
+        final uploads = _FakeAndroidUploads();
+        await cubit.close();
+        cubit = build(uploads: uploads);
+        await open();
+        await cubit.sendMedia(
+          messageId: 'native-file',
+          rawBytes: [1, 2],
+          type: MessageType.file,
+          filename: 'file.pdf',
+        );
+        final pending = (cubit.state as ActiveThreadLoaded).messages.single;
+        await cubit.deleteMessageForMe(pending);
+        expect(uploads.cancelled, ['native-file']);
+        expect((cubit.state as ActiveThreadLoaded).messages, isEmpty);
+        expect(messages.sent, isEmpty);
+        uploads.dispose();
+      },
+    );
+
+    test('queue failure propagates explicitly to recording caller', () async {
+      final uploads = _FakeAndroidUploads()
+        ..failure = StateError('storage full');
+      await cubit.close();
+      cubit = build(uploads: uploads);
+      await open();
+      await expectLater(
+        cubit.sendMedia(
+          messageId: 'audio',
+          rawBytes: [1, 2],
+          type: MessageType.audio,
+          filename: 'recording.wav',
+          propagateFailure: true,
+        ),
+        throwsStateError,
+      );
+      expect(uploads.records, isEmpty);
+      uploads.dispose();
+    });
+
+    test(
+      'deleting during queue acceptance cancels the newly committed job',
+      () async {
+        final uploads = _FakeAndroidUploads();
+        await cubit.close();
+        cubit = build(uploads: uploads);
+        await open();
+        uploads.beforeAccept = () => cubit.cancelUpload('accept-race');
+        await cubit.sendMedia(
+          messageId: 'accept-race',
+          rawBytes: [1, 2],
+          type: MessageType.file,
+          filename: 'file.pdf',
+        );
+        expect(uploads.cancelled, ['accept-race']);
+        expect((cubit.state as ActiveThreadLoaded).messages, isEmpty);
+        uploads.dispose();
+      },
+    );
     test(
       'a document is sent with its name only in the encrypted body',
       () async {
