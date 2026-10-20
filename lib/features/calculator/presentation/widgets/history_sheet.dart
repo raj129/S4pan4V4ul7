@@ -65,10 +65,7 @@ class HistorySheet extends StatelessWidget {
                   ),
                 ),
                 if (entries.isNotEmpty)
-                  TextButton(
-                    onPressed: onClear,
-                    child: const Text('Clear'),
-                  ),
+                  TextButton(onPressed: onClear, child: const Text('Clear')),
               ],
             ),
             if (entries.isEmpty)
@@ -95,9 +92,7 @@ class HistorySheet extends StatelessWidget {
                     final entry = entries[index];
                     return ListTile(
                       dense: true,
-                      contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 4,
-                      ),
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 4),
                       title: Text(
                         entry.expression,
                         maxLines: 1,

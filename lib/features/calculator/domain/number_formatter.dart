@@ -23,7 +23,8 @@ class NumberFormatter {
     if (value == 0) return '0';
 
     final magnitude = value.abs();
-    if (magnitude >= _scientificUpperBound || magnitude < _scientificLowerBound) {
+    if (magnitude >= _scientificUpperBound ||
+        magnitude < _scientificLowerBound) {
       return _formatScientific(value);
     }
 

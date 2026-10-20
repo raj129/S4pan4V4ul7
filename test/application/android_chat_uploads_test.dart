@@ -2,9 +2,9 @@ import 'dart:async';
 
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:photo_vault/application/services/android_chat_uploads.dart';
-import 'package:photo_vault/domain/entities/chat_message.dart';
-import 'package:photo_vault/presentation/state/chat/media_send_status.dart';
+import 'package:photo_vault/features/chat/application/media/android_chat_uploads.dart';
+import 'package:photo_vault/features/chat/domain/entities/chat_message.dart';
+import 'package:photo_vault/features/chat/application/media/media_send_status.dart';
 
 Map<String, Object?> _job({String uid = 'alice', String state = 'queued'}) => {
   'messageId': 'stable-id',

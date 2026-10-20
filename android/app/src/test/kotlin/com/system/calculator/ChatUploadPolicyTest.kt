@@ -6,6 +6,11 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ChatUploadPolicyTest {
+    @Test fun resumeDoesNotDisplayZeroWhileTheSdkQueriesItsSavedSession() {
+        assertEquals(1_048_576L, ChatUploadPolicy.confirmedProgress(1_048_576L, 0, true))
+        assertEquals(2_097_152L, ChatUploadPolicy.confirmedProgress(1_048_576L, 2_097_152L, true))
+        assertEquals(0L, ChatUploadPolicy.confirmedProgress(1_048_576L, 0, false))
+    }
     @Test fun onlyExpiredExistingSessionsRestartWithoutBackoff() {
         assertTrue(ChatUploadPolicy.restartExpiredSession(true, 404))
         assertTrue(ChatUploadPolicy.restartExpiredSession(true, 410))

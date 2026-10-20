@@ -1,7 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:photo_vault/application/services/contact_discovery_service.dart';
-import 'package:photo_vault/domain/entities/chat_user.dart';
-import 'package:photo_vault/domain/repositories/user_repository.dart';
+import 'package:photo_vault/features/chat/application/services/contact_discovery_service.dart';
+import 'package:photo_vault/features/chat/domain/entities/chat_user.dart';
+import 'package:photo_vault/features/chat/domain/repositories/user_repository.dart';
 
 class _FakeContactSource implements ContactSource {
   _FakeContactSource({this.granted = true, this.contacts = const []});
@@ -75,30 +75,32 @@ void main() {
       expect(result.matches, isEmpty);
     });
 
-    test('matches registered contacts and prefers the address-book name',
-        () async {
-      final repo = _FakeUserRepository({
-        'bob@example.com': _user('bob', 'bob@example.com'),
-      });
-      final service = ContactDiscoveryService(
-        userRepository: repo,
-        contacts: _FakeContactSource(
-          contacts: const [
-            DeviceContact(name: 'Bobby At Work', emails: ['Bob@Example.com']),
-            DeviceContact(name: 'Nobody', emails: ['ghost@example.com']),
-          ],
-        ),
-      );
+    test(
+      'matches registered contacts and prefers the address-book name',
+      () async {
+        final repo = _FakeUserRepository({
+          'bob@example.com': _user('bob', 'bob@example.com'),
+        });
+        final service = ContactDiscoveryService(
+          userRepository: repo,
+          contacts: _FakeContactSource(
+            contacts: const [
+              DeviceContact(name: 'Bobby At Work', emails: ['Bob@Example.com']),
+              DeviceContact(name: 'Nobody', emails: ['ghost@example.com']),
+            ],
+          ),
+        );
 
-      final result = await service.discover(myUid: 'me');
+        final result = await service.discover(myUid: 'me');
 
-      expect(result.matches, hasLength(1));
-      expect(result.matches.single.user.uid, 'bob');
-      // The saved name is more recognisable than the Google account name.
-      expect(result.matches.single.contactName, 'Bobby At Work');
-      // Lookup is case-insensitive.
-      expect(repo.queries.single, contains('bob@example.com'));
-    });
+        expect(result.matches, hasLength(1));
+        expect(result.matches.single.user.uid, 'bob');
+        // The saved name is more recognisable than the Google account name.
+        expect(result.matches.single.contactName, 'Bobby At Work');
+        // Lookup is case-insensitive.
+        expect(repo.queries.single, contains('bob@example.com'));
+      },
+    );
 
     test('collapses duplicates and skips malformed addresses', () async {
       final repo = _FakeUserRepository({
@@ -178,10 +180,10 @@ void main() {
 
       final result = await service.discover(myUid: 'me');
 
-      expect(
-        result.matches.map((m) => m.contactName).toList(),
-        ['alice', 'Zoe'],
-      );
+      expect(result.matches.map((m) => m.contactName).toList(), [
+        'alice',
+        'Zoe',
+      ]);
     });
   });
 }

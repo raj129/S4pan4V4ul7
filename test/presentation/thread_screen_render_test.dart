@@ -4,26 +4,26 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:photo_vault/application/services/chat_vault_bridge.dart';
-import 'package:photo_vault/crypto/services/chat_crypto_service.dart';
-import 'package:photo_vault/domain/entities/chat_message.dart';
-import 'package:photo_vault/domain/entities/chat_thread.dart';
-import 'package:photo_vault/domain/entities/chat_user.dart';
-import 'package:photo_vault/domain/entities/message_metadata.dart';
-import 'package:photo_vault/domain/entities/message_reply.dart';
-import 'package:photo_vault/domain/entities/user_presence.dart';
-import 'package:photo_vault/domain/repositories/message_cache_repository.dart';
-import 'package:photo_vault/domain/repositories/message_repository.dart';
-import 'package:photo_vault/domain/repositories/outbox_repository.dart';
-import 'package:photo_vault/domain/repositories/presence_repository.dart';
-import 'package:photo_vault/domain/repositories/thread_repository.dart';
-import 'package:photo_vault/domain/repositories/typing_repository.dart';
-import 'package:photo_vault/domain/repositories/user_repository.dart';
-import 'package:photo_vault/presentation/screens/chat_screens/thread_screen.dart';
-import 'package:photo_vault/presentation/state/chat/active_thread_cubit.dart';
-import 'package:photo_vault/presentation/widgets/chat/chat_bubble_shape.dart';
-import 'package:photo_vault/presentation/widgets/chat/chat_media_preview.dart';
-import 'package:photo_vault/presentation/widgets/chat/message_bubble.dart';
+import 'package:photo_vault/core/integrations/chat_vault_bridge.dart';
+import 'package:photo_vault/features/chat/application/crypto/chat_crypto_service.dart';
+import 'package:photo_vault/features/chat/domain/entities/chat_message.dart';
+import 'package:photo_vault/features/chat/domain/entities/chat_thread.dart';
+import 'package:photo_vault/features/chat/domain/entities/chat_user.dart';
+import 'package:photo_vault/features/chat/domain/entities/message_metadata.dart';
+import 'package:photo_vault/features/chat/domain/entities/message_reply.dart';
+import 'package:photo_vault/features/chat/domain/entities/user_presence.dart';
+import 'package:photo_vault/features/chat/domain/repositories/message_cache_repository.dart';
+import 'package:photo_vault/features/chat/domain/repositories/message_repository.dart';
+import 'package:photo_vault/features/chat/domain/repositories/outbox_repository.dart';
+import 'package:photo_vault/features/chat/domain/repositories/presence_repository.dart';
+import 'package:photo_vault/features/chat/domain/repositories/thread_repository.dart';
+import 'package:photo_vault/features/chat/domain/repositories/typing_repository.dart';
+import 'package:photo_vault/features/chat/domain/repositories/user_repository.dart';
+import 'package:photo_vault/features/chat/presentation/screens/thread_screen.dart';
+import 'package:photo_vault/features/chat/presentation/state/active_thread_cubit.dart';
+import 'package:photo_vault/features/chat/presentation/widgets/chat_bubble_shape.dart';
+import 'package:photo_vault/features/chat/presentation/widgets/chat_media_preview.dart';
+import 'package:photo_vault/features/chat/presentation/widgets/message_bubble.dart';
 
 class _Crypto implements ChatCryptoService {
   @override
@@ -162,6 +162,12 @@ class _Outbox implements OutboxRepository {
 }
 
 class _Unused implements UserRepository, MediaRepository, ChatVaultBridge {
+  @override
+  final Listenable vaultSessionChanges = ValueNotifier(0);
+
+  @override
+  bool get isUnlocked => false;
+
   @override
   dynamic noSuchMethod(Invocation i) =>
       throw UnimplementedError('${i.memberName} not needed');

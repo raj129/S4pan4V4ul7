@@ -3,8 +3,8 @@ import 'dart:typed_data';
 
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:photo_vault/crypto/services/chat_crypto_service.dart';
-import 'package:photo_vault/domain/entities/wrapped_identity_key.dart';
+import 'package:photo_vault/features/chat/application/crypto/chat_crypto_service.dart';
+import 'package:photo_vault/features/chat/domain/entities/wrapped_identity_key.dart';
 
 /// In-memory stand-in for the platform keystore.
 class _FakeSecureStorage implements FlutterSecureStorage {

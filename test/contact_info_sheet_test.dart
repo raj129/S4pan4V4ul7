@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:photo_vault/application/services/profile_service.dart';
-import 'package:photo_vault/data/repositories_impl/firebase_avatar_storage.dart';
-import 'package:photo_vault/domain/entities/chat_user.dart';
-import 'package:photo_vault/domain/repositories/message_cache_repository.dart';
-import 'package:photo_vault/domain/repositories/user_repository.dart';
-import 'package:photo_vault/presentation/widgets/chat/contact_info_sheet.dart';
+import 'package:photo_vault/features/chat/application/services/profile_service.dart';
+import 'package:photo_vault/features/chat/data/repositories/firebase_avatar_storage.dart';
+import 'package:photo_vault/features/chat/domain/entities/chat_user.dart';
+import 'package:photo_vault/features/chat/domain/repositories/message_cache_repository.dart';
+import 'package:photo_vault/features/chat/domain/repositories/user_repository.dart';
+import 'package:photo_vault/features/chat/presentation/widgets/contact_info_sheet.dart';
 
 class _Store extends NoopMessageCacheRepository {
   final values = <String, String>{};

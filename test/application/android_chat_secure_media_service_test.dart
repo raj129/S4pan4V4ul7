@@ -4,7 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:photo_vault/core/app/android_chat_viewer_guard.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:photo_vault/application/services/android_chat_secure_media_service.dart';
+import 'package:photo_vault/features/chat/application/media/android_chat_secure_media_service.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -97,7 +97,7 @@ void main() {
       'showPdf',
       'close',
     ]);
-    expect(calls.first.arguments, {'bytes': bytes});
+    expect(calls.first.arguments, {'bytes': bytes, 'measureStartup': true});
   });
 
   test(

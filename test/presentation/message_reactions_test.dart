@@ -3,13 +3,13 @@ import 'dart:typed_data';
 import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:photo_vault/crypto/services/chat_crypto_service.dart';
-import 'package:photo_vault/domain/entities/chat_message.dart';
-import 'package:photo_vault/domain/entities/message_metadata.dart';
-import 'package:photo_vault/domain/repositories/message_repository.dart';
-import 'package:photo_vault/presentation/widgets/chat/chat_media_preview.dart';
-import 'package:photo_vault/presentation/widgets/chat/animated_emoji.dart';
-import 'package:photo_vault/presentation/widgets/chat/message_bubble.dart';
+import 'package:photo_vault/features/chat/application/crypto/chat_crypto_service.dart';
+import 'package:photo_vault/features/chat/domain/entities/chat_message.dart';
+import 'package:photo_vault/features/chat/domain/entities/message_metadata.dart';
+import 'package:photo_vault/features/chat/domain/repositories/message_repository.dart';
+import 'package:photo_vault/features/chat/presentation/widgets/chat_media_preview.dart';
+import 'package:photo_vault/features/chat/presentation/widgets/animated_emoji.dart';
+import 'package:photo_vault/features/chat/presentation/widgets/message_bubble.dart';
 
 class _NoMediaRepository implements MediaRepository {
   @override
@@ -28,6 +28,7 @@ class _TestMediaLoader extends ChatMediaLoader {
   Future<Uint8List> load({
     required String threadId,
     required String storagePath,
+    String? senderId,
   }) async => Uint8List.fromList([0]);
 }
 
@@ -142,7 +143,7 @@ void main() {
     await pumpBubble(tester, mediaType: MessageType.image);
 
     expect(find.byType(BottomSheet), findsOneWidget);
-    expect(find.text('Save to vault'), findsOneWidget);
+    expect(find.text('Move to vault'), findsOneWidget);
     expect(find.text('Delete for me'), findsOneWidget);
   });
 

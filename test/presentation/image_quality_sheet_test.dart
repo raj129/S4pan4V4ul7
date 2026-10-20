@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:photo_vault/application/services/image_compressor.dart';
-import 'package:photo_vault/presentation/widgets/chat/image_quality_sheet.dart';
+import 'package:photo_vault/features/chat/application/media/image_compressor.dart';
+import 'package:photo_vault/features/chat/presentation/widgets/image_quality_sheet.dart';
 
 void main() {
   Future<ImageQuality?> openAndTap(

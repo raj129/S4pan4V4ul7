@@ -7,15 +7,16 @@ import android.content.pm.ServiceInfo
 import android.net.Uri
 import android.os.Build
 import android.os.IBinder
+import androidx.work.ForegroundInfo
 import androidx.work.Worker
 import androidx.work.WorkerParameters
-import androidx.work.ForegroundInfo
 import com.google.android.gms.tasks.Tasks
 import com.google.firebase.FirebaseApp
 import com.google.firebase.auth.FirebaseAuth
-import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.FieldValue
+import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.storage.FirebaseStorage
+import com.google.firebase.storage.OnProgressListener
 import com.google.firebase.storage.StorageException
 import com.google.firebase.storage.StorageMetadata
 import com.google.firebase.storage.UploadTask
@@ -30,7 +31,9 @@ object ChatUploadRuntime {
     private val gate = Any()
     private val running = mutableMapOf<String, UploadTask>()
     fun <T> locked(action: () -> T): T = synchronized(gate) { action() }
-    fun interrupt(id: String) { running[id]?.cancel() }
+    fun interrupt(id: String, destructive: Boolean = false) {
+        running[id]?.let { if (destructive) it.cancel() else it.pause() }
+    }
 
     fun drain(context: Context, shouldStop: () -> Boolean = { false },
         progress: (JSONObject) -> Unit = {}): Boolean {
@@ -110,7 +113,11 @@ object ChatUploadRuntime {
                                 progress(job)
                                 if (!permanent && attempts < 8) retry = true
                             }
-                        } finally { locked { running.remove(id) } }
+                        } finally {
+                            locked {
+                                running[id]?.let { if (it.isComplete || it.isPaused) running.remove(id) }
+                            }
+                        }
                     }
                     return !retry
                 }
@@ -161,6 +168,7 @@ object ChatUploadRuntime {
         val path = "chat_media/${job.getString("threadId")}/$id/${if (thumb) "thumb" else "media"}.enc"
         val ref = FirebaseStorage.getInstance().getReference(path)
         val digest = job.getString(if (thumb) "thumbDigest" else "digest")
+        val startedKey = if (thumb) "thumbStarted" else "mediaStarted"
         val actualDigest = java.security.MessageDigest.getInstance("SHA-256")
         file.inputStream().use { input ->
             val buffer = ByteArray(64 * 1024)
@@ -174,8 +182,8 @@ object ChatUploadRuntime {
             "Encrypted staging file is corrupted; reattach the file"
         }
         // Reconcile a successful remote finalize whose local checkpoint was lost.
-        if (job.optInt("attempts") > 0 || job.optLong("processedBytes") > 0 ||
-            job.optString(if (thumb) "thumbSession" else "mediaSession").isNotEmpty()) try {
+        if (job.optString(if (thumb) "thumbSession" else "mediaSession").isEmpty() &&
+            (job.optBoolean(startedKey) || job.optInt("attempts") > 0)) try {
             val meta = Tasks.await(ref.metadata, 30, TimeUnit.SECONDS)
             if (meta.getCustomMetadata("sha256") == digest && meta.sizeBytes == file.length()) {
                 checkpoint(store, id, uid, revision, field, path)
@@ -193,25 +201,36 @@ object ChatUploadRuntime {
         val task = locked {
             // Pause/cancel may arrive while metadata reconciliation is waiting.
             // Register ownership atomically with the last revision check.
-            checkJob(store, id, uid, revision)
+            val current = checkJob(store, id, uid, revision)
+            running[id]?.let { check(it.isComplete || it.isPaused) { "Previous upload is still pausing" } }
+            current.put(startedKey, true)
+            store.put(current)
             val transfer = if (session.isEmpty()) ref.putFile(Uri.fromFile(file), metadata)
                 else ref.putFile(Uri.fromFile(file), metadata, Uri.parse(session))
             running[id] = transfer
             transfer
         }
-        task.addOnProgressListener { snapshot ->
+        val listener = OnProgressListener<UploadTask.TaskSnapshot> { snapshot ->
             locked {
                 try {
                     val current = checkJob(store, id, uid, revision)
-                    if (shouldStop()) { task.cancel(); return@locked }
+                    if (shouldStop()) { task.pause(); return@locked }
                     snapshot.uploadSessionUri?.let { current.put(sessionKey, it.toString()) }
                     val prefix = if (thumb) 0 else if (current.optBoolean("hasThumb")) store.blob(id, true).length() else 0
-                    current.put("processedBytes", prefix + snapshot.bytesTransferred)
+                    // A reattached SDK task initially reports zero before its
+                    // server-offset query. Keep the last confirmed checkpoint.
+                    current.put("processedBytes", ChatUploadPolicy.confirmedProgress(
+                        current.optLong("processedBytes"), prefix + snapshot.bytesTransferred,
+                        session.isNotEmpty() && snapshot.uploadSessionUri?.toString() == session))
                     store.put(current)
                     progress(current)
-                } catch (_: IllegalStateException) { task.cancel() }
+                } catch (_: IllegalStateException) {
+                    if (store.get(id)?.optString("state") == "cancelled") task.cancel()
+                    else task.pause()
+                }
             }
         }
+        task.addOnProgressListener(listener)
         try {
             while (!task.isComplete) {
                 if (shouldStop()) throw java.util.concurrent.TimeoutException("Upload execution budget exhausted")
@@ -221,20 +240,62 @@ object ChatUploadRuntime {
             }
             Tasks.await(task)
         } catch (error: Exception) {
-            task.cancel()
-            // Invalid/expired sessions are retried with identical ciphertext.
+            // Pausing must not send Firebase's destructive session-cancel
+            // request. Let the in-flight request settle before another owner
+            // reattaches to the saved session.
+            if (locked { store.get(id)?.optString("state") == "cancelled" }) task.cancel()
+            else if (!task.isComplete) task.pause()
+            val pauseDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(35)
+            while (!task.isComplete && !task.isPaused && System.nanoTime() < pauseDeadline) {
+                Thread.sleep(25)
+            }
+            check(task.isComplete || task.isPaused) { "Upload pause is still settling; retry later" }
             locked {
                 val current = store.get(id)!!
                 val cause = error.cause ?: error
-                val invalidSession = cause is java.util.concurrent.TimeoutException ||
-                    cause is IllegalStateException ||
-                    (cause is StorageException && cause.errorCode != StorageException.ERROR_RETRY_LIMIT_EXCEEDED)
-                if (current.optInt("revision") == revision && invalidSession) {
-                    current.remove(sessionKey)
-                    store.put(current)
+                task.snapshot.uploadSessionUri?.let {
+                    if (current.optString("state") != "cancelled") current.put(sessionKey, it.toString())
                 }
+                val invalidSession = cause is StorageException &&
+                    cause.httpResultCode in listOf(404, 410)
+                if (invalidSession) {
+                    current.remove(sessionKey)
+                    current.put("processedBytes", if (!thumb && current.optBoolean("hasThumb")) store.blob(id, true).length() else 0L)
+                    current.put("error", "Upload session expired; restarting this encrypted object")
+                }
+                store.put(current)
             }
             val cause = error.cause ?: error
+            // A crash after remote finalize but before the journal checkpoint
+            // makes a saved session report "final", not an expired-session 404.
+            if (session.isNotEmpty() && cause is StorageException &&
+                cause.httpResultCode == 200 && !shouldStop()) {
+                locked { checkJob(store, id, uid, revision) }
+                try {
+                    val completed = Tasks.await(ref.metadata, 30, TimeUnit.SECONDS)
+                    require(completed.sizeBytes == file.length() &&
+                        completed.getCustomMetadata("sha256") == digest) {
+                        "Completed attachment identity mismatch"
+                    }
+                    checkpoint(store, id, uid, revision, field, path)
+                    return
+                } catch (reconciliationError: Exception) {
+                    val reconciliationCause = reconciliationError.cause ?: reconciliationError
+                    if (reconciliationCause !is StorageException ||
+                        reconciliationCause.errorCode != StorageException.ERROR_OBJECT_NOT_FOUND) {
+                        throw reconciliationError
+                    }
+                    locked {
+                        val current = checkJob(store, id, uid, revision)
+                        current.remove(sessionKey)
+                        store.put(current)
+                    }
+                    if (allowFreshSession) {
+                        upload(context, store, id, uid, revision, thumb, shouldStop, progress, false)
+                        return
+                    }
+                }
+            }
             if (allowFreshSession && !shouldStop() && cause is StorageException &&
                 ChatUploadPolicy.restartExpiredSession(session.isNotEmpty(), cause.httpResultCode)) {
                 locked { checkJob(store, id, uid, revision) }
@@ -242,6 +303,8 @@ object ChatUploadRuntime {
                 return
             }
             throw error
+        } finally {
+            task.removeOnProgressListener(listener)
         }
         checkpoint(store, id, uid, revision, field, path)
     }
@@ -335,12 +398,8 @@ class ChatUploadService : Service() {
                         if (next == job.getString("state")) return@use
                         job.put("state", next)
                             .put("revision", job.optInt("revision") + 1)
-                        if (next == "paused") {
-                            job.remove("mediaSession")
-                            job.remove("thumbSession")
-                        }
                         store.put(job)
-                        ChatUploadRuntime.interrupt(id)
+                        ChatUploadRuntime.interrupt(id, next == "cancelled")
                         if (next == "cancelled") store.reconcile()
                     }
                 }

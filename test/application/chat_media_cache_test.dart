@@ -2,7 +2,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:photo_vault/application/services/chat_media_cache.dart';
+import 'package:photo_vault/features/chat/application/media/chat_media_cache.dart';
 
 void main() {
   late Directory dir;

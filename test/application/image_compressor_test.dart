@@ -3,7 +3,7 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
-import 'package:photo_vault/application/services/image_compressor.dart';
+import 'package:photo_vault/features/chat/application/media/image_compressor.dart';
 
 void main() {
   const compressor = ImageCompressor();
@@ -27,18 +27,21 @@ void main() {
     return image;
   }
 
-  test('downscales to the quality ceiling and keeps the aspect ratio', () async {
-    final png = img.encodePng(noisy(2000, 1000));
+  test(
+    'downscales to the quality ceiling and keeps the aspect ratio',
+    () async {
+      final png = img.encodePng(noisy(2000, 1000));
 
-    final prepared = await compressor.prepare(
-      bytes: png,
-      quality: ImageQuality.medium,
-    );
+      final prepared = await compressor.prepare(
+        bytes: png,
+        quality: ImageQuality.medium,
+      );
 
-    expect(prepared.width, 1280);
-    expect(prepared.height, 640);
-    expect(prepared.bytes.length, lessThan(png.length));
-  });
+      expect(prepared.width, 1280);
+      expect(prepared.height, 640);
+      expect(prepared.bytes.length, lessThan(png.length));
+    },
+  );
 
   test('a lower quality produces a smaller upload', () async {
     final png = img.encodePng(noisy(2000, 1000));

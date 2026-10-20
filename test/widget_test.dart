@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:photo_vault/features/calculator/calculator.dart';
-import 'package:photo_vault/presentation/features/utility_shell/utility_shell.dart';
+import 'package:photo_vault/core/presentation/features/utility_shell/utility_shell.dart';
 
 void main() {
   testWidgets('Calculator shell renders without visible vault hints', (

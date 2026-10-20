@@ -2,12 +2,12 @@ import 'dart:typed_data';
 
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:photo_vault/application/services/chat_search_indexer.dart';
-import 'package:photo_vault/crypto/services/chat_crypto_service.dart';
-import 'package:photo_vault/data/repositories_impl/drift_chat_search_index_repository.dart';
-import 'package:photo_vault/data/repositories_impl/drift_message_cache_repository.dart';
-import 'package:photo_vault/domain/entities/chat_message.dart';
-import 'package:photo_vault/storage/local_db/vault_database.dart';
+import 'package:photo_vault/features/chat/application/services/chat_search_indexer.dart';
+import 'package:photo_vault/features/chat/application/crypto/chat_crypto_service.dart';
+import 'package:photo_vault/features/chat/data/repositories/drift_chat_search_index_repository.dart';
+import 'package:photo_vault/features/chat/data/repositories/drift_message_cache_repository.dart';
+import 'package:photo_vault/features/chat/domain/entities/chat_message.dart';
+import 'package:photo_vault/core/storage/local_db/vault_database.dart';
 
 class _KeyOnlyCrypto implements ChatCryptoService {
   @override

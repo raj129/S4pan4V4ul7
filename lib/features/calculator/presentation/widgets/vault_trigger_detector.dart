@@ -9,7 +9,8 @@ import 'keypad_layouts.dart';
 /// and must never surface any hint in the UI.
 class VaultTriggerDetector {
   VaultTriggerDetector({
-    required this.onTriggered,    this.holdDuration = const Duration(milliseconds: 1200),
+    required this.onTriggered,
+    this.holdDuration = const Duration(milliseconds: 1200),
     this.cooldown = const Duration(milliseconds: 800),
   });
 

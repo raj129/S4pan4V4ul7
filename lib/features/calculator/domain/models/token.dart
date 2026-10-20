@@ -36,8 +36,7 @@ class Token {
   /// Numeric payload for [TokenType.number] and [TokenType.constant].
   final double? value;
 
-  bool get isOperand =>
-      type == TokenType.number || type == TokenType.constant;
+  bool get isOperand => type == TokenType.number || type == TokenType.constant;
 
   @override
   String toString() => '${type.name}:$text';

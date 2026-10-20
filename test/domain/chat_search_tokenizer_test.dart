@@ -1,7 +1,7 @@
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:photo_vault/domain/search/chat_search_tokenizer.dart';
+import 'package:photo_vault/features/chat/domain/search/chat_search_tokenizer.dart';
 
 void main() {
   final key = Uint8List.fromList(List.filled(32, 1));

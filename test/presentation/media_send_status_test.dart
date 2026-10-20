@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:photo_vault/presentation/state/chat/media_send_status.dart';
+import 'package:photo_vault/features/chat/application/media/media_send_status.dart';
 
 void main() {
   group('MediaUploadLifecycleTransitions', () {

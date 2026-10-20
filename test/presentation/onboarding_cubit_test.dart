@@ -1,18 +1,18 @@
 import 'package:bloc_test/bloc_test.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:photo_vault/application/services/pin_validator.dart';
-import 'package:photo_vault/application/services/vault_session.dart';
-import 'package:photo_vault/application/usecases/create_vault_usecase.dart';
-import 'package:photo_vault/crypto/services/aes_gcm_crypto_service.dart';
-import 'package:photo_vault/data/repositories_impl/in_memory_secure_storage_repository.dart';
-import 'package:photo_vault/data/repositories_impl/in_memory_vault_repository.dart';
-import 'package:photo_vault/data/repositories_impl/stub_auth_repository.dart';
-import 'package:photo_vault/data/services/pbkdf2_kdf_service.dart';
-import 'package:photo_vault/domain/entities/user_mode.dart';
-import 'package:photo_vault/domain/repositories/vmk_backup_repository.dart';
-import 'package:photo_vault/presentation/state/onboarding/onboarding_cubit.dart';
-import 'package:photo_vault/presentation/state/onboarding/onboarding_state.dart';
+import 'package:photo_vault/features/vault/application/services/pin_validator.dart';
+import 'package:photo_vault/core/session/vault_session.dart';
+import 'package:photo_vault/features/vault/application/usecases/create_vault_usecase.dart';
+import 'package:photo_vault/core/crypto/services/aes_gcm_crypto_service.dart';
+import 'package:photo_vault/core/testing/repositories/in_memory_secure_storage_repository.dart';
+import 'package:photo_vault/core/testing/repositories/in_memory_vault_repository.dart';
+import 'package:photo_vault/core/data/repositories/stub_auth_repository.dart';
+import 'package:photo_vault/features/vault/data/services/pbkdf2_kdf_service.dart';
+import 'package:photo_vault/features/vault/domain/entities/user_mode.dart';
+import 'package:photo_vault/features/vault/domain/repositories/vmk_backup_repository.dart';
+import 'package:photo_vault/features/vault/presentation/state/onboarding_cubit.dart';
+import 'package:photo_vault/features/vault/presentation/state/onboarding_state.dart';
 
 OnboardingCubit _makeCubit() {
   final vaultRepo = InMemoryVaultRepository();

@@ -54,7 +54,19 @@ android {
         release {
             signingConfig = if (testerKeystorePath != null) {
                 signingConfigs.getByName("testerRelease")
+            } else if (project.hasProperty("allowDebugSigning")) {
+                signingConfigs.getByName("debug")
             } else {
+                // Debug-signed release builds can be impersonated; fail only
+                // when a release task is actually requested.
+                if (gradle.startParameter.taskNames.any {
+                        it.contains("release", ignoreCase = true)
+                    }) {
+                    error(
+                "Release builds need ANDROID_KEYSTORE_PATH (see README) " +
+                            "or allowDebugSigning=true in ~/.gradle/gradle.properties.",
+                    )
+                }
                 signingConfigs.getByName("debug")
             }
         }

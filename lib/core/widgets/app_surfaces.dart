@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 
-import '../../presentation/theme/app_colors.dart';
-import '../../presentation/theme/app_spacing.dart';
-import '../../presentation/theme/app_typography.dart';
+import '../presentation/theme/app_colors.dart';
+import '../presentation/theme/app_spacing.dart';
+import '../presentation/theme/app_typography.dart';
 
 /// Small uppercase label introducing a group of rows.
 ///
@@ -67,16 +67,20 @@ class SettingsCard extends StatelessWidget {
       items.add(children[i]);
       if (dividers && i != children.length - 1) {
         items.add(
-          const Divider(height: 1, indent: AppSpacing.lg, endIndent: AppSpacing.lg),
+          const Divider(
+            height: 1,
+            indent: AppSpacing.lg,
+            endIndent: AppSpacing.lg,
+          ),
         );
       }
     }
 
     return Padding(
-      padding:
-          margin ??
-          const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
-      child: Card(child: Column(mainAxisSize: MainAxisSize.min, children: items)),
+      padding: margin ?? const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
+      child: Card(
+        child: Column(mainAxisSize: MainAxisSize.min, children: items),
+      ),
     );
   }
 }
@@ -152,7 +156,10 @@ class InfoBanner extends StatelessWidget {
               ],
             ),
           ),
-          if (action != null) ...[const SizedBox(width: AppSpacing.sm), action!],
+          if (action != null) ...[
+            const SizedBox(width: AppSpacing.sm),
+            action!,
+          ],
         ],
       ),
     );

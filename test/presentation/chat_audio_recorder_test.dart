@@ -3,8 +3,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:photo_vault/application/services/android_chat_secure_media_service.dart';
-import 'package:photo_vault/presentation/widgets/chat/chat_audio_recorder.dart';
+import 'package:photo_vault/features/chat/application/media/android_chat_secure_media_service.dart';
+import 'package:photo_vault/features/chat/presentation/widgets/chat_audio_recorder.dart';
 
 class _Recorder extends AndroidChatSecureMediaService {
   final calls = <String>[];

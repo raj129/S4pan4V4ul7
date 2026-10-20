@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-import '../../presentation/theme/app_spacing.dart';
+import '../presentation/theme/app_spacing.dart';
 
 /// The app's single navigation drawer UI.
 ///

@@ -23,7 +23,12 @@ class DisplayPanel extends StatelessWidget {
 
     return Container(
       width: double.infinity,
-      padding: EdgeInsets.fromLTRB(20, compact ? 12 : 18, 20, compact ? 12 : 16),
+      padding: EdgeInsets.fromLTRB(
+        20,
+        compact ? 12 : 18,
+        20,
+        compact ? 12 : 16,
+      ),
       decoration: BoxDecoration(
         color: CalculatorTheme.surface,
         borderRadius: BorderRadius.circular(CalculatorTheme.panelRadius),

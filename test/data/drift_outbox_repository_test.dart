@@ -1,10 +1,10 @@
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:photo_vault/data/repositories_impl/drift_outbox_repository.dart';
-import 'package:photo_vault/domain/entities/chat_message.dart';
-import 'package:photo_vault/domain/entities/message_metadata.dart';
-import 'package:photo_vault/domain/repositories/outbox_repository.dart';
-import 'package:photo_vault/storage/local_db/vault_database.dart';
+import 'package:photo_vault/features/chat/data/repositories/drift_outbox_repository.dart';
+import 'package:photo_vault/features/chat/domain/entities/chat_message.dart';
+import 'package:photo_vault/features/chat/domain/entities/message_metadata.dart';
+import 'package:photo_vault/features/chat/domain/repositories/outbox_repository.dart';
+import 'package:photo_vault/core/storage/local_db/vault_database.dart';
 
 void main() {
   late VaultDatabase db;

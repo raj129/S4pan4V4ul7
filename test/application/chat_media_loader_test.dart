@@ -1,13 +1,14 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:cryptography/cryptography.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:photo_vault/application/services/chat_media_cache.dart';
-import 'package:photo_vault/application/services/chat_media_loader.dart';
-import 'package:photo_vault/crypto/services/chat_crypto_service.dart';
-import 'package:photo_vault/domain/repositories/message_repository.dart';
+import 'package:flutter/services.dart';
+import 'package:photo_vault/features/chat/application/media/android_chat_downloads.dart';
+import 'package:photo_vault/features/chat/application/media/chat_media_cache.dart';
+import 'package:photo_vault/features/chat/application/media/chat_media_loader.dart';
+import 'package:photo_vault/features/chat/application/crypto/chat_crypto_service.dart';
+import 'package:photo_vault/features/chat/domain/repositories/message_repository.dart';
 
 class _Media implements MediaRepository {
   int downloads = 0;
@@ -37,6 +38,7 @@ class _Crypto implements ChatCryptoService {
 }
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
   late Directory directory;
   late ChatMediaCache disk;
   late _Media media;
@@ -50,7 +52,7 @@ void main() {
       cryptoService: _Crypto(),
       diskCache: disk,
       accountId: 'alice',
-      loadTimeout: const Duration(milliseconds: 50),
+      loadTimeout: const Duration(seconds: 2),
     );
   });
   tearDown(() async {
@@ -65,8 +67,12 @@ void main() {
       loader.addListener(() => notifications++);
       final first = loader.load(threadId: 't', storagePath: 'p');
       final second = loader.load(threadId: 't', storagePath: 'p');
-      expect(identical(first, second), isTrue);
+      expect(identical(first, second), isFalse);
       expect(await first, [1, 2]);
+      final firstBytes = await first;
+      final secondBytes = await second;
+      firstBytes.fillRange(0, firstBytes.length, 0);
+      expect(secondBytes, [1, 2]);
       expect(media.downloads, 1);
       expect(notifications, 1);
       loader.seed('p', Uint8List.fromList([4]));
@@ -136,4 +142,103 @@ void main() {
       expect(await disk.read('alice:p'), isNull);
     },
   );
+
+  group('Android durable acquisitions', () {
+    const channel = MethodChannel('test/loader_downloads');
+    late AndroidChatDownloads downloads;
+    late List<String> calls;
+    var state = 'completed';
+    Uint8List payload = Uint8List.fromList([1, 2]);
+    setUp(() {
+      calls = [];
+      state = 'completed';
+      payload = Uint8List.fromList([1, 2]);
+      downloads = AndroidChatDownloads(
+        currentUid: () => loader.accountId,
+        channel: channel,
+        pollInterval: const Duration(milliseconds: 5),
+      );
+      loader.dispose();
+      loader = ChatMediaLoader(
+        mediaRepository: media,
+        cryptoService: _Crypto(),
+        diskCache: disk,
+        accountId: 'alice',
+        downloads: downloads,
+        loadTimeout: const Duration(milliseconds: 10),
+      );
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (call) async {
+            calls.add(call.method);
+            if (call.method == 'list') {
+              return [
+                {
+                  'uid': 'alice',
+                  'threadId': 'alice_bob',
+                  'storagePath': 'p',
+                  'state': state,
+                  'processedBytes': payload.length,
+                  'totalBytes': payload.length,
+                },
+              ];
+            }
+            if (call.method == 'read') return payload;
+            if (call.method == 'resume') state = 'completed';
+            if (call.method == 'cancel') state = 'cancelled';
+            return null;
+          });
+    });
+    tearDown(() {
+      downloads.dispose();
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, null);
+    });
+    test(
+      'paused download is not aborted by the old whole-file timeout',
+      () async {
+        state = 'paused';
+        final result = loader.fetchUncached(
+          threadId: 'alice_bob',
+          storagePath: 'p',
+        );
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+        expect(calls, isNot(contains('read')));
+        await downloads.command('p', 'resume');
+        expect(await result, [1, 2]);
+        expect(media.downloads, 0);
+        expect(calls, contains('acknowledge'));
+        expect(await disk.read('alice:p'), [1, 2]);
+      },
+    );
+    test(
+      'warm cache avoids native network work and returns owned plaintext',
+      () async {
+        final first = await loader.fetchUncached(
+          threadId: 'alice_bob',
+          storagePath: 'p',
+        );
+        first.fillRange(0, first.length, 0);
+        final second = await loader.fetchUncached(
+          threadId: 'alice_bob',
+          storagePath: 'p',
+        );
+        expect(second, [1, 2]);
+        expect(calls.where((c) => c == 'enqueue'), hasLength(1));
+        expect(calls.where((c) => c == 'read'), hasLength(1));
+      },
+    );
+    test(
+      'unauthenticated download is cancelled and never cached or acknowledged',
+      () async {
+        payload = Uint8List.fromList([0]);
+        await expectLater(
+          loader.fetchUncached(threadId: 'alice_bob', storagePath: 'p'),
+          throwsA(isA<SecretBoxAuthenticationError>()),
+        );
+        expect(calls, contains('cancel'));
+        expect(calls, isNot(contains('acknowledge')));
+        expect(await disk.read('alice:p'), isNull);
+      },
+    );
+  });
 }

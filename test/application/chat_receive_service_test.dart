@@ -2,11 +2,11 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:photo_vault/application/services/chat_media_cache.dart';
-import 'package:photo_vault/application/services/chat_receive_service.dart';
-import 'package:photo_vault/crypto/services/chat_crypto_service.dart';
-import 'package:photo_vault/domain/entities/chat_message.dart';
-import 'package:photo_vault/domain/repositories/message_repository.dart';
+import 'package:photo_vault/features/chat/application/media/chat_media_cache.dart';
+import 'package:photo_vault/features/chat/application/services/chat_receive_service.dart';
+import 'package:photo_vault/features/chat/application/crypto/chat_crypto_service.dart';
+import 'package:photo_vault/features/chat/domain/entities/chat_message.dart';
+import 'package:photo_vault/features/chat/domain/repositories/message_repository.dart';
 import '../helpers/memory_message_cache.dart';
 
 class _Messages implements MessageRepository {

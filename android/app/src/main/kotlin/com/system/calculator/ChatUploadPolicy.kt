@@ -9,6 +9,11 @@ object ChatUploadPolicy {
     fun restartExpiredSession(hasSession: Boolean, httpCode: Int) =
         hasSession && httpCode in setOf(404, 410)
 
+    fun confirmedProgress(saved: Long, snapshot: Long, sameSession: Boolean): Long {
+        require(saved >= 0 && snapshot >= 0)
+        return if (sameSession) maxOf(saved, snapshot) else snapshot
+    }
+
     fun transition(state: String, command: String, delivering: Boolean): String {
         if (delivering) return state
         return when (command) {

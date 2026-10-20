@@ -6,14 +6,14 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
 import 'package:image_picker/image_picker.dart';
-import 'package:photo_vault/application/services/chat_attachment_vault_importer.dart';
-import 'package:photo_vault/application/services/chat_vault_bridge.dart';
-import 'package:photo_vault/application/services/import_manager.dart';
-import 'package:photo_vault/application/services/vault_session.dart';
-import 'package:photo_vault/application/usecases/export_photo_usecase.dart';
-import 'package:photo_vault/crypto/services/aes_gcm_crypto_service.dart';
-import 'package:photo_vault/domain/entities/vault_photo.dart';
-import 'package:photo_vault/test_helpers/repositories/in_memory_photo_repository.dart';
+import 'package:photo_vault/core/integrations/chat_attachment_vault_importer.dart';
+import 'package:photo_vault/core/integrations/chat_vault_bridge.dart';
+import 'package:photo_vault/features/vault/application/services/import_manager.dart';
+import 'package:photo_vault/core/session/vault_session.dart';
+import 'package:photo_vault/features/vault/application/usecases/export_photo_usecase.dart';
+import 'package:photo_vault/core/crypto/services/aes_gcm_crypto_service.dart';
+import 'package:photo_vault/features/vault/domain/entities/vault_photo.dart';
+import 'package:photo_vault/core/testing/repositories/in_memory_photo_repository.dart';
 import 'package:uuid/uuid.dart';
 
 class FailingRepository extends InMemoryPhotoRepository {

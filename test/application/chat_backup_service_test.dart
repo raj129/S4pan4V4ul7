@@ -2,11 +2,11 @@ import 'dart:typed_data';
 
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:photo_vault/application/services/chat_backup_scheduler.dart';
-import 'package:photo_vault/application/services/chat_backup_service.dart';
-import 'package:photo_vault/crypto/services/chat_crypto_service.dart';
-import 'package:photo_vault/domain/entities/chat_message.dart';
-import 'package:photo_vault/domain/repositories/chat_backup_store.dart';
+import 'package:photo_vault/features/chat/application/services/chat_backup_scheduler.dart';
+import 'package:photo_vault/features/chat/application/services/chat_backup_service.dart';
+import 'package:photo_vault/features/chat/application/crypto/chat_crypto_service.dart';
+import 'package:photo_vault/features/chat/domain/entities/chat_message.dart';
+import 'package:photo_vault/features/chat/domain/repositories/chat_backup_store.dart';
 
 import '../helpers/memory_message_cache.dart';
 
@@ -55,15 +55,14 @@ class _MemoryStore implements ChatBackupStore {
       blobs[accountId];
 }
 
-ChatMessage _msg(String id, DateTime at, {String thread = 't1'}) =>
-    ChatMessage(
-      messageId: id,
-      threadId: thread,
-      senderId: 'me',
-      encryptedText: 'cipher-$id',
-      sentAt: at,
-      deletedFor: const [],
-    );
+ChatMessage _msg(String id, DateTime at, {String thread = 't1'}) => ChatMessage(
+  messageId: id,
+  threadId: thread,
+  senderId: 'me',
+  encryptedText: 'cipher-$id',
+  sentAt: at,
+  deletedFor: const [],
+);
 
 void main() {
   late MemoryMessageCache cache;
@@ -89,30 +88,32 @@ void main() {
     now = DateTime.utc(2024, 3, 10, 2);
   });
 
-  test('clear, chat, back up, wipe, restore shows only post-clear messages',
-      () async {
-    final clearedAt = DateTime.utc(2024, 3, 9, 12);
-    await cache.setClearedBefore('t1', clearedAt);
-    await cache.save([_msg('after-clear', DateTime.utc(2024, 3, 9, 18))]);
-    await build().backupNow();
+  test(
+    'clear, chat, back up, wipe, restore shows only post-clear messages',
+    () async {
+      final clearedAt = DateTime.utc(2024, 3, 9, 12);
+      await cache.setClearedBefore('t1', clearedAt);
+      await cache.save([_msg('after-clear', DateTime.utc(2024, 3, 9, 18))]);
+      await build().backupNow();
 
-    // "Clear app data": a brand-new cache.
-    final fresh = MemoryMessageCache();
-    now = DateTime.utc(2024, 3, 10, 9);
-    final service = build(on: fresh);
-    expect(await service.prepareForSession(), isTrue);
-    expect(fresh.horizon, now);
+      // "Clear app data": a brand-new cache.
+      final fresh = MemoryMessageCache();
+      now = DateTime.utc(2024, 3, 10, 9);
+      final service = build(on: fresh);
+      expect(await service.prepareForSession(), isTrue);
+      expect(fresh.horizon, now);
 
-    final snapshot = await service.findLatestBackup();
-    expect(snapshot, isNotNull);
-    await service.restore(snapshot!);
+      final snapshot = await service.findLatestBackup();
+      expect(snapshot, isNotNull);
+      await service.restore(snapshot!);
 
-    expect(fresh.rows.keys, ['after-clear']);
-    expect(fresh.cleared['t1'], clearedAt);
-    // Messages that reached the server after the backup are visible again.
-    expect(fresh.horizon, DateTime.utc(2024, 3, 10, 2));
-    expect(await service.prepareForSession(), isFalse);
-  });
+      expect(fresh.rows.keys, ['after-clear']);
+      expect(fresh.cleared['t1'], clearedAt);
+      // Messages that reached the server after the backup are visible again.
+      expect(fresh.horizon, DateTime.utc(2024, 3, 10, 2));
+      expect(await service.prepareForSession(), isFalse);
+    },
+  );
 
   test('an existing install with history is not given a horizon', () async {
     await cache.save([_msg('a', DateTime.utc(2024, 3, 1))]);
@@ -138,19 +139,21 @@ void main() {
     expect(drive.writes, 1);
   });
 
-  test('backupIfDue waits for a day and never runs before a restore decision',
-      () async {
-    final service = build();
-    await service.prepareForSession(); // empty cache → restore pending
-    expect(await service.backupIfDue(), isNull);
+  test(
+    'backupIfDue waits for a day and never runs before a restore decision',
+    () async {
+      final service = build();
+      await service.prepareForSession(); // empty cache → restore pending
+      expect(await service.backupIfDue(), isNull);
 
-    await service.dismissRestoreOffer();
-    expect(await service.backupIfDue(), isNotNull);
-    now = now.add(const Duration(hours: 5));
-    expect(await service.backupIfDue(), isNull);
-    now = now.add(const Duration(hours: 20));
-    expect(await service.backupIfDue(), isNotNull);
-  });
+      await service.dismissRestoreOffer();
+      expect(await service.backupIfDue(), isNotNull);
+      now = now.add(const Duration(hours: 5));
+      expect(await service.backupIfDue(), isNull);
+      now = now.add(const Duration(hours: 20));
+      expect(await service.backupIfDue(), isNotNull);
+    },
+  );
 
   test('picks the newest readable backup across stores', () async {
     await cache.save([_msg('old', DateTime.utc(2024, 3, 1))]);

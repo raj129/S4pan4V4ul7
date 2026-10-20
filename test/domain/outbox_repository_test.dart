@@ -1,8 +1,8 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:photo_vault/domain/entities/chat_message.dart';
-import 'package:photo_vault/domain/entities/message_metadata.dart';
-import 'package:photo_vault/domain/entities/message_reply.dart';
-import 'package:photo_vault/domain/repositories/outbox_repository.dart';
+import 'package:photo_vault/features/chat/domain/entities/chat_message.dart';
+import 'package:photo_vault/features/chat/domain/entities/message_metadata.dart';
+import 'package:photo_vault/features/chat/domain/entities/message_reply.dart';
+import 'package:photo_vault/features/chat/domain/repositories/outbox_repository.dart';
 
 OutboxItem _item({
   String messageId = 'm1',

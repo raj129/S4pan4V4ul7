@@ -5,14 +5,14 @@ import android.content.Intent
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import androidx.work.*
+import com.google.firebase.auth.FirebaseAuth
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
-import com.google.firebase.auth.FirebaseAuth
 import org.json.JSONObject
 import java.security.MessageDigest
 import java.util.concurrent.Executors
-import androidx.work.*
 import java.util.concurrent.TimeUnit
 
 class ChatUploadPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
@@ -125,14 +125,10 @@ class ChatUploadPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
                                     job.put("state", next).put("eligibleAt", 0L)
                                         .put("revision", job.optInt("revision") + 1)
                                     if (call.method == "retry") job.put("attempts", 0)
-                                    if (call.method in listOf("pause", "retry")) {
-                                        // Firebase cancel invalidates its resumable session.
-                                        // Retain ciphertext/checkpoints, not a cancelled URI.
-                                        job.remove("mediaSession")
-                                        job.remove("thumbSession")
-                                    }
+                                    // The runtime's last snapshot is checkpointed
+                                    // by its settling owner before another drain.
                                     store.put(job)
-                                    ChatUploadRuntime.interrupt(id)
+                                    ChatUploadRuntime.interrupt(id, next == "cancelled")
                                     if (next == "cancelled") {
                                         for (file in listOf(store.blob(id), store.blob(id, true))) {
                                             check(!file.exists() || file.delete()) { "Could not clean cancelled encrypted attachment" }

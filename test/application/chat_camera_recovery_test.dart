@@ -2,8 +2,8 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:photo_vault/application/services/chat_camera_recovery.dart';
-import 'package:photo_vault/crypto/services/chat_crypto_service.dart';
+import 'package:photo_vault/features/chat/application/media/chat_camera_recovery.dart';
+import 'package:photo_vault/features/chat/application/crypto/chat_crypto_service.dart';
 
 class _Crypto implements ChatCryptoService {
   @override

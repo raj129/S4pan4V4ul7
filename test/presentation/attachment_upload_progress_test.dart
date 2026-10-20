@@ -2,8 +2,8 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:photo_vault/presentation/state/chat/media_send_status.dart';
-import 'package:photo_vault/presentation/widgets/chat/attachment_upload_progress.dart';
+import 'package:photo_vault/features/chat/application/media/media_send_status.dart';
+import 'package:photo_vault/features/chat/presentation/widgets/attachment_upload_progress.dart';
 
 void main() {
   Future<void> show(
@@ -13,6 +13,7 @@ void main() {
     VoidCallback? resume,
     VoidCallback? retry,
     VoidCallback? cancel,
+    bool retryCancelled = false,
   }) => tester.pumpWidget(
     MaterialApp(
       home: Scaffold(
@@ -28,6 +29,7 @@ void main() {
           onResume: resume,
           onRetry: retry,
           onCancel: cancel,
+          retryCancelled: retryCancelled,
         ),
       ),
     ),
@@ -95,4 +97,26 @@ void main() {
       .25,
     );
   });
+  testWidgets(
+    'cancelled downloads can retry without changing upload defaults',
+    (tester) async {
+      var retries = 0;
+      await show(
+        tester,
+        MediaUploadLifecycle.cancelled,
+        retry: () => retries++,
+      );
+      expect(find.text('Retry download'), findsNothing);
+      await show(
+        tester,
+        MediaUploadLifecycle.cancelled,
+        retryCancelled: true,
+        retry: () => retries++,
+      );
+      await tester.tap(find.text('Retry download'));
+      await tester.pump();
+      expect(retries, 1);
+      expect(find.text('Cancel'), findsNothing);
+    },
+  );
 }

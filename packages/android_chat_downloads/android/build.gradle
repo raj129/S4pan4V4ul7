@@ -1,0 +1,31 @@
+plugins {
+    id 'com.android.library'
+}
+
+group = 'com.system.calculator.chatdownloads'
+version = '0.0.1'
+
+android {
+    namespace = 'com.system.calculator.chatdownloads'
+    compileSdk = 37
+    defaultConfig { minSdk = 24 }
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    implementation platform('com.google.firebase:firebase-bom:34.9.0')
+    implementation 'com.google.firebase:firebase-auth'
+    implementation 'com.google.firebase:firebase-storage'
+    implementation 'com.google.firebase:firebase-firestore'
+    implementation 'androidx.work:work-runtime-ktx:2.11.1'
+    testImplementation 'junit:junit:4.13.2'
+}
+
+kotlin {
+    compilerOptions {
+        jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
+    }
+}

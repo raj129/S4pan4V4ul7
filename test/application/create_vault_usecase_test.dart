@@ -1,14 +1,14 @@
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:photo_vault/application/usecases/create_vault_usecase.dart';
-import 'package:photo_vault/application/services/vault_session.dart';
-import 'package:photo_vault/crypto/services/aes_gcm_crypto_service.dart';
-import 'package:photo_vault/data/repositories_impl/in_memory_secure_storage_repository.dart';
-import 'package:photo_vault/data/repositories_impl/in_memory_vault_repository.dart';
-import 'package:photo_vault/data/services/pbkdf2_kdf_service.dart';
-import 'package:photo_vault/domain/entities/user_mode.dart';
-import 'package:photo_vault/domain/entities/vault_status.dart';
-import 'package:photo_vault/domain/repositories/vmk_backup_repository.dart';
+import 'package:photo_vault/features/vault/application/usecases/create_vault_usecase.dart';
+import 'package:photo_vault/core/session/vault_session.dart';
+import 'package:photo_vault/core/crypto/services/aes_gcm_crypto_service.dart';
+import 'package:photo_vault/core/testing/repositories/in_memory_secure_storage_repository.dart';
+import 'package:photo_vault/core/testing/repositories/in_memory_vault_repository.dart';
+import 'package:photo_vault/features/vault/data/services/pbkdf2_kdf_service.dart';
+import 'package:photo_vault/features/vault/domain/entities/user_mode.dart';
+import 'package:photo_vault/features/vault/domain/entities/vault_status.dart';
+import 'package:photo_vault/features/vault/domain/repositories/vmk_backup_repository.dart';
 
 void main() {
   group('CreateVaultUseCase', () {
@@ -62,10 +62,7 @@ void main() {
       );
 
       await expectLater(
-        failingUseCase.execute(
-          pin: '8472',
-          mode: UserMode.localOnly,
-        ),
+        failingUseCase.execute(pin: '8472', mode: UserMode.localOnly),
         throwsA(isA<VaultCreationException>()),
       );
 
@@ -85,10 +82,7 @@ void main() {
         );
 
         try {
-          await failingUseCase.execute(
-            pin: '8472',
-            mode: UserMode.localOnly,
-          );
+          await failingUseCase.execute(pin: '8472', mode: UserMode.localOnly);
         } catch (_) {}
 
         // Secure storage must be empty after cleanup.

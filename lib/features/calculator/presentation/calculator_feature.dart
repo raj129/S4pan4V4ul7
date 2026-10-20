@@ -93,12 +93,17 @@ class _CalculatorFeatureState extends State<CalculatorFeature> {
           builder: (context, constraints) {
             final layoutMode = CalculatorResponsive.getLayoutMode(constraints);
             final compact = CalculatorResponsive.isCompact(constraints);
-            final basicKeyHeight =
-                CalculatorResponsive.calculateKeyHeight(constraints, state.scientificExpanded);
-            final sectionSpacing =
-                CalculatorResponsive.sectionSpacing(layoutMode, compact);
-            final contentPadding =
-                CalculatorResponsive.contentPadding(layoutMode);
+            final basicKeyHeight = CalculatorResponsive.calculateKeyHeight(
+              constraints,
+              state.scientificExpanded,
+            );
+            final sectionSpacing = CalculatorResponsive.sectionSpacing(
+              layoutMode,
+              compact,
+            );
+            final contentPadding = CalculatorResponsive.contentPadding(
+              layoutMode,
+            );
 
             final calculatorContent = Column(
               mainAxisSize: MainAxisSize.min,
@@ -137,8 +142,7 @@ class _CalculatorFeatureState extends State<CalculatorFeature> {
                   onKeyTap: _onKeyTap,
                   onKeyPressStart: (key) =>
                       _vaultTrigger.handlePressStart(key.id),
-                  onKeyPressEnd: (key) =>
-                      _vaultTrigger.handlePressEnd(key.id),
+                  onKeyPressEnd: (key) => _vaultTrigger.handlePressEnd(key.id),
                 ),
               ],
             );

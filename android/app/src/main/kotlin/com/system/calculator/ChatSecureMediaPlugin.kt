@@ -12,23 +12,14 @@ import android.graphics.Color
 import android.graphics.pdf.PdfRenderer
 import android.media.AudioManager
 import android.media.MediaPlayer
-import android.os.Build
-import android.os.Bundle
-import android.os.Handler
-import android.os.HandlerThread
-import android.os.Looper
-import android.os.ParcelFileDescriptor
-import android.os.ProxyFileDescriptorCallback
+import android.os.*
 import android.os.storage.StorageManager
 import android.provider.OpenableColumns
 import android.system.ErrnoException
 import android.system.OsConstants
 import android.view.WindowManager
-import android.widget.Button
-import android.widget.ImageView
-import android.widget.LinearLayout
-import android.widget.SeekBar
-import android.widget.TextView
+import android.widget.*
+import com.google.firebase.auth.FirebaseAuth
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.embedding.engine.plugins.activity.ActivityAware
 import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
@@ -36,7 +27,11 @@ import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.PluginRegistry
 import java.io.ByteArrayOutputStream
+import java.io.FileNotFoundException
+import java.io.IOException
+import java.io.InputStream
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicInteger
 
 /** All chat-created persistence is ciphertext. Viewing/capture are in-app and
  * stopped on background/detach. No external OPEN intent or plaintext staging. */
@@ -50,6 +45,8 @@ class ChatSecureMediaPlugin : FlutterPlugin, ActivityAware, MethodChannel.Method
     private val main = Handler(Looper.getMainLooper())
     private val io = Executors.newSingleThreadExecutor()
     private var pendingPicker: MethodChannel.Result? = null
+    private var pendingPickerAccountEpoch = 0
+    private var pendingPickerUid: String? = null
     private var permissionResult: MethodChannel.Result? = null
     private var permissionAction: (() -> Unit)? = null
     private var viewer: Dialog? = null
@@ -58,7 +55,12 @@ class ChatSecureMediaPlugin : FlutterPlugin, ActivityAware, MethodChannel.Method
     private var recordingBusy = false
     private var recordingEpoch = 0
     private var camera: ChatMemoryCamera? = null
-    private var generation = 0
+    @Volatile private var generation = 0
+    @Volatile private var engineAttached = false
+    private val sourceAccountEpoch = AtomicInteger()
+    private val sourceAuthListener = FirebaseAuth.AuthStateListener {
+        sourceAccountEpoch.incrementAndGet()
+    }
     private var active = false
     private val audioFocus = AudioManager.OnAudioFocusChangeListener { change ->
         if (change < 0) main.post { cancelRecording() }
@@ -68,11 +70,15 @@ class ChatSecureMediaPlugin : FlutterPlugin, ActivityAware, MethodChannel.Method
         context = binding.applicationContext
         channel = MethodChannel(binding.binaryMessenger, "photo_vault/chat_secure_media")
         channel.setMethodCallHandler(this)
+        engineAttached = true
+        FirebaseAuth.getInstance().addAuthStateListener(sourceAuthListener)
         (context as Application).registerActivityLifecycleCallbacks(this)
         io.execute { ChatEncryptedRecorder.cleanAbandoned(context) }
     }
 
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
+        engineAttached = false
+        FirebaseAuth.getInstance().removeAuthStateListener(sourceAuthListener)
         close()
         pendingPicker?.error("interrupted", "Acquisition interrupted.", null)
         pendingPicker = null
@@ -108,6 +114,7 @@ class ChatSecureMediaPlugin : FlutterPlugin, ActivityAware, MethodChannel.Method
         try {
             when (call.method) {
                 "pickAttachments" -> pick(call, result)
+                "readSource", "releaseSourcePermission" -> sourceAction(call, result)
                 "readContentUri" -> {
                     val uri = android.net.Uri.parse(call.argument<String>("uri") ?: "")
                     require(uri.scheme == "content")
@@ -161,7 +168,7 @@ class ChatSecureMediaPlugin : FlutterPlugin, ActivityAware, MethodChannel.Method
                     } else if (call.method == "showPdf") {
                         showPdf(bytes, result)
                     } else {
-                        if (call.method == "showVideo") showVideoPlayer(bytes, result)
+                        if (call.method == "showVideo") showVideoPlayer(bytes, result, call.argument<Boolean>("measureStartup") == true)
                         else showAudioPlayer(bytes, result)
                     }
                 }
@@ -175,16 +182,20 @@ class ChatSecureMediaPlugin : FlutterPlugin, ActivityAware, MethodChannel.Method
         }
     }
 
-    private fun background(result: MethodChannel.Result, task: () -> Any?) {
+    private fun background(result: MethodChannel.Result, guard: (() -> Boolean)? = null, task: () -> Any?) {
         io.execute {
             try {
                 val value = task()
                 main.post {
-                    result.success(value)
-                    // StandardMethodCodec copies synchronously into the reply.
-                    when (value) {
-                        is Map<*, *> -> (value["bytes"] as? ByteArray)?.fill(0)
-                        is List<*> -> value.forEach { (it as? Map<*, *>)?.get("bytes")?.let { b -> (b as? ByteArray)?.fill(0) } }
+                    try {
+                        if (guard?.invoke() == false) result.error("interrupted", "Acquisition interrupted.", null)
+                        else result.success(value)
+                    } finally {
+                        // StandardMethodCodec copies synchronously into the reply.
+                        when (value) {
+                            is Map<*, *> -> (value["bytes"] as? ByteArray)?.fill(0)
+                            is List<*> -> value.forEach { (it as? Map<*, *>)?.get("bytes")?.let { b -> (b as? ByteArray)?.fill(0) } }
+                        }
                     }
                 }
             } catch (_: SizeLimitException) {
@@ -237,13 +248,16 @@ class ChatSecureMediaPlugin : FlutterPlugin, ActivityAware, MethodChannel.Method
         }
         val host = activity ?: throw IllegalStateException()
         val types = call.argument<List<String>>("mimeTypes") ?: listOf("*/*")
-        val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
             type = types.singleOrNull() ?: "*/*"
             addCategory(Intent.CATEGORY_OPENABLE)
             putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
             if (types.size > 1) putExtra(Intent.EXTRA_MIME_TYPES, types.toTypedArray())
         }
         pendingPicker = result
+        pendingPickerAccountEpoch = sourceAccountEpoch.get()
+        pendingPickerUid = FirebaseAuth.getInstance().currentUser?.uid
         try { host.startActivityForResult(intent, PICK_REQUEST) }
         catch (e: Exception) { pendingPicker = null; throw e }
     }
@@ -252,6 +266,13 @@ class ChatSecureMediaPlugin : FlutterPlugin, ActivityAware, MethodChannel.Method
         if (code != PICK_REQUEST) return false
         val result = pendingPicker ?: return true
         pendingPicker = null
+        val accountEpoch = pendingPickerAccountEpoch
+        val pickerUid = pendingPickerUid
+        pendingPickerUid = null
+        if (accountEpoch != sourceAccountEpoch.get() || FirebaseAuth.getInstance().currentUser?.uid != pickerUid) {
+            result.error("interrupted", "Acquisition interrupted.", null)
+            return true
+        }
         if (resultCode != Activity.RESULT_OK || data == null) {
             result.success(emptyList<Any>())
             return true
@@ -266,16 +287,24 @@ class ChatSecureMediaPlugin : FlutterPlugin, ActivityAware, MethodChannel.Method
             for (i in 0 until clip.itemCount) uris.add(clip.getItemAt(i).uri)
         } else data.data?.let { uris.add(it) }
         val epoch = generation
-        background(result) {
+        val grantFlags = data.flags
+        background(result, guard = {
+            engineAttached && epoch == generation && accountEpoch == sourceAccountEpoch.get() &&
+                FirebaseAuth.getInstance().currentUser?.uid == pickerUid
+        }) {
             val attachments = mutableListOf<Map<String, Any>>()
             var remaining = ChatMemoryDataSource.MAX_BYTES
             try {
                 uris.forEach { uri ->
+                    check(epoch == generation && accountEpoch == sourceAccountEpoch.get() &&
+                        FirebaseAuth.getInstance().currentUser?.uid == pickerUid)
+                    val flags = retainSourcePermission(uri, grantFlags)
                     val attachment = readUri(uri, remaining)
                     remaining -= (attachment["bytes"] as ByteArray).size
-                    attachments.add(attachment)
+                    attachments.add(attachment + mapOf("sourceUri" to uri.toString(), "sourceFlags" to flags))
                 }
-                check(epoch == generation)
+                check(epoch == generation && accountEpoch == sourceAccountEpoch.get() &&
+                    FirebaseAuth.getInstance().currentUser?.uid == pickerUid)
                 attachments
             } catch (e: Exception) {
                 attachments.forEach { (it["bytes"] as ByteArray).fill(0) }
@@ -297,26 +326,153 @@ class ChatSecureMediaPlugin : FlutterPlugin, ActivityAware, MethodChannel.Method
                 if (nameColumn >= 0) name = cursor.getString(nameColumn) ?: name
             }
         }
+        val mimeType = resolver.getType(uri) ?: "application/octet-stream"
         // Unknown content lengths are bounded while streaming; never use paths.
+        val input = resolver.openInputStream(uri) ?: throw FileNotFoundException()
+        return readStream(input, name, mimeType, limit)
+    }
+
+    private fun readStream(input: InputStream, name: String, mimeType: String, limit: Int): Map<String, Any> {
+        var attachment: Map<String, Any>? = null
+        try {
+            input.use { attachment = readAttachment(it, name, mimeType, limit) }
+            return attachment!!
+        } catch (error: Exception) {
+            (attachment?.get("bytes") as? ByteArray)?.fill(0)
+            throw error
+        }
+    }
+
+    private fun readAttachment(input: InputStream, name: String, mimeType: String, limit: Int): Map<String, Any> {
         val output = WipingOutput()
         val buffer = ByteArray(16384)
         try {
-            resolver.openInputStream(uri)?.use { input ->
-                while (true) {
-                    val count = input.read(buffer)
-                    if (count < 0) break
-                    if (output.size() > limit - count) throw SizeLimitException()
-                    output.write(buffer, 0, count)
-                }
-            } ?: throw IllegalStateException()
-            check(output.size() > 0)
+            while (true) {
+                val count = input.read(buffer)
+                if (count < 0) break
+                if (output.size() > limit - count) throw SizeLimitException()
+                output.write(buffer, 0, count)
+            }
+            if (output.size() == 0) throw IOException("Empty attachment source")
             val safeName = name.substringAfterLast('/').substringAfterLast('\\')
                 .filter { it >= ' ' && it != '\u007f' }.take(200).ifEmpty { "attachment" }
             return mapOf("bytes" to output.toByteArray(), "fileName" to safeName,
-                "mimeType" to (resolver.getType(uri) ?: "application/octet-stream"))
+                "mimeType" to mimeType)
         } finally {
             buffer.fill(0)
             output.wipe()
+        }
+    }
+
+    private fun persistedSourceFlags(uri: android.net.Uri): Int =
+        if (context.contentResolver.persistedUriPermissions.any { it.uri == uri && it.isReadPermission })
+            Intent.FLAG_GRANT_READ_URI_PERMISSION else 0
+
+    private fun retainSourcePermission(uri: android.net.Uri, flags: Int): Int {
+        if (uri.scheme != "content") return 0
+        if (flags and Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION != 0 &&
+            flags and Intent.FLAG_GRANT_READ_URI_PERMISSION != 0) {
+            try {
+                context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            } catch (_: SecurityException) {
+                android.util.Log.d("ChatSecureMedia", "Source provider did not retain read permission.")
+            } catch (_: UnsupportedOperationException) {
+                android.util.Log.d("ChatSecureMedia", "Source provider does not support retained permission.")
+            } catch (_: IllegalArgumentException) {
+                android.util.Log.d("ChatSecureMedia", "Source provider refused retained permission.")
+            }
+        }
+        return try { persistedSourceFlags(uri) } catch (_: SecurityException) { 0 }
+    }
+
+    private fun sourceAction(call: MethodCall, result: MethodChannel.Result) {
+        val uid = call.argument<String>("uid")
+        if (uid.isNullOrBlank() || FirebaseAuth.getInstance().currentUser?.uid != uid) {
+            result.error("account_changed", "Source account changed. Retry with the current account.", null)
+            return
+        }
+        val rawUri = call.argument<String>("sourceUri") ?: ""
+        val parsed = try { ChatOriginalSourcePolicy.validate(rawUri) } catch (_: Exception) {
+            result.error("source_unavailable", "Original source reference is unavailable.", null)
+            return
+        }
+        val requestedLimit = call.argument<Number>("maxBytes")?.toLong()
+            ?: ChatMemoryDataSource.MAX_BYTES.toLong()
+        if (requestedLimit <= 0 || requestedLimit > ChatMemoryDataSource.MAX_BYTES) {
+            result.error("size_limit", "Original source exceeds the memory limit.", null)
+            return
+        }
+        val epoch = generation
+        val accountEpoch = sourceAccountEpoch.get()
+        fun fenceFailure() = ChatOriginalSourcePolicy.fenceFailure(
+            uid, FirebaseAuth.getInstance().currentUser?.uid, accountEpoch, sourceAccountEpoch.get(),
+            engineAttached, epoch, generation)
+        fun checkFence() {
+            fenceFailure()?.let { throw SourceFenceException(it) }
+        }
+        io.execute {
+            var value: Map<String, Any>? = null
+            var errorCode: String? = null
+            try {
+                checkFence()
+                val uri = android.net.Uri.parse(rawUri)
+                if (call.method == "releaseSourcePermission") {
+                    require(parsed.scheme == "content")
+                    val flags = persistedSourceFlags(uri)
+                    checkFence()
+                    if (flags != 0) context.contentResolver.releasePersistableUriPermission(uri, flags)
+                    value = mapOf("released" to (flags != 0), "sourceFlags" to persistedSourceFlags(uri))
+                } else {
+                    val attachment = if (parsed.scheme == "content") readUri(uri, requestedLimit.toInt()) else {
+                        val file = ChatOriginalSourcePolicy.existingFile(parsed)
+                        if (file.length() > requestedLimit) throw SizeLimitException()
+                        val mime = android.webkit.MimeTypeMap.getSingleton()
+                            .getMimeTypeFromExtension(file.extension.lowercase(java.util.Locale.ROOT))
+                            ?: "application/octet-stream"
+                        readStream(file.inputStream(), file.name, mime, requestedLimit.toInt())
+                    }
+                    value = attachment
+                    val flags = if (parsed.scheme == "content") persistedSourceFlags(uri) else 0
+                    value = attachment + mapOf("sourceUri" to rawUri, "sourceFlags" to flags)
+                }
+                checkFence()
+            } catch (error: SourceFenceException) {
+                errorCode = error.code
+            } catch (_: SizeLimitException) {
+                errorCode = "size_limit"
+            } catch (_: SecurityException) {
+                errorCode = "source_permission_denied"
+            } catch (_: FileNotFoundException) {
+                errorCode = "source_unavailable"
+            } catch (_: IOException) {
+                errorCode = "source_corrupt"
+            } catch (_: IllegalArgumentException) {
+                errorCode = "source_unavailable"
+            } catch (error: Exception) {
+                errorCode = "source_internal_error"
+                android.util.Log.e("ChatSecureMedia", "Source operation failed: ${error.javaClass.simpleName}")
+            }
+            val response = value
+            val failure = errorCode
+            main.post {
+                try {
+                    val code = fenceFailure() ?: failure
+                    if (code != null) {
+                        val message = when (code) {
+                            "account_changed" -> "Source account changed. Retry with the current account."
+                            "cancelled" -> "Original source operation interrupted."
+                            "source_permission_denied" -> "Original source permission denied. Select the file again."
+                            "source_unavailable" -> "Original source is no longer available."
+                            "size_limit" -> "Original source exceeds the memory limit."
+                            "source_internal_error" -> "Original source could not be read. Please retry or report this error."
+                            else -> "Original source is empty, corrupt, or unreadable."
+                        }
+                        result.error(code, message, null)
+                    } else result.success(response)
+                } finally {
+                    (response?.get("bytes") as? ByteArray)?.fill(0)
+                }
+            }
         }
     }
 
@@ -446,7 +602,8 @@ class ChatSecureMediaPlugin : FlutterPlugin, ActivityAware, MethodChannel.Method
     }
 
     @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
-    private fun showVideoPlayer(bytes: ByteArray, result: MethodChannel.Result) {
+    private fun showVideoPlayer(bytes: ByteArray, result: MethodChannel.Result, measureStartup: Boolean) {
+        val openedAt = SystemClock.elapsedRealtime()
         val host = activity
         if (host == null || viewer != null || camera != null) {
             bytes.fill(0)
@@ -490,6 +647,11 @@ class ChatSecureMediaPlugin : FlutterPlugin, ActivityAware, MethodChannel.Method
             layout.addView(view, LinearLayout.LayoutParams(-1, 0, 1f))
             layout.addView(Button(host).apply { text = "Close"; setOnClickListener { dialog.dismiss() } })
             playback.addListener(object : androidx.media3.common.Player.Listener {
+                override fun onRenderedFirstFrame() {
+                    if (measureStartup) {
+                        android.util.Log.d("ChatMediaTiming", "stage=first-frame elapsedMs=${SystemClock.elapsedRealtime() - openedAt}")
+                    }
+                }
                 override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
                     if (viewer !== dialog) return
                     complete(true)
@@ -673,8 +835,8 @@ class ChatSecureMediaPlugin : FlutterPlugin, ActivityAware, MethodChannel.Method
                         throw ErrnoException("write", OsConstants.EBADF)
                     override fun onRelease() {}
                 }, Handler(thread.looper))
-            renderer = PdfRenderer(descriptor!!)
-            check(renderer!!.pageCount > 0)
+            renderer = PdfRenderer(descriptor)
+            check(renderer.pageCount > 0)
             layout.addView(image, LinearLayout.LayoutParams(-1, 0, 1f))
             layout.addView(caption)
             buttons.addView(previous)
@@ -723,9 +885,18 @@ class ChatSecureMediaPlugin : FlutterPlugin, ActivityAware, MethodChannel.Method
     override fun onActivityDestroyed(activity: Activity) {}
 
     private class WipingOutput : ByteArrayOutputStream() {
+        override fun write(bytes: ByteArray, offset: Int, length: Int) {
+            if (count + length > buf.size) {
+                val previous = buf
+                buf = previous.copyOf(maxOf(count + length, previous.size * 2))
+                previous.fill(0)
+            }
+            super.write(bytes, offset, length)
+        }
         fun wipe() { buf.fill(0); reset() }
     }
     private class SizeLimitException : Exception()
+    private class SourceFenceException(val code: String) : Exception()
     companion object {
         private const val PICK_REQUEST = 48301
         private const val PERMISSION_REQUEST = 48302

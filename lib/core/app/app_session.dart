@@ -1,6 +1,6 @@
 import 'package:flutter/foundation.dart';
 
-import '../../domain/entities/user_mode.dart';
+import '../../features/vault/domain/entities/user_mode.dart';
 
 /// Mutable, observable session state shared between the app root and the
 /// router's redirect logic.
@@ -13,7 +13,7 @@ import '../../domain/entities/user_mode.dart';
 /// transition testable without a widget tree.
 class AppSessionState extends ChangeNotifier {
   AppSessionState({UserMode initialMode = UserMode.localOnly})
-      : _mode = initialMode;
+    : _mode = initialMode;
 
   UserMode _mode;
   bool _calculatorOnboardingCompleted = false;

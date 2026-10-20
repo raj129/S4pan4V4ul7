@@ -8,11 +8,11 @@ import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 
-import 'application/services/chat_backup_scheduler.dart';
-import 'application/services/push_notification_service.dart';
+import './features/chat/application/services/chat_backup_scheduler.dart';
+import './features/chat/application/services/push_notification_service.dart';
 import 'firebase_options.dart';
-import 'presentation/app/vault_app.dart';
-import 'presentation/widgets/chat/animated_emoji.dart';
+import './core/app/vault_app.dart';
+import './features/chat/presentation/widgets/animated_emoji.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
