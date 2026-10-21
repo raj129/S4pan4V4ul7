@@ -13,6 +13,7 @@ class VideoQualitySheet extends StatefulWidget {
     this.videoBytes,
     this.initialDurationMs,
     this.initialEstimates,
+    this.showEstimates = true,
   });
 
   /// Size of the picked video in bytes.
@@ -21,6 +22,7 @@ class VideoQualitySheet extends StatefulWidget {
   final Uint8List? videoBytes;
   final int? initialDurationMs;
   final Map<VideoQuality, int>? initialEstimates;
+  final bool showEstimates;
 
   static Future<VideoQuality?> show(
     BuildContext context, {
@@ -29,6 +31,7 @@ class VideoQualitySheet extends StatefulWidget {
     Uint8List? videoBytes,
     int? initialDurationMs,
     Map<VideoQuality, int>? initialEstimates,
+    bool showEstimates = true,
   }) {
     return showModalBottomSheet<VideoQuality>(
       context: context,
@@ -38,6 +41,7 @@ class VideoQualitySheet extends StatefulWidget {
         videoBytes: videoBytes,
         initialDurationMs: initialDurationMs,
         initialEstimates: initialEstimates,
+        showEstimates: showEstimates,
       ),
     );
   }
@@ -56,14 +60,16 @@ class _VideoQualitySheetState extends State<VideoQualitySheet> {
     _durationMs = widget.initialDurationMs;
     _estimates = widget.initialEstimates;
 
-    if (_estimates == null) {
+    if (widget.showEstimates && _estimates == null) {
       _estimates = const VideoCompressor().estimateAllSizes(
         originalBytes: widget.originalBytes,
         durationMs: _durationMs,
       );
     }
 
-    if (_durationMs == null && widget.videoBytes != null) {
+    if (widget.showEstimates &&
+        _durationMs == null &&
+        widget.videoBytes != null) {
       const VideoCompressor().extractMetadata(widget.videoBytes!).then((meta) {
         if (mounted && meta.durationMs > 0) {
           setState(() {
@@ -129,7 +135,9 @@ class _VideoQualitySheetState extends State<VideoQualitySheet> {
                 ),
                 title: Text(quality.label),
                 subtitle: Text(
-                  '${quality.description} · ${_estimate(quality)}',
+                  widget.showEstimates
+                      ? '${quality.description} · ${_estimate(quality)}'
+                      : quality.description,
                 ),
                 onTap: () => Navigator.pop(context, quality),
               ),

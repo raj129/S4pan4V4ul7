@@ -2031,21 +2031,22 @@ class _ThreadScreenState extends State<ThreadScreen> {
         }
 
         if (choice == 'video') {
+          final selectedQuality = await VideoQualitySheet.show(
+            context,
+            originalBytes: selected.first.bytes.length,
+            selected: VideoQuality.high,
+            videoBytes: selected.length == 1 ? selected.first.bytes : null,
+            showEstimates: selected.length == 1,
+          );
+          if (selectedQuality == null || !mounted) return;
           for (final attachment in selected) {
             if (!mounted) return;
-            final quality = await VideoQualitySheet.show(
-              context,
-              originalBytes: attachment.bytes.length,
-              selected: VideoQuality.high,
-              videoBytes: attachment.bytes,
-            );
-            if (quality == null || !mounted) return;
             await cubit.sendMedia(
               messageId: _uuid.v4(),
               rawBytes: attachment.bytes,
               type: MessageType.video,
               filename: attachment.fileName,
-              videoQuality: quality,
+              videoQuality: selectedQuality,
               sourceUri: attachment.sourceUri,
               sourceFlags: attachment.sourceFlags,
             );

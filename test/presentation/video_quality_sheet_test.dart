@@ -4,7 +4,9 @@ import 'package:photo_vault/features/chat/application/media/video_compressor.dar
 import 'package:photo_vault/features/chat/presentation/widgets/video_quality_sheet.dart';
 
 void main() {
-  testWidgets('renders all VideoQuality options and selects on tap', (tester) async {
+  testWidgets('renders all VideoQuality options and selects on tap', (
+    tester,
+  ) async {
     VideoQuality? chosen;
 
     await tester.pumpWidget(
@@ -46,5 +48,26 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(chosen, VideoQuality.low);
+  });
+
+  testWidgets('hides size estimates when applying one quality to many videos', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: VideoQualitySheet(
+            originalBytes: 15 * 1024 * 1024,
+            selected: VideoQuality.high,
+            showEstimates: false,
+          ),
+        ),
+      ),
+    );
+
+    expect(find.text('High (1080p)'), findsOneWidget);
+    expect(find.text('1080p, up to ~2.5 Mbps'), findsOneWidget);
+    expect(find.textContaining('MB'), findsNothing);
+    expect(find.textContaining('KB'), findsNothing);
   });
 }
