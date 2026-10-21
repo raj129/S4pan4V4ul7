@@ -18,6 +18,22 @@ import 'package:photo_vault/features/chat/domain/repositories/message_cache_repo
 import 'package:photo_vault/features/chat/domain/repositories/message_repository.dart';
 import 'package:photo_vault/features/chat/domain/repositories/outbox_repository.dart';
 
+class OutgoingImageItem {
+  const OutgoingImageItem({
+    required this.messageId,
+    required this.bytes,
+    this.sourceUri,
+    this.sourceFlags = 0,
+    this.filename,
+  });
+
+  final String messageId;
+  final Uint8List bytes;
+  final String? sourceUri;
+  final int sourceFlags;
+  final String? filename;
+}
+
 /// Coordinates media sending, compression, native Android background uploads,
 /// cross-platform Firebase Storage uploads, progress tracking, and cancellations.
 class ThreadUploadCoordinator {
@@ -380,6 +396,20 @@ class ThreadUploadCoordinator {
       );
       if (token.isCancelled) throw const UploadCancelledException();
       var meta = buildMediaMeta(type, bytes);
+      final mediaRef = 'chat_media/$threadId/$messageId/media.enc';
+      var outboxItem = OutboxItem(
+        messageId: messageId,
+        threadId: threadId,
+        senderId: _myUid,
+        encryptedText: text,
+        recipientUid: recipient,
+        preview: preview,
+        mediaType: type,
+        mediaRef: mediaRef,
+        mediaMeta: meta,
+        queuedAt: DateTime.now().toUtc(),
+      );
+      await _outbox.enqueue(outboxItem);
       _setPendingMessage(
         messageId,
         ChatMessage(
@@ -390,7 +420,7 @@ class ThreadUploadCoordinator {
           sentAt: DateTime.now().toUtc(),
           deletedFor: const [],
           mediaType: type,
-          mediaRef: 'chat_media/$threadId/$messageId/media.enc',
+          mediaRef: mediaRef,
           mediaMeta: meta,
           localDecryptedText: preview,
           status: MessageStatus.sending,
@@ -419,10 +449,11 @@ class ThreadUploadCoordinator {
       if (preparedBytes.length > maxAttachmentBytes) {
         throw StateError('Attachments must be smaller than 64 MB.');
       }
-      final mediaRef = 'chat_media/$threadId/$messageId/media.enc';
       if (thumb != null) {
         final ref = 'chat_media/$threadId/$messageId/thumb.enc';
         meta = meta.copyWith(thumbRef: ref);
+        outboxItem = outboxItem.copyWith(mediaMeta: meta);
+        await _outbox.enqueue(outboxItem);
         _onMediaReady?.call(ref, thumb);
       } else if (type == MessageType.image) {
         _onMediaReady?.call(mediaRef, preparedBytes);
@@ -485,6 +516,7 @@ class ThreadUploadCoordinator {
         ciphertext: ciphertext,
         thumbnail: encryptedThumb,
       );
+      await _outbox.remove(messageId);
       // Deletion during the channel commit must cancel the newly accepted
       // native intent rather than leave an unseen upload running.
       if (token.isCancelled) {
@@ -493,6 +525,7 @@ class ThreadUploadCoordinator {
       }
       await syncAndroidUploads(uploads.jobs);
     } on UploadCancelledException {
+      await _outbox.remove(messageId);
       var cleanupIncomplete = false;
       if (_localMedia != null) {
         for (final variant in ['media.enc', 'thumb.enc']) {
@@ -519,6 +552,7 @@ class ThreadUploadCoordinator {
       }
       if (propagateFailure) rethrow;
     } catch (error) {
+      await _outbox.remove(messageId);
       var cleanupIncomplete = false;
       if (!handoffStarted && _localMedia != null) {
         for (final path in retained) {
@@ -740,11 +774,65 @@ class ThreadUploadCoordinator {
     }
   }
 
+  /// Queue multiple images at once, publishing optimistic bubbles immediately
+  /// while processing preparations sequentially in the background.
+  Future<void> sendMultipleImages({
+    required List<OutgoingImageItem> items,
+    required ImageQuality quality,
+  }) async {
+    if (items.isEmpty) return;
+    final threadId = _currentThreadId();
+    if (threadId == null) return;
+
+    for (final item in items) {
+      final preview = ChatMessage.mediaPreviewFor(
+        MessageType.image,
+        filename: item.filename,
+      );
+      final meta = buildMediaMeta(MessageType.image, item.bytes);
+      _setPendingMessage(
+        item.messageId,
+        ChatMessage(
+          messageId: item.messageId,
+          threadId: threadId,
+          senderId: _myUid,
+          encryptedText: '',
+          sentAt: DateTime.now().toUtc(),
+          deletedFor: const [],
+          mediaType: MessageType.image,
+          mediaRef: 'chat_media/$threadId/${item.messageId}/media.enc',
+          mediaMeta: meta,
+          localDecryptedText: preview,
+          status: MessageStatus.sending,
+        ),
+      );
+      _setUploadStatus(item.messageId, const MediaSendStatus.preparing());
+    }
+    _emitMessages();
+
+    for (final item in items) {
+      // Check if user cancelled this item before preparation started
+      if (_getPendingMessage(item.messageId) == null) continue;
+      try {
+        await sendMedia(
+          messageId: item.messageId,
+          rawBytes: item.bytes,
+          type: MessageType.image,
+          quality: quality,
+          sourceUri: item.sourceUri,
+          sourceFlags: item.sourceFlags,
+          filename: item.filename,
+        );
+      } catch (e) {
+        debugPrint('Failed to send image ${item.messageId}: $e');
+      }
+    }
+  }
+
   Future<void> dispose() async {
     await _androidUploadSub?.cancel();
-    for (final token in _uploadTokens.values) {
-      token.cancel();
-    }
-    _uploadTokens.clear();
+    // Do NOT cancel active upload tokens here. Disposing the screen / cubit (e.g. on
+    // app lock, navigation, or backgrounding) should NOT abort active uploads or delete
+    // staged media files. Only explicit user cancellations (cancelUpload) should cancel them.
   }
 }

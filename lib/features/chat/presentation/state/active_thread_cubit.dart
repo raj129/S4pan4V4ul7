@@ -30,6 +30,8 @@ import '../../application/media/media_send_status.dart';
 import 'delegates/thread_search_delegate.dart';
 import 'delegates/thread_upload_coordinator.dart';
 
+export 'delegates/thread_upload_coordinator.dart' show OutgoingImageItem;
+
 // ── States ──────────────────────────────────────────────────────────────────
 
 sealed class ActiveThreadState extends Equatable {
@@ -1545,6 +1547,7 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
   /// Publishes (or clears, when [status] is null) the progress of an outgoing
   /// attachment.
   void _setUploadStatus(String messageId, MediaSendStatus? status) {
+    if (isClosed) return;
     final current = state;
     if (current is! ActiveThreadLoaded) return;
     final next = Map<String, MediaSendStatus>.from(current.uploadProgress);
@@ -1559,6 +1562,7 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
 
   /// Advances the bar within one phase, never backwards.
   void _advanceUpload(String messageId, MediaSendPhase phase, double progress) {
+    if (isClosed) return;
     final current = state;
     if (current is! ActiveThreadLoaded) return;
     final existing = current.uploadProgress[messageId];
@@ -1600,6 +1604,16 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
     propagateFailure: propagateFailure,
     sourceUri: sourceUri,
     sourceFlags: sourceFlags,
+  );
+
+  /// Queue multiple images at once, immediately showing optimistic messages in
+  /// the thread while background isolate preparation and upload proceed.
+  Future<void> sendMultipleImages({
+    required List<OutgoingImageItem> items,
+    required ImageQuality quality,
+  }) => _uploadCoordinator.sendMultipleImages(
+    items: items,
+    quality: quality,
   );
 
   // ---------------------------------------------------------------------------
@@ -1745,6 +1759,7 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
     String? actionError,
     bool clearActionError = false,
   }) {
+    if (isClosed) return;
     if (_thread == null || _otherUser == null) return;
     final current = state;
     final messages = _sortedBuffer();
@@ -1780,6 +1795,7 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
 
   /// Report a failed action without discarding the conversation.
   void _reportActionError(String message) {
+    if (isClosed) return;
     final current = state;
     if (current is ActiveThreadLoaded) {
       emit(current.copyWith(actionError: message));

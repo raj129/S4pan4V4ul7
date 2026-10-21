@@ -93,6 +93,36 @@ class ImageCompressor {
     final prepared = await prepare(bytes: bytes, quality: quality);
     return prepared.bytes.length;
   }
+
+  /// Estimated upload sizes for all qualities in a single background isolate pass.
+  Future<Map<ImageQuality, int>> estimateAllSizes(Uint8List bytes) {
+    return Isolate.run(() => _estimateAllSizes(bytes));
+  }
+}
+
+Map<ImageQuality, int> _estimateAllSizes(Uint8List bytes) {
+  final decoded = img.decodeImage(bytes);
+  if (decoded == null) {
+    return {for (final q in ImageQuality.values) q: bytes.length};
+  }
+  final normalized = img.bakeOrientation(decoded);
+  final result = <ImageQuality, int>{
+    ImageQuality.original: bytes.length,
+  };
+
+  for (final q in [ImageQuality.high, ImageQuality.medium, ImageQuality.low]) {
+    final maxDim = q.maxDimension;
+    if (maxDim == null) {
+      result[q] = bytes.length;
+      continue;
+    }
+    final resized = _resize(normalized, maxDim);
+    final encoded = Uint8List.fromList(
+      img.encodeJpg(resized, quality: q.jpegQuality),
+    );
+    result[q] = encoded.length < bytes.length ? encoded.length : bytes.length;
+  }
+  return result;
 }
 
 PreparedImage _prepare(Uint8List bytes, int? maxDimension, int jpegQuality) {

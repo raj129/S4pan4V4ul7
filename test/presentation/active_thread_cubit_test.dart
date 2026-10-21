@@ -1354,6 +1354,42 @@ void main() {
       expect((cubit.state as ActiveThreadLoaded).uploadProgress, isEmpty);
     });
 
+    test('sendMultipleImages queues all optimistic messages and delivers batch', () async {
+      await open();
+      final png = img.encodePng(img.Image(width: 4, height: 2));
+
+      await cubit.sendMultipleImages(
+        items: [
+          OutgoingImageItem(messageId: 'multi-1', bytes: png),
+          OutgoingImageItem(messageId: 'multi-2', bytes: png),
+          OutgoingImageItem(messageId: 'multi-3', bytes: png),
+        ],
+        quality: ImageQuality.medium,
+      );
+
+      expect(messages.sent.map((m) => m.messageId), ['multi-1', 'multi-2', 'multi-3']);
+      expect((cubit.state as ActiveThreadLoaded).uploadProgress, isEmpty);
+    });
+
+    test('disposing upload coordinator does not cancel active upload tokens', () async {
+      await open();
+      final png = img.encodePng(img.Image(width: 4, height: 2));
+
+      // Start sending media without awaiting completion
+      final sendFuture = cubit.sendMedia(
+        messageId: 'lock-resilient',
+        rawBytes: png,
+        type: MessageType.image,
+      );
+
+      // Simulate lock / screen exit by disposing the coordinator
+      await cubit.uploadCoordinator.dispose();
+
+      // Ensure the send still succeeds and is not cancelled
+      await sendFuture;
+      expect(messages.sent.map((m) => m.messageId), contains('lock-resilient'));
+    });
+
     test('an attachment over the Storage limit is rejected up front', () async {
       await open();
 

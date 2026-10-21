@@ -1787,7 +1787,10 @@ class _ThreadScreenState extends State<ThreadScreen> {
           if (attach == false) {
             await recovery.remove(uid, thread, id);
           } else if (attach == true) {
-            final quality = await _askImageQuality(bytes.length);
+            final quality = await _askImageQuality(
+              bytes.length,
+              imageBytes: bytes,
+            );
             if (quality == null || !mounted || !widget.vaultBridge.isUnlocked) {
               continue;
             }
@@ -1978,31 +1981,64 @@ class _ThreadScreenState extends State<ThreadScreen> {
                   ],
                 ),
               );
-        try {
-          for (final attachment in selected) {
-            if (!mounted) return;
-            if (choice == 'photo' || choice == 'camera') {
-              await _sendImageWithQuality(
-                cubit,
-                attachment.bytes,
-                sourceUri: attachment.sourceUri,
-                sourceFlags: attachment.sourceFlags,
-              );
-            } else {
-              await cubit.sendMedia(
-                messageId: _uuid.v4(),
-                rawBytes: attachment.bytes,
-                type: choice == 'video' ? MessageType.video : MessageType.file,
-                filename: attachment.fileName,
-                sourceUri: attachment.sourceUri,
-                sourceFlags: attachment.sourceFlags,
-              );
-            }
+        if (selected.isEmpty || !mounted) return;
+
+        if (choice == 'photo') {
+          var photos = selected;
+          if (photos.length > _maxPhotosPerSend) {
+            photos = photos.sublist(0, _maxPhotosPerSend);
+            messenger.showSnackBar(
+              SnackBar(
+                content: Text('Sending the first $_maxPhotosPerSend photos.'),
+              ),
+            );
           }
-        } finally {
-          for (final attachment in selected) {
-            attachment.bytes.fillRange(0, attachment.bytes.length, 0);
-          }
+          final quality = await _askImageQuality(
+            photos.first.bytes.length,
+            imageBytes: photos.first.bytes,
+          );
+          if (quality == null || !mounted) return;
+
+          final items = photos
+              .map(
+                (att) => OutgoingImageItem(
+                  messageId: _uuid.v4(),
+                  bytes: att.bytes,
+                  sourceUri: att.sourceUri,
+                  sourceFlags: att.sourceFlags,
+                  filename: att.fileName,
+                ),
+              )
+              .toList(growable: false);
+
+          await cubit.sendMultipleImages(
+            items: items,
+            quality: quality,
+          );
+          return;
+        }
+
+        if (choice == 'camera') {
+          final attachment = selected.first;
+          await _sendImageWithQuality(
+            cubit,
+            attachment.bytes,
+            sourceUri: attachment.sourceUri,
+            sourceFlags: attachment.sourceFlags,
+          );
+          return;
+        }
+
+        for (final attachment in selected) {
+          if (!mounted) return;
+          await cubit.sendMedia(
+            messageId: _uuid.v4(),
+            rawBytes: attachment.bytes,
+            type: choice == 'video' ? MessageType.video : MessageType.file,
+            filename: attachment.fileName,
+            sourceUri: attachment.sourceUri,
+            sourceFlags: attachment.sourceFlags,
+          );
         }
       } on PlatformException catch (error) {
         messenger.showSnackBar(
@@ -2097,10 +2133,6 @@ class _ThreadScreenState extends State<ThreadScreen> {
   static const _maxPhotosPerSend = 10;
 
   /// Asks for a quality once, then sends every picked photo.
-  ///
-  /// Photos go out one at a time: each is decoded and re-encoded in full, so
-  /// running a whole selection in parallel would multiply peak memory by the
-  /// number of photos for no gain on a single connection.
   Future<void> _sendImages(
     ActiveThreadCubit cubit,
     List<XFile> files,
@@ -2118,38 +2150,40 @@ class _ThreadScreenState extends State<ThreadScreen> {
     // The sheet is sized from the first photo and applies to the whole batch,
     // so picking ten photos is still one decision.
     final firstBytes = Uint8List.fromList(await picked.first.readAsBytes());
-    try {
-      if (!mounted) return;
-      final quality = await _askImageQuality(firstBytes.length);
-      if (quality == null || !mounted) return;
+    if (!mounted) return;
+    final quality = await _askImageQuality(
+      firstBytes.length,
+      imageBytes: firstBytes,
+    );
+    if (quality == null || !mounted) return;
 
-      for (var i = 0; i < picked.length; i++) {
-        if (!mounted) return;
-        final bytes = i == 0
-            ? firstBytes
-            : Uint8List.fromList(await picked[i].readAsBytes());
-        try {
-          if (!mounted) return;
-          // Each photo is its own message, so one failure leaves the rest alone.
-          await cubit.sendMedia(
-            messageId: _uuid.v4(),
-            rawBytes: bytes,
-            type: MessageType.image,
-            quality: quality,
-            sourceUri: retainSource ? _originalSourceUri(picked[i]) : null,
-          );
-        } finally {
-          bytes.fillRange(0, bytes.length, 0);
-        }
-      }
-    } finally {
-      firstBytes.fillRange(0, firstBytes.length, 0);
+    final items = <OutgoingImageItem>[];
+    for (var i = 0; i < picked.length; i++) {
+      final bytes = i == 0
+          ? firstBytes
+          : Uint8List.fromList(await picked[i].readAsBytes());
+      items.add(
+        OutgoingImageItem(
+          messageId: _uuid.v4(),
+          bytes: bytes,
+          sourceUri: retainSource ? _originalSourceUri(picked[i]) : null,
+          filename: picked[i].name,
+        ),
+      );
     }
+
+    await cubit.sendMultipleImages(
+      items: items,
+      quality: quality,
+    );
   }
 
   /// Shows the quality sheet, seeded with the last choice and remembering a
   /// new one. Returns null if the sheet was dismissed.
-  Future<ImageQuality?> _askImageQuality(int originalBytes) async {
+  Future<ImageQuality?> _askImageQuality(
+    int originalBytes, {
+    Uint8List? imageBytes,
+  }) async {
     final settings = widget.settingsRepository;
     final remembered = ImageQualityX.parse(
       await settings?.getChatImageQuality(),
@@ -2159,6 +2193,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
       context,
       originalBytes: originalBytes,
       selected: remembered,
+      imageBytes: imageBytes,
     );
     if (chosen == null) return null;
     if (chosen != remembered) {
@@ -2174,7 +2209,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
     String? sourceUri,
     int sourceFlags = 0,
   }) async {
-    final quality = await _askImageQuality(bytes.length);
+    final quality = await _askImageQuality(bytes.length, imageBytes: bytes);
     if (quality == null || !mounted) return;
     await cubit.sendMedia(
       messageId: _uuid.v4(),
