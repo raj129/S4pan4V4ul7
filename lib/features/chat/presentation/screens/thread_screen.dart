@@ -38,6 +38,7 @@ import '../widgets/chat_media_preview.dart';
 import '../widgets/chat_scrollbar.dart';
 import '../widgets/chat_wallpaper.dart';
 import '../widgets/image_quality_sheet.dart';
+import '../widgets/video_quality_sheet.dart';
 import '../widgets/contact_info_sheet.dart';
 import '../widgets/message_bubble.dart';
 import '../widgets/user_avatar.dart';
@@ -2029,12 +2030,35 @@ class _ThreadScreenState extends State<ThreadScreen> {
           return;
         }
 
+        if (choice == 'video') {
+          for (final attachment in selected) {
+            if (!mounted) return;
+            final quality = await VideoQualitySheet.show(
+              context,
+              originalBytes: attachment.bytes.length,
+              selected: VideoQuality.high,
+              videoBytes: attachment.bytes,
+            );
+            if (quality == null || !mounted) return;
+            await cubit.sendMedia(
+              messageId: _uuid.v4(),
+              rawBytes: attachment.bytes,
+              type: MessageType.video,
+              filename: attachment.fileName,
+              videoQuality: quality,
+              sourceUri: attachment.sourceUri,
+              sourceFlags: attachment.sourceFlags,
+            );
+          }
+          return;
+        }
+
         for (final attachment in selected) {
           if (!mounted) return;
           await cubit.sendMedia(
             messageId: _uuid.v4(),
             rawBytes: attachment.bytes,
-            type: choice == 'video' ? MessageType.video : MessageType.file,
+            type: MessageType.file,
             filename: attachment.fileName,
             sourceUri: attachment.sourceUri,
             sourceFlags: attachment.sourceFlags,
@@ -2098,10 +2122,32 @@ class _ThreadScreenState extends State<ThreadScreen> {
       return;
     }
 
+    if (type == MessageType.video) {
+      final bytes = Uint8List.fromList(await file.readAsBytes());
+      try {
+        if (!mounted) return;
+        final quality = await VideoQualitySheet.show(
+          context,
+          originalBytes: bytes.length,
+          selected: VideoQuality.high,
+          videoBytes: bytes,
+        );
+        if (quality == null || !mounted) return;
+        await cubit.sendMedia(
+          messageId: _uuid.v4(),
+          rawBytes: bytes,
+          type: MessageType.video,
+          videoQuality: quality,
+          sourceUri: _originalSourceUri(file),
+        );
+      } finally {
+        bytes.fillRange(0, bytes.length, 0);
+      }
+      return;
+    }
+
     final length = await file.length();
     if (!mounted) return;
-    // Videos are sent as-is, so the limit still applies up front. Photos are
-    // checked after compression instead, which can bring a large one under it.
     if (length > ActiveThreadCubit.maxAttachmentBytes) {
       messenger.showSnackBar(
         const SnackBar(

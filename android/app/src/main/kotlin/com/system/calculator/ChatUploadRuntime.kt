@@ -365,16 +365,24 @@ class ChatUploadWorker(context: Context, parameters: WorkerParameters) : Worker(
             }
         }
         if (pending) {
-            val notification = ChatUploadNotifications.build(applicationContext, "Uploading encrypted attachments")
-            val info = if (Build.VERSION.SDK_INT >= 29)
-                ForegroundInfo(4727, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
-                else ForegroundInfo(4727, notification)
-            setForegroundAsync(info).get(15, TimeUnit.SECONDS)
+            try {
+                val notification = ChatUploadNotifications.build(applicationContext, "Uploading encrypted attachments")
+                val info = if (Build.VERSION.SDK_INT >= 29)
+                    ForegroundInfo(4727, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+                    else ForegroundInfo(4727, notification)
+                setForegroundAsync(info).get(10, TimeUnit.SECONDS)
+            } catch (fgsError: Exception) {
+                // On Android 14+ or when background restrictions disallow FGS promotion,
+                // running as a regular background WorkManager task ensures uploads still complete.
+                android.util.Log.d("ChatUploads", "Foreground info skipped; continuing in background: ${fgsError.message}")
+            }
         }
         if (ChatUploadRuntime.drain(applicationContext, { isStopped }) { job ->
-            applicationContext.getSystemService(NotificationManager::class.java).notify(4727,
-                ChatUploadNotifications.build(applicationContext,
-                    "${job.optLong("processedBytes")} / ${job.optLong("totalBytes")} bytes", job.getString("messageId")))
+            try {
+                applicationContext.getSystemService(NotificationManager::class.java).notify(4727,
+                    ChatUploadNotifications.build(applicationContext,
+                        "${job.optLong("processedBytes")} / ${job.optLong("totalBytes")} bytes", job.getString("messageId")))
+            } catch (_: Exception) {}
         }) Result.success() else Result.retry()
     } catch (error: Exception) {
         android.util.Log.e("ChatUploads", "Encrypted upload journal unavailable: ${error.javaClass.simpleName}")

@@ -516,6 +516,9 @@ class _BubbleContent extends StatelessWidget {
         else if (message.mediaType == MessageType.audio &&
             message.mediaRef != null)
           ChatAudioPlayer(
+            duration: message.mediaMeta?.readableDuration.isNotEmpty == true
+                ? message.mediaMeta!.readableDuration
+                : null,
             loading: AttachmentDownloadProgress(
               loader: mediaLoader,
               storagePath: message.mediaRef!,

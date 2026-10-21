@@ -130,36 +130,135 @@ class _ChatVideoPlayerScreenState extends State<ChatVideoPlayerScreen> {
   }
 
   @override
-  Widget build(BuildContext context) => Scaffold(
-    backgroundColor: Colors.black,
-    appBar: AppBar(
-      backgroundColor: Colors.black,
-      foregroundColor: Colors.white,
-    ),
-    body: Center(
-      child: _error == null
-          ? AttachmentDownloadProgress(
-              loader: widget.loader,
-              storagePath: widget.message.mediaRef ?? '',
-            )
-          : Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(_error!, style: const TextStyle(color: Colors.white70)),
-                if (!_requiresAction &&
-                    widget.loader.downloads?.job(
-                          widget.message.mediaRef ?? '',
-                        ) !=
-                        null)
-                  AttachmentDownloadProgress(
-                    loader: widget.loader,
-                    storagePath: widget.message.mediaRef ?? '',
-                    onRetry: _prepare,
-                  )
-                else if (!_requiresAction)
-                  TextButton(onPressed: _prepare, child: const Text('Retry')),
-              ],
-            ),
-    ),
-  );
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+
+    return Scaffold(
+      backgroundColor: const Color(0xFF0F1017),
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        foregroundColor: Colors.white,
+        elevation: 0,
+        title: const Text(
+          'Video',
+          style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+        ),
+      ),
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24.0),
+          child: _error == null
+              ? Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 32,
+                    vertical: 28,
+                  ),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF1E1F2B),
+                    borderRadius: BorderRadius.circular(24),
+                    border: Border.all(
+                      color: Colors.white.withValues(alpha: 0.08),
+                    ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.4),
+                        blurRadius: 16,
+                        offset: const Offset(0, 8),
+                      ),
+                    ],
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        width: 64,
+                        height: 64,
+                        decoration: BoxDecoration(
+                          color: cs.primary.withValues(alpha: 0.15),
+                          shape: BoxShape.circle,
+                        ),
+                        child: Center(
+                          child: Icon(
+                            Icons.play_circle_fill_rounded,
+                            color: cs.primary,
+                            size: 38,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 20),
+                      Text(
+                        'Preparing secure video...',
+                        style: theme.textTheme.titleMedium?.copyWith(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Decrypted directly in memory',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: Colors.white54,
+                        ),
+                      ),
+                      const SizedBox(height: 24),
+                      SizedBox(
+                        width: 140,
+                        child: AttachmentDownloadProgress(
+                          loader: widget.loader,
+                          storagePath: widget.message.mediaRef ?? '',
+                        ),
+                      ),
+                    ],
+                  ),
+                )
+              : Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 28,
+                    vertical: 24,
+                  ),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF1E1F2B),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(
+                      color: cs.error.withValues(alpha: 0.3),
+                    ),
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        Icons.error_outline_rounded,
+                        color: cs.error,
+                        size: 40,
+                      ),
+                      const SizedBox(height: 12),
+                      Text(
+                        _error!,
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(color: Colors.white70, fontSize: 14),
+                      ),
+                      const SizedBox(height: 16),
+                      if (!_requiresAction &&
+                          widget.loader.downloads?.job(
+                                widget.message.mediaRef ?? '',
+                              ) !=
+                              null)
+                        AttachmentDownloadProgress(
+                          loader: widget.loader,
+                          storagePath: widget.message.mediaRef ?? '',
+                          onRetry: _prepare,
+                        )
+                      else if (!_requiresAction)
+                        FilledButton.tonal(
+                          onPressed: _prepare,
+                          child: const Text('Retry'),
+                        ),
+                    ],
+                  ),
+                ),
+        ),
+      ),
+    );
+  }
 }

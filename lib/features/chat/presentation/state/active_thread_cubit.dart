@@ -17,6 +17,7 @@ import '../../domain/entities/message_reply.dart';
 import '../../domain/entities/user_presence.dart';
 import '../../application/services/chat_search_indexer.dart';
 import '../../application/media/image_compressor.dart';
+import '../../application/media/video_compressor.dart';
 import '../../domain/repositories/chat_search_index_repository.dart';
 import '../../domain/repositories/message_cache_repository.dart';
 import '../../domain/repositories/message_repository.dart';
@@ -31,6 +32,7 @@ import 'delegates/thread_search_delegate.dart';
 import 'delegates/thread_upload_coordinator.dart';
 
 export 'delegates/thread_upload_coordinator.dart' show OutgoingImageItem;
+export '../../application/media/video_compressor.dart' show VideoQuality;
 
 // ── States ──────────────────────────────────────────────────────────────────
 
@@ -1592,6 +1594,7 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
     required MessageType type,
     String? filename,
     ImageQuality quality = ImageQuality.high,
+    VideoQuality videoQuality = VideoQuality.high,
     bool propagateFailure = false,
     String? sourceUri,
     int sourceFlags = 0,
@@ -1601,6 +1604,7 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
     type: type,
     filename: filename,
     quality: quality,
+    videoQuality: videoQuality,
     propagateFailure: propagateFailure,
     sourceUri: sourceUri,
     sourceFlags: sourceFlags,

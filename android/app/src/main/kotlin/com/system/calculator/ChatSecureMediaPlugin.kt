@@ -10,13 +10,19 @@ import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.pdf.PdfRenderer
+import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.ColorDrawable
 import android.media.AudioManager
 import android.media.MediaPlayer
+import android.media.MediaMetadataRetriever
 import android.os.*
 import android.os.storage.StorageManager
 import android.provider.OpenableColumns
 import android.system.ErrnoException
 import android.system.OsConstants
+import android.view.Gravity
+import android.view.View
+import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.*
 import com.google.firebase.auth.FirebaseAuth
@@ -157,6 +163,20 @@ class ChatSecureMediaPlugin : FlutterPlugin, ActivityAware, MethodChannel.Method
                 }
                 "recordingStatus" -> result.success(recorder?.status() ?: "interrupted")
                 "cancelRecording" -> cancelRecording(result)
+                "extractVideoMetadata" -> {
+                    val bytes = call.argument<ByteArray>("bytes") ?: throw IllegalArgumentException()
+                    background(result) {
+                        extractVideoMetadata(bytes)
+                    }
+                }
+                "compressVideo" -> {
+                    val bytes = call.argument<ByteArray>("bytes") ?: throw IllegalArgumentException()
+                    val targetHeight = call.argument<Number>("targetHeight")?.toInt() ?: 720
+                    val targetBitrate = call.argument<Number>("targetBitrate")?.toInt() ?: 1200000
+                    background(result) {
+                        compressVideo(bytes, targetHeight, targetBitrate)
+                    }
+                }
                 "showAudio", "showVideo", "showPdf" -> {
                     val bytes = call.argument<ByteArray>("bytes") ?: throw IllegalArgumentException()
                     if (bytes.isEmpty() || bytes.size > ChatMemoryDataSource.MAX_BYTES) {
@@ -601,6 +621,122 @@ class ChatSecureMediaPlugin : FlutterPlugin, ActivityAware, MethodChannel.Method
         return Pair(dialog, layout)
     }
 
+    private fun extractVideoMetadata(bytes: ByteArray): Map<String, Any?> {
+        val source = ChatMemoryDataSource(bytes)
+        val retriever = MediaMetadataRetriever()
+        try {
+            retriever.setDataSource(source)
+            val widthStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)
+            val heightStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)
+            val rotationStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)
+            val durationStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+            val rawW = widthStr?.toIntOrNull() ?: 0
+            val rawH = heightStr?.toIntOrNull() ?: 0
+            val rotation = rotationStr?.toIntOrNull() ?: 0
+            val durationMs = durationStr?.toIntOrNull() ?: 0
+            val isRotated = rotation == 90 || rotation == 270
+            val width = if (isRotated) rawH else rawW
+            val height = if (isRotated) rawW else rawH
+
+            val frame = retriever.getFrameAtTime(1000000, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                ?: retriever.getFrameAtTime(0)
+            var thumbBytes: ByteArray? = null
+            if (frame != null) {
+                val maxDim = 320
+                val fw = frame.width
+                val fh = frame.height
+                val scale = minOf(1.0f, maxDim.toFloat() / maxOf(fw, fh))
+                val targetW = maxOf(1, (fw * scale).toInt())
+                val targetH = maxOf(1, (fh * scale).toInt())
+                val scaled = Bitmap.createScaledBitmap(frame, targetW, targetH, true)
+                val out = ByteArrayOutputStream()
+                scaled.compress(Bitmap.CompressFormat.JPEG, 70, out)
+                thumbBytes = out.toByteArray()
+                if (scaled !== frame) scaled.recycle()
+                frame.recycle()
+            }
+            return mapOf(
+                "width" to width,
+                "height" to height,
+                "durationMs" to durationMs,
+                "thumbnail" to thumbBytes
+            )
+        } catch (_: Exception) {
+            return mapOf("width" to 0, "height" to 0, "durationMs" to 0, "thumbnail" to null)
+        } finally {
+            try { retriever.release() } catch (_: Exception) {}
+            source.close()
+        }
+    }
+
+    private fun compressVideo(bytes: ByteArray, targetHeight: Int, targetBitrate: Int): Map<String, Any?> {
+        val meta = extractVideoMetadata(bytes)
+        val origW = (meta["width"] as? Number)?.toInt() ?: 0
+        val origH = (meta["height"] as? Number)?.toInt() ?: 0
+        if (origH <= targetHeight && bytes.size < 8 * 1024 * 1024) {
+            return meta + mapOf("bytes" to bytes)
+        }
+
+        val inputFile = java.io.File.createTempFile("chat_vid_in", ".mp4", context.cacheDir)
+        val outputFile = java.io.File.createTempFile("chat_vid_out", ".mp4", context.cacheDir)
+        try {
+            inputFile.writeBytes(bytes)
+            val latch = java.util.concurrent.CountDownLatch(1)
+            var errorOccurred: Throwable? = null
+
+            val scale = minOf(1.0f, targetHeight.toFloat() / maxOf(1, origH))
+            val targetWidth = (maxOf(2, (origW * scale).toInt()) / 2) * 2
+            val actualTargetHeight = (maxOf(2, (origH * scale).toInt()) / 2) * 2
+
+            main.post {
+                try {
+                    val mediaItem = androidx.media3.common.MediaItem.fromUri(android.net.Uri.fromFile(inputFile))
+                    val editedItem = androidx.media3.transformer.EditedMediaItem.Builder(mediaItem)
+                        .setEffects(androidx.media3.transformer.Effects(
+                            emptyList(),
+                            listOf(androidx.media3.effect.Presentation.createForWidthAndHeight(
+                                targetWidth, actualTargetHeight, androidx.media3.effect.Presentation.LAYOUT_SCALE_TO_FIT
+                            ))
+                        ))
+                        .build()
+
+                    val transformer = androidx.media3.transformer.Transformer.Builder(context)
+                        .setVideoMimeType(androidx.media3.common.MimeTypes.VIDEO_H264)
+                        .addListener(object : androidx.media3.transformer.Transformer.Listener {
+                            override fun onCompleted(composition: androidx.media3.transformer.Composition, result: androidx.media3.transformer.ExportResult) {
+                                latch.countDown()
+                            }
+                            override fun onError(composition: androidx.media3.transformer.Composition, result: androidx.media3.transformer.ExportResult, exception: androidx.media3.transformer.ExportException) {
+                                errorOccurred = exception
+                                latch.countDown()
+                            }
+                        })
+                        .build()
+
+                    outputFile.delete()
+                    transformer.start(editedItem, outputFile.absolutePath)
+                } catch (t: Throwable) {
+                    errorOccurred = t
+                    latch.countDown()
+                }
+            }
+
+            val completed = latch.await(60, java.util.concurrent.TimeUnit.SECONDS)
+            if (completed && errorOccurred == null && outputFile.exists() && outputFile.length() > 0 && outputFile.length() < bytes.size) {
+                val compressedBytes = outputFile.readBytes()
+                val updatedMeta = extractVideoMetadata(compressedBytes)
+                return updatedMeta + mapOf("bytes" to compressedBytes)
+            }
+        } catch (_: Exception) {
+            // Fallback to original bytes
+        } finally {
+            if (inputFile.exists()) inputFile.delete()
+            if (outputFile.exists()) outputFile.delete()
+        }
+
+        return meta + mapOf("bytes" to bytes)
+    }
+
     @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
     private fun showVideoPlayer(bytes: ByteArray, result: MethodChannel.Result, measureStartup: Boolean) {
         val openedAt = SystemClock.elapsedRealtime()
@@ -614,7 +750,10 @@ class ChatSecureMediaPlugin : FlutterPlugin, ActivityAware, MethodChannel.Method
         var player: androidx.media3.exoplayer.ExoPlayer? = null
         var playerView: androidx.media3.ui.PlayerView? = null
         var replied = false
-        val (dialog, layout) = newDialog()
+
+        val dialog = Dialog(host, android.R.style.Theme_Black_NoTitleBar_Fullscreen)
+        dialog.window?.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+
         fun complete(error: Boolean) {
             if (replied) return
             replied = true
@@ -628,6 +767,15 @@ class ChatSecureMediaPlugin : FlutterPlugin, ActivityAware, MethodChannel.Method
             finally { source.close(); complete(false) }
         }
         dialog.setOnDismissListener { if (viewer === dialog) releaseViewer() }
+
+        val root = FrameLayout(host).apply {
+            setBackgroundColor(Color.BLACK)
+        }
+        dialog.setContentView(root)
+
+        val density = host.resources.displayMetrics.density
+        fun dp(v: Float) = (v * density).toInt()
+
         try {
             val mediaSource = androidx.media3.exoplayer.source.ProgressiveMediaSource.Factory(
                 androidx.media3.datasource.DataSource.Factory { ChatMedia3DataSource(source) }
@@ -637,15 +785,63 @@ class ChatSecureMediaPlugin : FlutterPlugin, ActivityAware, MethodChannel.Method
             val view = androidx.media3.ui.PlayerView(host).apply {
                 resizeMode = androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
                 useController = true
-                controllerShowTimeoutMs = 4000
+                controllerShowTimeoutMs = 3500
                 setShowBuffering(androidx.media3.ui.PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
                 setShutterBackgroundColor(Color.BLACK)
                 keepScreenOn = true
                 this.player = playback
             }
             playerView = view
-            layout.addView(view, LinearLayout.LayoutParams(-1, 0, 1f))
-            layout.addView(Button(host).apply { text = "Close"; setOnClickListener { dialog.dismiss() } })
+            root.addView(view, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+
+            val topBar = LinearLayout(host).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(16f), dp(16f), dp(16f), dp(16f))
+                val topGrad = GradientDrawable(
+                    GradientDrawable.Orientation.TOP_BOTTOM,
+                    intArrayOf(0xCC000000.toInt(), 0x00000000)
+                )
+                background = topGrad
+            }
+
+            val backBtn = TextView(host).apply {
+                text = "←"
+                textSize = 24f
+                setTextColor(Color.WHITE)
+                gravity = Gravity.CENTER
+                val backBg = GradientDrawable().apply {
+                    setColor(0x44000000)
+                    cornerRadius = dp(20f).toFloat()
+                }
+                background = backBg
+                setOnClickListener { dialog.dismiss() }
+            }
+            val backParams = LinearLayout.LayoutParams(dp(40f), dp(40f))
+
+            val videoTitle = TextView(host).apply {
+                text = "Video"
+                textSize = 17f
+                setTextColor(Color.WHITE)
+                typeface = android.graphics.Typeface.DEFAULT_BOLD
+                setPadding(dp(16f), 0, 0, 0)
+            }
+            val titleParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+
+            topBar.addView(backBtn, backParams)
+            topBar.addView(videoTitle, titleParams)
+
+            val topBarParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.TOP
+            )
+            root.addView(topBar, topBarParams)
+
+            view.setControllerVisibilityListener(androidx.media3.ui.PlayerView.ControllerVisibilityListener { visibility ->
+                topBar.visibility = visibility
+            })
+
             playback.addListener(object : androidx.media3.common.Player.Listener {
                 override fun onRenderedFirstFrame() {
                     if (measureStartup) {
@@ -685,29 +881,179 @@ class ChatSecureMediaPlugin : FlutterPlugin, ActivityAware, MethodChannel.Method
         }
         val source = ChatMemoryDataSource(bytes)
         val player = MediaPlayer()
-        val (dialog, layout) = newDialog()
+        val dialog = Dialog(host)
+        dialog.window?.apply {
+            addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+            setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+            setDimAmount(0.6f)
+            setGravity(Gravity.BOTTOM)
+        }
+
+        val density = host.resources.displayMetrics.density
+        fun dp(v: Float) = (v * density).toInt()
+
+        val cardBg = GradientDrawable().apply {
+            setColor(0xFF1E1F2B.toInt())
+            cornerRadii = floatArrayOf(
+                dp(28f).toFloat(), dp(28f).toFloat(),
+                dp(28f).toFloat(), dp(28f).toFloat(),
+                0f, 0f, 0f, 0f
+            )
+        }
+
+        val layout = LinearLayout(host).apply {
+            orientation = LinearLayout.VERTICAL
+            background = cardBg
+            setPadding(dp(20f), dp(16f), dp(20f), dp(24f))
+            layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        }
+        dialog.setContentView(layout)
+
         var prepared = false
         var finished = false
         var disposed = false
-        val caption = TextView(host).apply { setTextColor(Color.WHITE); text = "Loading…" }
-        val seek = SeekBar(host)
-        val play = Button(host).apply { text = "Pause"; isEnabled = false }
+        var speedIndex = 0
+        val speeds = floatArrayOf(1.0f, 1.5f, 2.0f)
+
+        val dragHandle = View(host).apply {
+            val bg = GradientDrawable().apply {
+                setColor(0x33FFFFFF)
+                cornerRadius = dp(2f).toFloat()
+            }
+            background = bg
+        }
+        val handleParams = LinearLayout.LayoutParams(dp(36f), dp(4f)).apply {
+            gravity = Gravity.CENTER_HORIZONTAL
+            bottomMargin = dp(12f)
+        }
+        layout.addView(dragHandle, handleParams)
+
+        val headerRow = LinearLayout(host).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        val titleView = TextView(host).apply {
+            setTextColor(Color.WHITE)
+            textSize = 17f
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+            text = "Voice Message"
+        }
+        val closeBtn = TextView(host).apply {
+            text = "✕"
+            textSize = 16f
+            setTextColor(0xFFB0B5C6.toInt())
+            gravity = Gravity.CENTER
+            val btnBg = GradientDrawable().apply {
+                setColor(0xFF2B2C3D.toInt())
+                cornerRadius = dp(16f).toFloat()
+            }
+            background = btnBg
+            setOnClickListener { dialog.dismiss() }
+        }
+        val titleParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        val closeParams = LinearLayout.LayoutParams(dp(32f), dp(32f))
+        headerRow.addView(titleView, titleParams)
+        headerRow.addView(closeBtn, closeParams)
+        layout.addView(headerRow)
+
+        val seek = SeekBar(host).apply {
+            progressTintList = android.content.res.ColorStateList.valueOf(0xFF7C4DFF.toInt())
+            thumbTintList = android.content.res.ColorStateList.valueOf(0xFF7C4DFF.toInt())
+        }
+        val seekParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+            topMargin = dp(14f)
+        }
+        layout.addView(seek, seekParams)
+
+        val timeRow = LinearLayout(host).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        val elapsedText = TextView(host).apply {
+            setTextColor(0xFFA5ADCB.toInt())
+            textSize = 12f
+            text = "0:00"
+        }
+        val durationText = TextView(host).apply {
+            setTextColor(0xFFA5ADCB.toInt())
+            textSize = 12f
+            text = "--:--"
+            gravity = Gravity.END
+        }
+        timeRow.addView(elapsedText, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        timeRow.addView(durationText, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        layout.addView(timeRow)
+
+        val controlsRow = LinearLayout(host).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        val speedBtn = TextView(host).apply {
+            text = "1.0x"
+            textSize = 13f
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+            setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
+            val sBg = GradientDrawable().apply {
+                setColor(0xFF2B2C3D.toInt())
+                cornerRadius = dp(14f).toFloat()
+            }
+            background = sBg
+        }
+        val speedParams = LinearLayout.LayoutParams(dp(54f), dp(32f))
+
+        val playFab = ImageButton(host).apply {
+            setImageResource(android.R.drawable.ic_media_play)
+            setColorFilter(Color.WHITE)
+            val fabBg = GradientDrawable().apply {
+                setColor(0xFF6366F1.toInt())
+                shape = GradientDrawable.OVAL
+            }
+            background = fabBg
+            isEnabled = false
+            elevation = dp(4f).toFloat()
+        }
+        val playParams = LinearLayout.LayoutParams(dp(56f), dp(56f)).apply {
+            leftMargin = dp(16f)
+        }
+
+        speedBtn.setOnClickListener {
+            if (prepared && !disposed && Build.VERSION.SDK_INT >= 23) {
+                speedIndex = (speedIndex + 1) % speeds.size
+                val s = speeds[speedIndex]
+                speedBtn.text = "${s}x"
+                try {
+                    player.playbackParams = player.playbackParams.setSpeed(s)
+                } catch (_: Exception) {}
+            }
+        }
+
+        fun formatTime(ms: Int): String {
+            val totalSec = ms / 1000
+            val min = totalSec / 60
+            val sec = totalSec % 60
+            return "%d:%02d".format(min, sec)
+        }
+
         val tick = object : Runnable {
             override fun run() {
                 if (disposed || !prepared) return
                 try {
                     seek.progress = player.currentPosition
-                    caption.text = "${player.currentPosition / 1000}s / ${player.duration / 1000}s"
-                    main.postDelayed(this, 400)
+                    elapsedText.text = formatTime(player.currentPosition)
+                    durationText.text = formatTime(player.duration)
+                    main.postDelayed(this, 300)
                 } catch (_: Exception) {}
             }
         }
+
         fun complete(error: Boolean) {
             if (finished) return
             finished = true
             if (error) result.error("unsupported", "Media is corrupt or not supported by Android.", null)
             else result.success(null)
         }
+
         viewer = dialog
         viewerCleanup = {
             disposed = true
@@ -716,44 +1062,67 @@ class ChatSecureMediaPlugin : FlutterPlugin, ActivityAware, MethodChannel.Method
             source.close()
             complete(false)
         }
+
         dialog.setOnDismissListener { releaseViewer() }
+
         player.setOnErrorListener { _, _, _ ->
             complete(true)
             dialog.dismiss()
             true
         }
+
         player.setOnPreparedListener {
             if (!disposed) {
                 prepared = true
-                play.isEnabled = true
+                playFab.isEnabled = true
+                playFab.setImageResource(android.R.drawable.ic_media_pause)
                 seek.max = player.duration
+                durationText.text = formatTime(player.duration)
                 player.start()
                 main.post(tick)
             }
         }
-        player.setOnCompletionListener { play.text = "Play" }
-        play.setOnClickListener {
+
+        player.setOnCompletionListener {
+            playFab.setImageResource(android.R.drawable.ic_media_play)
+        }
+
+        playFab.setOnClickListener {
             if (prepared && !disposed) {
-                if (player.isPlaying) { player.pause(); play.text = "Play" }
-                else { player.start(); play.text = "Pause" }
+                if (player.isPlaying) {
+                    player.pause()
+                    playFab.setImageResource(android.R.drawable.ic_media_play)
+                } else {
+                    player.start()
+                    playFab.setImageResource(android.R.drawable.ic_media_pause)
+                }
             }
         }
+
         seek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(bar: SeekBar?, progress: Int, fromUser: Boolean) {
-                if (fromUser && prepared && !disposed) player.seekTo(progress)
+                if (fromUser && prepared && !disposed) {
+                    player.seekTo(progress)
+                    elapsedText.text = formatTime(progress)
+                }
             }
             override fun onStartTrackingTouch(bar: SeekBar?) {}
             override fun onStopTrackingTouch(bar: SeekBar?) {}
         })
+
+        controlsRow.addView(speedBtn, speedParams)
+        controlsRow.addView(playFab, playParams)
+        val controlsParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+            gravity = Gravity.CENTER_HORIZONTAL
+            topMargin = dp(16f)
+        }
+        layout.addView(controlsRow, controlsParams)
+
         try {
             player.setDataSource(source)
             player.prepareAsync()
-            layout.addView(caption)
-            layout.addView(seek)
-            layout.addView(play)
-            layout.addView(Button(host).apply { text = "Close"; setOnClickListener { dialog.dismiss() } })
             dialog.show()
-            dialog.window?.setLayout(-1, -2)
+            dialog.window?.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
         } catch (_: Exception) {
             complete(true)
             releaseViewer()

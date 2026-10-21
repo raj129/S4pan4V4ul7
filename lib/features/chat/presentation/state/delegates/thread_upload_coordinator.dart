@@ -10,6 +10,7 @@ import 'package:photo_vault/features/chat/application/media/android_chat_uploads
 import 'package:photo_vault/features/chat/application/media/chat_media_loader.dart';
 import 'package:photo_vault/features/chat/application/media/chat_source_digest.dart';
 import 'package:photo_vault/features/chat/application/media/image_compressor.dart';
+import 'package:photo_vault/features/chat/application/media/video_compressor.dart';
 import 'package:photo_vault/features/chat/application/media/media_send_status.dart';
 import 'package:photo_vault/features/chat/domain/entities/chat_message.dart';
 import 'package:photo_vault/features/chat/domain/entities/chat_user.dart';
@@ -46,6 +47,7 @@ class ThreadUploadCoordinator {
     required OutboxRepository outbox,
     required MessageCacheRepository messageCache,
     required ImageCompressor imageCompressor,
+    VideoCompressor videoCompressor = const VideoCompressor(),
     required void Function(String storagePath, Uint8List bytes)? onMediaReady,
     required String myUid,
     required String? Function() currentThreadId,
@@ -91,6 +93,7 @@ class ThreadUploadCoordinator {
        _outbox = outbox,
        _messageCache = messageCache,
        _imageCompressor = imageCompressor,
+       _videoCompressor = videoCompressor,
        _onMediaReady = onMediaReady,
        _myUid = myUid,
        _currentThreadId = currentThreadId,
@@ -119,6 +122,7 @@ class ThreadUploadCoordinator {
   final OutboxRepository _outbox;
   final MessageCacheRepository _messageCache;
   final ImageCompressor _imageCompressor;
+  final VideoCompressor _videoCompressor;
   final void Function(String storagePath, Uint8List bytes)? _onMediaReady;
   final String _myUid;
 
@@ -353,6 +357,7 @@ class ThreadUploadCoordinator {
     required MessageType type,
     String? filename,
     required ImageQuality quality,
+    VideoQuality videoQuality = VideoQuality.high,
     bool propagateFailure = false,
     String? sourceUri,
     int sourceFlags = 0,
@@ -442,6 +447,21 @@ class ThreadUploadCoordinator {
           width: prepared.width,
           height: prepared.height,
         );
+      } else if (type == MessageType.video) {
+        final prepared = await _videoCompressor.prepare(
+          bytes: bytes,
+          quality: videoQuality,
+        );
+        preparedBytes = Uint8List.fromList(prepared.bytes);
+        thumb = prepared.thumbnail.isEmpty
+            ? null
+            : Uint8List.fromList(prepared.thumbnail);
+        meta = MediaMeta(
+          width: prepared.width > 0 ? prepared.width : null,
+          height: prepared.height > 0 ? prepared.height : null,
+          sizeBytes: preparedBytes.length,
+          durationMs: prepared.durationMs > 0 ? prepared.durationMs : null,
+        );
       } else {
         preparedBytes = bytes;
       }
@@ -455,7 +475,7 @@ class ThreadUploadCoordinator {
         outboxItem = outboxItem.copyWith(mediaMeta: meta);
         await _outbox.enqueue(outboxItem);
         _onMediaReady?.call(ref, thumb);
-      } else if (type == MessageType.image) {
+      } else if (type == MessageType.image || type == MessageType.video) {
         _onMediaReady?.call(mediaRef, preparedBytes);
       }
       final message = ChatMessage(
@@ -587,6 +607,7 @@ class ThreadUploadCoordinator {
     required MessageType type,
     String? filename,
     ImageQuality quality = ImageQuality.high,
+    VideoQuality videoQuality = VideoQuality.high,
     bool propagateFailure = false,
     String? sourceUri,
     int sourceFlags = 0,
@@ -603,6 +624,7 @@ class ThreadUploadCoordinator {
         type: type,
         filename: filename,
         quality: quality,
+        videoQuality: videoQuality,
         propagateFailure: propagateFailure,
         sourceUri: sourceUri,
         sourceFlags: sourceFlags,
@@ -670,6 +692,23 @@ class ThreadUploadCoordinator {
               bytes,
               width: prepared.width == 0 ? null : prepared.width,
               height: prepared.height == 0 ? null : prepared.height,
+            ),
+          );
+          throwIfCancelled();
+          _showPending(item, preview);
+        } else if (type == MessageType.video) {
+          final prepared = await _videoCompressor.prepare(
+            bytes: bytes,
+            quality: videoQuality,
+          );
+          bytes = prepared.bytes;
+          thumbnail = prepared.thumbnail.isEmpty ? null : prepared.thumbnail;
+          item = item.copyWith(
+            mediaMeta: MediaMeta(
+              width: prepared.width > 0 ? prepared.width : null,
+              height: prepared.height > 0 ? prepared.height : null,
+              sizeBytes: bytes.length,
+              durationMs: prepared.durationMs > 0 ? prepared.durationMs : null,
             ),
           );
           throwIfCancelled();
