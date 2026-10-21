@@ -31,7 +31,8 @@ import '../../application/media/media_send_status.dart';
 import 'delegates/thread_search_delegate.dart';
 import 'delegates/thread_upload_coordinator.dart';
 
-export 'delegates/thread_upload_coordinator.dart' show OutgoingImageItem;
+export 'delegates/thread_upload_coordinator.dart'
+    show OutgoingImageItem, OutgoingVideoItem;
 export '../../application/media/video_compressor.dart' show VideoQuality;
 
 // ── States ──────────────────────────────────────────────────────────────────
@@ -1619,6 +1620,12 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
     items: items,
     quality: quality,
   );
+
+  /// Stages all selected videos immediately and processes them sequentially.
+  Future<void> sendMultipleVideos({
+    required List<OutgoingVideoItem> items,
+    required VideoQuality quality,
+  }) => _uploadCoordinator.sendMultipleVideos(items: items, quality: quality);
 
   // ---------------------------------------------------------------------------
   // Pagination

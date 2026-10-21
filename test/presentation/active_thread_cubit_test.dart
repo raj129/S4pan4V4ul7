@@ -1371,6 +1371,122 @@ void main() {
       expect((cubit.state as ActiveThreadLoaded).uploadProgress, isEmpty);
     });
 
+    test(
+      'sendMultipleVideos stages all bubbles before sequential sends and continues after a failure',
+      () async {
+        await open();
+        messages.emitLive(const []);
+        await Future<void>.delayed(Duration.zero);
+        media.failOnMessageId = 'video-b';
+        final firstUploadStarted = Completer<void>();
+        final resumeFirstUpload = Completer<void>();
+        media.beforeUpload = (messageId) async {
+          if (messageId == 'video-a') {
+            firstUploadStarted.complete();
+            await resumeFirstUpload.future;
+          }
+        };
+        final items = [
+          OutgoingVideoItem(
+            messageId: 'video-a',
+            bytes: Uint8List.fromList([1, 2, 3]),
+            filename: 'a.mp4',
+          ),
+          OutgoingVideoItem(
+            messageId: 'video-b',
+            bytes: Uint8List.fromList([4, 5, 6]),
+            filename: 'b.mp4',
+          ),
+          OutgoingVideoItem(
+            messageId: 'video-c',
+            bytes: Uint8List.fromList([7, 8, 9]),
+            filename: 'c.mp4',
+          ),
+        ];
+
+        final batch = cubit.sendMultipleVideos(
+          items: items,
+          quality: VideoQuality.medium,
+        );
+        await firstUploadStarted.future.timeout(const Duration(seconds: 2));
+
+        final staged = cubit.state as ActiveThreadLoaded;
+        expect(
+          staged.messages.map((message) => message.messageId),
+          containsAll(['video-a', 'video-b', 'video-c']),
+        );
+        expect(
+          staged.uploadProgress.keys,
+          containsAll(['video-a', 'video-b', 'video-c']),
+          reason: '${staged.uploadProgress}',
+        );
+        expect(
+          staged.uploadProgress['video-a']?.phase,
+          MediaSendPhase.encrypting,
+        );
+        expect(
+          staged.uploadProgress['video-b']?.phase,
+          MediaSendPhase.preparing,
+        );
+        expect(
+          staged.uploadProgress['video-c']?.phase,
+          MediaSendPhase.preparing,
+        );
+
+        resumeFirstUpload.complete();
+        await batch;
+
+        expect(messages.sent.map((message) => message.messageId), ['video-a', 'video-c']);
+        expect((cubit.state as ActiveThreadLoaded).uploadProgress, isEmpty);
+      },
+    );
+
+    test(
+      'a queued video can be cancelled before its preparation starts',
+      () async {
+        await open();
+        messages.emitLive(const []);
+        await Future<void>.delayed(Duration.zero);
+        final firstUploadStarted = Completer<void>();
+        final resumeFirstUpload = Completer<void>();
+        media.beforeUpload = (messageId) async {
+          if (messageId == 'video-a') {
+            firstUploadStarted.complete();
+            await resumeFirstUpload.future;
+          }
+        };
+
+        final batch = cubit.sendMultipleVideos(
+          items: [
+            OutgoingVideoItem(
+              messageId: 'video-a',
+              bytes: Uint8List.fromList([1, 2, 3]),
+            ),
+            OutgoingVideoItem(
+              messageId: 'video-b',
+              bytes: Uint8List.fromList([4, 5, 6]),
+            ),
+          ],
+          quality: VideoQuality.high,
+        );
+        await firstUploadStarted.future.timeout(const Duration(seconds: 2));
+        await cubit.cancelUpload('video-b');
+
+        var state = cubit.state as ActiveThreadLoaded;
+        expect(
+          state.messages.any((message) => message.messageId == 'video-b'),
+          isFalse,
+        );
+        expect(state.uploadProgress.containsKey('video-b'), isFalse);
+
+        resumeFirstUpload.complete();
+        await batch;
+
+        state = cubit.state as ActiveThreadLoaded;
+        expect(messages.sent.map((message) => message.messageId), ['video-a']);
+      },
+    );
+
     test('disposing upload coordinator does not cancel active upload tokens', () async {
       await open();
       final png = img.encodePng(img.Image(width: 4, height: 2));
@@ -1417,9 +1533,10 @@ class _FakeMediaRepository implements MediaRepository {
   /// Storage object names passed to [uploadEncryptedMedia].
   final List<String> uploadedNames = [];
 
-  /// When set, uploads for this message id throw, to check that one bad photo
+  /// When set, uploads for this message id throw, to check that one bad attachment
   /// in a batch does not stop the others.
   String? failOnMessageId;
+  Future<void> Function(String messageId)? beforeUpload;
 
   @override
   Future<String> uploadEncryptedMedia({
@@ -1430,6 +1547,7 @@ class _FakeMediaRepository implements MediaRepository {
     void Function(double progress)? onProgress,
     UploadCancelToken? cancelToken,
   }) async {
+    await beforeUpload?.call(messageId);
     if (cancelToken?.isCancelled == true) {
       throw const UploadCancelledException();
     }

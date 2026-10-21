@@ -1982,7 +1982,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
                   ],
                 ),
               );
-        if (selected.isEmpty || !mounted) return;
+        if (selected.isEmpty || !mounted || !context.mounted) return;
 
         if (choice == 'photo') {
           var photos = selected;
@@ -2038,19 +2038,21 @@ class _ThreadScreenState extends State<ThreadScreen> {
             videoBytes: selected.length == 1 ? selected.first.bytes : null,
             showEstimates: selected.length == 1,
           );
-          if (selectedQuality == null || !mounted) return;
-          for (final attachment in selected) {
-            if (!mounted) return;
-            await cubit.sendMedia(
-              messageId: _uuid.v4(),
-              rawBytes: attachment.bytes,
-              type: MessageType.video,
-              filename: attachment.fileName,
-              videoQuality: selectedQuality,
-              sourceUri: attachment.sourceUri,
-              sourceFlags: attachment.sourceFlags,
-            );
-          }
+          if (selectedQuality == null || !mounted || !context.mounted) return;
+          await cubit.sendMultipleVideos(
+            items: selected
+                .map(
+                  (attachment) => OutgoingVideoItem(
+                    messageId: _uuid.v4(),
+                    bytes: attachment.bytes,
+                    filename: attachment.fileName,
+                    sourceUri: attachment.sourceUri,
+                    sourceFlags: attachment.sourceFlags,
+                  ),
+                )
+                .toList(growable: false),
+            quality: selectedQuality,
+          );
           return;
         }
 
@@ -2111,7 +2113,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
       type = MessageType.video;
     }
 
-    if (file == null || type == null || !mounted) return;
+    if (file == null || type == null || !mounted || !context.mounted) return;
 
     if (type == MessageType.image) {
       await _sendImages(
@@ -2126,14 +2128,14 @@ class _ThreadScreenState extends State<ThreadScreen> {
     if (type == MessageType.video) {
       final bytes = Uint8List.fromList(await file.readAsBytes());
       try {
-        if (!mounted) return;
+        if (!mounted || !context.mounted) return;
         final quality = await VideoQualitySheet.show(
           context,
           originalBytes: bytes.length,
           selected: VideoQuality.high,
           videoBytes: bytes,
         );
-        if (quality == null || !mounted) return;
+        if (quality == null || !mounted || !context.mounted) return;
         await cubit.sendMedia(
           messageId: _uuid.v4(),
           rawBytes: bytes,

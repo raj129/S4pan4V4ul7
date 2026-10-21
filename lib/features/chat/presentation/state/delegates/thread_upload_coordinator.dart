@@ -35,6 +35,22 @@ class OutgoingImageItem {
   final String? filename;
 }
 
+class OutgoingVideoItem {
+  const OutgoingVideoItem({
+    required this.messageId,
+    required this.bytes,
+    this.sourceUri,
+    this.sourceFlags = 0,
+    this.filename,
+  });
+
+  final String messageId;
+  final Uint8List bytes;
+  final String? sourceUri;
+  final int sourceFlags;
+  final String? filename;
+}
+
 /// Coordinates media sending, compression, native Android background uploads,
 /// cross-platform Firebase Storage uploads, progress tracking, and cancellations.
 class ThreadUploadCoordinator {
@@ -159,6 +175,7 @@ class ThreadUploadCoordinator {
   StreamSubscription<List<AndroidUploadJob>>? _androidUploadSub;
   final Set<String> _acknowledgedUploads = {};
   final Map<String, UploadCancelToken> _uploadTokens = {};
+  final Set<String> _queuedBatchIds = {};
 
   static const maxAttachmentBytes = 64 * 1024 * 1024 - 1024;
 
@@ -311,6 +328,11 @@ class ThreadUploadCoordinator {
   Future<void> cancelUpload(String messageId) async {
     final token = _uploadTokens[messageId];
     if (token != null) token.cancel();
+    if (_queuedBatchIds.remove(messageId)) {
+      _setUploadStatus(messageId, null);
+      await _discardMessage(messageId);
+      return;
+    }
     final job = _androidUploads?.jobs
         .where((job) => job.message.messageId == messageId)
         .firstOrNull;
@@ -846,11 +868,13 @@ class ThreadUploadCoordinator {
         ),
       );
       _setUploadStatus(item.messageId, const MediaSendStatus.preparing());
+      _queuedBatchIds.add(item.messageId);
     }
     _emitMessages();
 
     for (final item in items) {
       // Check if user cancelled this item before preparation started
+      _queuedBatchIds.remove(item.messageId);
       if (_getPendingMessage(item.messageId) == null) continue;
       try {
         await sendMedia(
@@ -864,6 +888,61 @@ class ThreadUploadCoordinator {
         );
       } catch (e) {
         debugPrint('Failed to send image ${item.messageId}: $e');
+      }
+    }
+  }
+
+  /// Stages every video in the chat immediately, then prepares and sends them
+  /// sequentially to avoid decoding multiple large videos at once.
+  Future<void> sendMultipleVideos({
+    required List<OutgoingVideoItem> items,
+    required VideoQuality quality,
+  }) async {
+    if (items.isEmpty) return;
+    final threadId = _currentThreadId();
+    if (threadId == null) return;
+
+    for (final item in items) {
+      final preview = ChatMessage.mediaPreviewFor(
+        MessageType.video,
+        filename: item.filename,
+      );
+      _setPendingMessage(
+        item.messageId,
+        ChatMessage(
+          messageId: item.messageId,
+          threadId: threadId,
+          senderId: _myUid,
+          encryptedText: '',
+          sentAt: DateTime.now().toUtc(),
+          deletedFor: const [],
+          mediaType: MessageType.video,
+          mediaRef: 'chat_media/$threadId/${item.messageId}/media.enc',
+          mediaMeta: MediaMeta(sizeBytes: item.bytes.length),
+          localDecryptedText: preview,
+          status: MessageStatus.sending,
+        ),
+      );
+      _setUploadStatus(item.messageId, const MediaSendStatus.preparing());
+      _queuedBatchIds.add(item.messageId);
+    }
+    _emitMessages();
+
+    for (final item in items) {
+      _queuedBatchIds.remove(item.messageId);
+      if (_getPendingMessage(item.messageId) == null) continue;
+      try {
+        await sendMedia(
+          messageId: item.messageId,
+          rawBytes: item.bytes,
+          type: MessageType.video,
+          filename: item.filename,
+          videoQuality: quality,
+          sourceUri: item.sourceUri,
+          sourceFlags: item.sourceFlags,
+        );
+      } catch (error) {
+        debugPrint('Failed to send video ${item.messageId}: $error');
       }
     }
   }
