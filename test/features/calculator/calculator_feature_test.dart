@@ -6,10 +6,8 @@ import 'package:photo_vault/features/calculator/presentation/widgets/keypad_layo
 
 void main() {
   /// Restricts a text match to the display, so keypad labels don't match too.
-  Finder displayText(String text) => find.descendant(
-    of: find.byType(DisplayPanel),
-    matching: find.text(text),
-  );
+  Finder displayText(String text) =>
+      find.descendant(of: find.byType(DisplayPanel), matching: find.text(text));
 
   Future<void> pumpCalculator(
     WidgetTester tester, {

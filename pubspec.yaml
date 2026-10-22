@@ -72,6 +72,7 @@ dependencies:
   http: ^1.2.1
 
   # Chat UI helpers
+  mime: ^2.0.0
   cached_network_image: ^3.4.1
   video_player: ^2.9.2
   intl: ^0.20.2
@@ -87,6 +88,11 @@ dependencies:
   firebase_messaging: ^16.7.0
   file_picker: ^13.1.0
   open_filex: ^4.7.0
+  provider: ^6.1.5+1
+  android_chat_downloads:
+    path: packages/android_chat_downloads
+  geolocator: ^14.0.1
+  google_maps_flutter: ^2.18.1
 
 dev_dependencies:
   flutter_test:

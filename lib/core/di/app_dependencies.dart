@@ -1,38 +1,39 @@
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
-import '../../application/services/import_manager.dart';
-import '../../application/services/chat_vault_bridge.dart';
-import '../../application/services/restore_flow_service.dart';
-import '../../application/services/pin_validator.dart';
-import '../../application/services/vault_session.dart';
-import '../../application/usecases/change_pin_usecase.dart';
-import '../../application/usecases/create_vault_usecase.dart';
-import '../../application/usecases/export_photo_usecase.dart';
-import '../../application/usecases/unlock_vault_usecase.dart';
-import '../../crypto/services/aes_gcm_crypto_service.dart';
-import '../../crypto/services/crypto_service.dart';
-import '../../data/repositories_impl/firebase_auth_repository.dart';
-import '../../data/repositories_impl/flutter_secure_string_kv.dart';
-import '../../data/repositories_impl/google_drive_vmk_repository.dart';
-import '../../data/repositories_impl/in_memory_auth_repository.dart';
-import '../../data/repositories_impl/in_memory_photo_repository.dart';
-import '../../data/repositories_impl/in_memory_secure_storage_repository.dart';
-import '../../data/repositories_impl/in_memory_settings_repository.dart';
-import '../../data/repositories_impl/in_memory_vault_repository.dart';
-import '../../data/repositories_impl/local_vmk_backup_repository.dart';
-import '../../data/repositories_impl/persistent_photo_repository.dart';
-import '../../data/repositories_impl/persistent_settings_repository.dart';
-import '../../data/repositories_impl/persistent_vault_repository.dart';
-import '../../data/repositories_impl/secure_storage_flutter_repository.dart';
-import '../../data/services/backup_restore_flow_service.dart';
-import '../../data/services/pbkdf2_kdf_service.dart';
-import '../../domain/repositories/auth_repository.dart';
-import '../../domain/repositories/photo_repository.dart';
-import '../../domain/repositories/secure_storage_repository.dart';
-import '../../domain/repositories/settings_repository.dart';
-import '../../domain/repositories/vault_repository.dart';
-import '../../domain/repositories/vmk_backup_repository.dart';
-import 'chat_dependencies.dart';
+import '../../features/vault/application/services/import_manager.dart';
+import '../integrations/chat_vault_bridge.dart';
+import '../../features/vault/application/services/restore_flow_service.dart';
+import '../../features/vault/application/services/pin_validator.dart';
+import '../session/vault_session.dart';
+import '../../features/vault/application/usecases/change_pin_usecase.dart';
+import '../../features/vault/application/usecases/create_vault_usecase.dart';
+import '../../features/vault/application/usecases/export_photo_usecase.dart';
+import '../../features/vault/application/usecases/unlock_vault_usecase.dart';
+import '../crypto/services/aes_gcm_crypto_service.dart';
+import '../crypto/services/crypto_service.dart';
+import '../data/repositories/firebase_auth_repository.dart';
+import '../../features/vault/data/repositories/flutter_secure_string_kv.dart';
+import '../../features/vault/data/repositories/google_drive_vmk_repository.dart';
+import '../data/repositories/in_memory_auth_repository.dart';
+import '../testing/repositories/in_memory_photo_repository.dart';
+import '../testing/repositories/in_memory_secure_storage_repository.dart';
+import '../testing/repositories/in_memory_settings_repository.dart';
+import '../testing/repositories/in_memory_vault_repository.dart';
+import '../../features/vault/data/repositories/local_vmk_backup_repository.dart';
+import '../../features/vault/data/repositories/persistent_photo_repository.dart';
+import '../../features/vault/data/repositories/persistent_settings_repository.dart';
+import '../../features/vault/data/repositories/persistent_vault_repository.dart';
+import '../../features/vault/data/repositories/secure_storage_flutter_repository.dart';
+import '../../features/vault/data/repositories/unlock_attempt_stores.dart';
+import '../../features/vault/data/services/backup_restore_flow_service.dart';
+import '../../features/vault/data/services/pbkdf2_kdf_service.dart';
+import '../domain/repositories/auth_repository.dart';
+import '../../features/vault/domain/repositories/photo_repository.dart';
+import '../../features/vault/domain/repositories/secure_storage_repository.dart';
+import '../../features/vault/domain/repositories/settings_repository.dart';
+import '../../features/vault/domain/repositories/vault_repository.dart';
+import '../../features/vault/domain/repositories/vmk_backup_repository.dart';
+import '../../features/chat/di/chat_dependencies.dart';
 
 /// Single composition root for the vault side of the app.
 ///
@@ -55,9 +56,11 @@ class AppDependencies {
         ? SecureStorageFlutterRepository(defaultSecureStorage)
         : InMemorySecureStorageRepository();
     final settingsRepository = persistentState
-        ? PersistentSettingsRepository(FlutterSecureStringKv(defaultSecureStorage))
+        ? PersistentSettingsRepository(
+            FlutterSecureStringKv(defaultSecureStorage),
+          )
         : InMemorySettingsRepository();
-    final photoRepository = persistentState
+    final PhotoRepository photoRepository = persistentState
         ? PersistentPhotoRepositoryImpl()
         : InMemoryPhotoRepository();
     final authRepository = persistentState
@@ -93,6 +96,11 @@ class AppDependencies {
       kdfService: kdfService,
       cryptoService: cryptoService,
       vaultSession: vaultSession,
+      attemptStore: persistentState
+          ? PersistentUnlockAttemptStore(
+              FlutterSecureStringKv(defaultSecureStorage),
+            )
+          : null,
     );
     final changePinUseCase = ChangePinUseCase(
       vaultRepository: vaultRepository,

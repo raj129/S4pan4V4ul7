@@ -2,7 +2,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:photo_vault/application/services/chat_media_cache.dart';
+import 'package:photo_vault/features/chat/application/media/chat_media_cache.dart';
 
 void main() {
   late Directory dir;
@@ -60,6 +60,26 @@ void main() {
 
     await cache.clear();
 
+    expect(await cache.read('a'), isNull);
+  });
+
+  test('moved markers survive clearing and prevent cache recreation', () async {
+    final cache = cacheWith();
+    await cache.write('alice:a', Uint8List.fromList([1]));
+    await cache.markMoved('alice:a');
+    await cache.clear();
+    final reopened = cacheWith();
+    await reopened.write('alice:a', Uint8List.fromList([2]));
+    expect(await reopened.wasMoved('alice:a'), isTrue);
+    expect(await reopened.read('alice:a'), isNull);
+  });
+
+  test('storage budget rejects oversized writes explicitly', () async {
+    final cache = cacheWith(maxBytes: 1);
+    await expectLater(
+      cache.write('a', Uint8List(2)),
+      throwsA(isA<ChatCacheCapacityException>()),
+    );
     expect(await cache.read('a'), isNull);
   });
 }

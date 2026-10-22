@@ -1,6 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:photo_vault/application/services/pin_validator.dart';
+import 'package:photo_vault/features/vault/application/services/pin_validator.dart';
 
 void main() {
   group('PinValidator', () {

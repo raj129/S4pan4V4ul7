@@ -2,7 +2,7 @@ import 'dart:async';
 
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:photo_vault/data/repositories_impl/firebase_auth_repository.dart';
+import 'package:photo_vault/core/data/repositories/firebase_auth_repository.dart';
 
 class _FakeFirebaseAuth implements FirebaseAuth {
   _FakeFirebaseAuth(this._authEvents);

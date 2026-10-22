@@ -5,36 +5,36 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
 
-import '../../domain/entities/user_mode.dart';
-import '../../domain/entities/vault_photo.dart';
-import '../../domain/entities/vault_status.dart';
+import '../../features/vault/domain/entities/user_mode.dart';
+import '../../features/vault/domain/entities/vault_photo.dart';
+import '../../features/vault/domain/entities/vault_status.dart';
 import '../../features/calculator/calculator.dart';
-import '../../application/services/chat_share_inbox.dart';
-import '../../presentation/app/chat_app.dart';
-import '../../presentation/app/main_scaffold.dart';
-import '../../presentation/features/utility_shell/utility_shell.dart';
-import '../../presentation/screens/chat_screens/new_chat_screen.dart';
-import '../../presentation/screens/chat_screens/profile_screen.dart';
-import '../../presentation/screens/chat_screens/thread_screen.dart';
-import '../../domain/entities/chat_user.dart';
-import '../../presentation/screens/files/files_screen.dart';
-import '../../presentation/screens/gallery/gallery_home_screen.dart';
-import '../../presentation/screens/gallery/gallery_photo_viewer_screen.dart';
-import '../../presentation/screens/import/import_screen.dart';
-import '../../presentation/screens/lock/lock_screen.dart';
-import '../../presentation/screens/onboarding/google_signin_screen.dart';
-import '../../presentation/screens/onboarding/pin_screens.dart';
-import '../../presentation/screens/onboarding/vault_creation_screen.dart';
-import '../../presentation/screens/onboarding/welcome_screen.dart';
-import '../../presentation/screens/restore/restore_flow_screen.dart';
-import '../../presentation/screens/settings/change_pin_screen.dart';
-import '../../presentation/screens/settings/settings_screen.dart';
-import '../../presentation/screens/trash/trash_screen.dart';
-import '../../presentation/state/chat/active_thread_cubit.dart';
-import '../../presentation/state/chat/thread_list_cubit.dart';
-import '../../presentation/state/chat/user_lookup_cubit.dart';
-import '../../presentation/state/onboarding/onboarding_cubit.dart';
-import '../../presentation/state/onboarding/onboarding_state.dart';
+import '../../features/chat/application/media/chat_share_inbox.dart';
+import '../../features/chat/presentation/app/chat_app.dart';
+import '../app/main_scaffold.dart';
+import '../presentation/features/utility_shell/utility_shell.dart';
+import '../../features/chat/presentation/screens/new_chat_screen.dart';
+import '../../features/chat/presentation/screens/profile_screen.dart';
+import '../../features/chat/presentation/screens/thread_screen.dart';
+import '../../features/chat/domain/entities/chat_user.dart';
+import '../../features/vault/presentation/screens/files/files_screen.dart';
+import '../../features/vault/presentation/screens/gallery/gallery_home_screen.dart';
+import '../../features/vault/presentation/screens/gallery/gallery_photo_viewer_screen.dart';
+import '../../features/vault/presentation/screens/import/import_screen.dart';
+import '../../features/vault/presentation/screens/lock/lock_screen.dart';
+import '../../features/vault/presentation/screens/onboarding/google_signin_screen.dart';
+import '../../features/vault/presentation/screens/onboarding/pin_screens.dart';
+import '../../features/vault/presentation/screens/onboarding/vault_creation_screen.dart';
+import '../../features/vault/presentation/screens/onboarding/welcome_screen.dart';
+import '../../features/vault/presentation/screens/restore/restore_flow_screen.dart';
+import '../../features/vault/presentation/screens/settings/change_pin_screen.dart';
+import '../../features/vault/presentation/screens/settings/settings_screen.dart';
+import '../../features/vault/presentation/screens/trash/trash_screen.dart';
+import '../../features/chat/presentation/state/active_thread_cubit.dart';
+import '../../features/chat/presentation/state/thread_list_cubit.dart';
+import '../../features/chat/presentation/state/user_lookup_cubit.dart';
+import '../../features/vault/presentation/state/onboarding_cubit.dart';
+import '../../features/vault/presentation/state/onboarding_state.dart';
 import '../app/app_session.dart';
 import '../di/app_dependencies.dart';
 
@@ -287,6 +287,9 @@ GoRoute _chatRoute(AppDependencies deps, AppSessionState session) {
                 myUid: deps.chatDependencies.authService.currentUid ?? '',
                 connectivityStream: Connectivity().onConnectivityChanged,
                 onMediaReady: deps.chatDependencies.mediaLoader.seed,
+                androidUploads: deps.chatDependencies.uploads,
+                localMedia: deps.chatDependencies.localMedia,
+                mediaLoader: deps.chatDependencies.mediaLoader,
               ),
               child: child,
             );
@@ -334,6 +337,9 @@ GoRoute _chatRoute(AppDependencies deps, AppSessionState session) {
             notificationService: deps.chatDependencies.notificationService,
             settingsRepository: deps.settingsRepository,
             profileService: deps.chatDependencies.profileService,
+            liveLocationRepository:
+                deps.chatDependencies.liveLocationRepository,
+            liveLocationService: deps.chatDependencies.liveLocationService,
           );
           final providedCubit = args.activeThreadCubit;
           Widget withThreadList(Widget child) {
@@ -363,24 +369,29 @@ GoRoute _chatRoute(AppDependencies deps, AppSessionState session) {
               BlocProvider.value(value: providedCubit, child: screen),
             );
           }
-          return withThreadList(BlocProvider<ActiveThreadCubit>(
-            create: (_) => ActiveThreadCubit(
-              messageRepository: deps.chatDependencies.messageRepository,
-              threadRepository: deps.chatDependencies.threadRepository,
-              userRepository: deps.chatDependencies.userRepository,
-              typingRepository: deps.chatDependencies.typingRepository,
-              presenceRepository: deps.chatDependencies.presenceRepository,
-              mediaRepository: deps.chatDependencies.mediaRepository,
-              messageCache: deps.chatDependencies.messageCache,
-              searchIndex: deps.chatDependencies.searchIndex,
-              outbox: deps.chatDependencies.outbox,
-              cryptoService: deps.chatDependencies.cryptoService,
-              myUid: deps.chatDependencies.authService.currentUid ?? '',
-              connectivityStream: Connectivity().onConnectivityChanged,
-              onMediaReady: deps.chatDependencies.mediaLoader.seed,
+          return withThreadList(
+            BlocProvider<ActiveThreadCubit>(
+              create: (_) => ActiveThreadCubit(
+                messageRepository: deps.chatDependencies.messageRepository,
+                threadRepository: deps.chatDependencies.threadRepository,
+                userRepository: deps.chatDependencies.userRepository,
+                typingRepository: deps.chatDependencies.typingRepository,
+                presenceRepository: deps.chatDependencies.presenceRepository,
+                mediaRepository: deps.chatDependencies.mediaRepository,
+                messageCache: deps.chatDependencies.messageCache,
+                searchIndex: deps.chatDependencies.searchIndex,
+                outbox: deps.chatDependencies.outbox,
+                cryptoService: deps.chatDependencies.cryptoService,
+                myUid: deps.chatDependencies.authService.currentUid ?? '',
+                connectivityStream: Connectivity().onConnectivityChanged,
+                onMediaReady: deps.chatDependencies.mediaLoader.seed,
+                androidUploads: deps.chatDependencies.uploads,
+                localMedia: deps.chatDependencies.localMedia,
+                mediaLoader: deps.chatDependencies.mediaLoader,
+              ),
+              child: screen,
             ),
-            child: screen,
-          ));
+          );
         },
       ),
     ],
@@ -487,7 +498,9 @@ GoRoute _lockRoute(AppDependencies deps, AppSessionState session) {
             unawaited(deps.importManager.reconcileVaultFiles());
             final target = deps.importManager.hasPendingShareFiles
                 ? '/import/share-intent'
-                : (decodedReturnTo == '/chat/thread' ? '/chat' : decodedReturnTo);
+                : (decodedReturnTo == '/chat/thread'
+                      ? '/chat'
+                      : decodedReturnTo);
             context.go(target);
           },
         ),

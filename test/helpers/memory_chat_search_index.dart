@@ -1,5 +1,5 @@
-import 'package:photo_vault/domain/entities/chat_message.dart';
-import 'package:photo_vault/domain/repositories/chat_search_index_repository.dart';
+import 'package:photo_vault/features/chat/domain/entities/chat_message.dart';
+import 'package:photo_vault/features/chat/domain/repositories/chat_search_index_repository.dart';
 
 import 'memory_message_cache.dart';
 

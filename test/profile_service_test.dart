@@ -1,10 +1,10 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:photo_vault/application/services/profile_service.dart';
-import 'package:photo_vault/data/repositories_impl/firebase_avatar_storage.dart';
-import 'package:photo_vault/domain/entities/chat_user.dart';
-import 'package:photo_vault/domain/entities/profile_avatar.dart';
-import 'package:photo_vault/domain/repositories/message_cache_repository.dart';
-import 'package:photo_vault/domain/repositories/user_repository.dart';
+import 'package:photo_vault/features/chat/application/services/profile_service.dart';
+import 'package:photo_vault/features/chat/data/repositories/firebase_avatar_storage.dart';
+import 'package:photo_vault/features/chat/domain/entities/chat_user.dart';
+import 'package:photo_vault/features/chat/domain/entities/profile_avatar.dart';
+import 'package:photo_vault/features/chat/domain/repositories/message_cache_repository.dart';
+import 'package:photo_vault/features/chat/domain/repositories/user_repository.dart';
 
 class _MemoryStore extends NoopMessageCacheRepository {
   _MemoryStore();
@@ -31,7 +31,10 @@ class _FakeUsers implements UserRepository {
   Future<ChatUser?> getUserById(String uid) async => remote;
 
   @override
-  Future<void> upsertProfile(ChatUser user, {bool includeProfile = true}) async {
+  Future<void> upsertProfile(
+    ChatUser user, {
+    bool includeProfile = true,
+  }) async {
     upserts.add(user);
   }
 
@@ -86,24 +89,31 @@ void main() {
     expect(ProfileAvatar.decode('junk'), const ProfileAvatar.initials());
   });
 
-  test('alias replaces the display name only locally and can be reset', () async {
-    final a = _user('a', 'Person A');
-    expect(service.nameFor(a), 'Person A');
-    await service.setAlias('a', '  B  ');
-    expect(service.nameFor(a), 'B');
-    await service.setAlias('a', '');
-    expect(service.nameFor(a), 'Person A');
-    expect(users.upserts, isEmpty);
-  });
+  test(
+    'alias replaces the display name only locally and can be reset',
+    () async {
+      final a = _user('a', 'Person A');
+      expect(service.nameFor(a), 'Person A');
+      await service.setAlias('a', '  B  ');
+      expect(service.nameFor(a), 'B');
+      await service.setAlias('a', '');
+      expect(service.nameFor(a), 'Person A');
+      expect(users.upserts, isEmpty);
+    },
+  );
 
-  test('ensureProfile adopts the server profile before the Google name', () async {
-    users.remote = _user('me', 'Chosen').copyWith(
-      avatar: const ProfileAvatar.emoji('🐱'),
-    );
-    final p = await service.ensureProfile(uid: 'me', fallbackName: 'Google');
-    expect(p.displayName, 'Chosen');
-    expect(p.avatar, const ProfileAvatar.emoji('🐱'));
-  });
+  test(
+    'ensureProfile adopts the server profile before the Google name',
+    () async {
+      users.remote = _user(
+        'me',
+        'Chosen',
+      ).copyWith(avatar: const ProfileAvatar.emoji('🐱'));
+      final p = await service.ensureProfile(uid: 'me', fallbackName: 'Google');
+      expect(p.displayName, 'Chosen');
+      expect(p.avatar, const ProfileAvatar.emoji('🐱'));
+    },
+  );
 
   test('updateProfile stores locally and publishes', () async {
     final me = _user('me', 'Google');

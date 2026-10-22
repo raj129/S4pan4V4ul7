@@ -1,12 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
-import 'package:photo_vault/application/services/profile_service.dart';
-import 'package:photo_vault/data/repositories_impl/firebase_avatar_storage.dart';
-import 'package:photo_vault/domain/entities/chat_user.dart';
-import 'package:photo_vault/domain/repositories/message_cache_repository.dart';
-import 'package:photo_vault/domain/repositories/user_repository.dart';
-import 'package:photo_vault/presentation/screens/chat_screens/profile_screen.dart';
+import 'package:photo_vault/features/chat/application/services/profile_service.dart';
+import 'package:photo_vault/features/chat/data/repositories/firebase_avatar_storage.dart';
+import 'package:photo_vault/features/chat/domain/entities/chat_user.dart';
+import 'package:photo_vault/features/chat/domain/repositories/message_cache_repository.dart';
+import 'package:photo_vault/features/chat/domain/repositories/user_repository.dart';
+import 'package:photo_vault/features/chat/presentation/screens/profile_screen.dart';
 
 class _Store extends NoopMessageCacheRepository {
   final values = <String, String>{};
@@ -29,7 +29,10 @@ class _Users implements UserRepository {
   final upserts = <ChatUser>[];
 
   @override
-  Future<void> upsertProfile(ChatUser user, {bool includeProfile = true}) async {
+  Future<void> upsertProfile(
+    ChatUser user, {
+    bool includeProfile = true,
+  }) async {
     if (fail) throw Exception('offline');
     upserts.add(user);
   }

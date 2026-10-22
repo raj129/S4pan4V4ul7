@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
-import '../../presentation/theme/app_spacing.dart';
+import '../presentation/theme/app_spacing.dart';
 import 'app_navigation_drawer.dart';
 
 class BaseScreenShell extends StatelessWidget {

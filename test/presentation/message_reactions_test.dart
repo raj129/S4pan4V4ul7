@@ -3,13 +3,15 @@ import 'dart:typed_data';
 import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:photo_vault/crypto/services/chat_crypto_service.dart';
-import 'package:photo_vault/domain/entities/chat_message.dart';
-import 'package:photo_vault/domain/entities/message_metadata.dart';
-import 'package:photo_vault/domain/repositories/message_repository.dart';
-import 'package:photo_vault/presentation/widgets/chat/chat_media_preview.dart';
-import 'package:photo_vault/presentation/widgets/chat/animated_emoji.dart';
-import 'package:photo_vault/presentation/widgets/chat/message_bubble.dart';
+import 'package:intl/intl.dart';
+import 'package:photo_vault/features/chat/application/crypto/chat_crypto_service.dart';
+import 'package:photo_vault/features/chat/domain/entities/chat_message.dart';
+import 'package:photo_vault/features/chat/domain/entities/message_metadata.dart';
+import 'package:photo_vault/features/chat/domain/repositories/message_repository.dart';
+import 'package:photo_vault/features/chat/presentation/widgets/chat_media_preview.dart';
+import 'package:photo_vault/features/chat/presentation/widgets/animated_emoji.dart';
+import 'package:photo_vault/features/chat/presentation/widgets/chat_bubble_shape.dart';
+import 'package:photo_vault/features/chat/presentation/widgets/message_bubble.dart';
 
 class _NoMediaRepository implements MediaRepository {
   @override
@@ -28,6 +30,7 @@ class _TestMediaLoader extends ChatMediaLoader {
   Future<Uint8List> load({
     required String threadId,
     required String storagePath,
+    String? senderId,
   }) async => Uint8List.fromList([0]);
 }
 
@@ -53,6 +56,7 @@ void main() {
     Map<String, String> reactions = const {},
     String text = 'hello',
     MessageType? mediaType,
+    bool isMine = false,
   }) async {
     final reacted = <String>[];
     await tester.pumpWidget(
@@ -64,11 +68,12 @@ void main() {
               text: text,
               mediaType: mediaType,
             ),
-            isMine: false,
+            isMine: isMine,
             myUid: 'me',
             otherUid: 'other',
             mediaLoader: _TestMediaLoader(),
             onDeleteForMe: () {},
+            onReply: () {},
             onReact: reacted.add,
             onSaveToVault: mediaType == null ? null : () {},
           ),
@@ -142,7 +147,7 @@ void main() {
     await pumpBubble(tester, mediaType: MessageType.image);
 
     expect(find.byType(BottomSheet), findsOneWidget);
-    expect(find.text('Save to vault'), findsOneWidget);
+    expect(find.text('Move to vault'), findsOneWidget);
     expect(find.text('Delete for me'), findsOneWidget);
   });
 
@@ -151,6 +156,91 @@ void main() {
 
     expect(find.byType(BottomSheet), findsOneWidget);
     expect(find.text('Delete for me'), findsOneWidget);
+  });
+
+  testWidgets('sent images and videos have no bubble background or tail', (
+    tester,
+  ) async {
+    for (final mediaType in [MessageType.image, MessageType.video]) {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: MessageBubble(
+              message: _message(
+                mediaType: mediaType,
+              ).copyWith(status: MessageStatus.sent),
+              isMine: true,
+              isHighlighted: true,
+              myUid: 'me',
+              otherUid: 'other',
+              mediaLoader: _TestMediaLoader(),
+              onDeleteForMe: () {},
+              onSaveToVault: () {},
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      expect(find.byType(ChatMediaPreview), findsOneWidget);
+      expect(
+        find.byWidgetPredicate(
+          (widget) => widget is Material && widget.shape is ChatBubbleShape,
+        ),
+        findsNothing,
+      );
+      final outlinedBubble = find.byWidgetPredicate(
+        (widget) =>
+            widget is AnimatedContainer &&
+            widget.decoration is BoxDecoration &&
+            (widget.decoration! as BoxDecoration).border != null,
+      );
+      expect(outlinedBubble, findsOneWidget);
+      final decoration = tester
+          .widget<AnimatedContainer>(outlinedBubble)
+          .decoration! as BoxDecoration;
+      expect(decoration.color, Colors.transparent);
+      expect(decoration.border, isNotNull);
+      expect(
+        find.text(DateFormat.jm().format(DateTime.utc(2024).toLocal())),
+        findsOneWidget,
+      );
+    }
+  });
+
+  testWidgets('received image retains the standard chat bubble', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: MessageBubble(
+            message: _message(mediaType: MessageType.image),
+            isMine: false,
+            myUid: 'me',
+            otherUid: 'other',
+            mediaLoader: _TestMediaLoader(),
+            onDeleteForMe: () {},
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(
+      find.byWidgetPredicate(
+        (widget) => widget is Material && widget.shape is ChatBubbleShape,
+      ),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('sent media keeps its action affordances', (tester) async {
+    await pumpBubble(tester, mediaType: MessageType.image, isMine: true);
+
+    expect(find.text('Move to vault'), findsOneWidget);
+    expect(find.text('Delete for me'), findsOneWidget);
+    expect(find.text('Reply'), findsOneWidget);
   });
 
   testWidgets('offline outgoing message shows a waiting indicator', (

@@ -10,11 +10,14 @@
     "build": "tsc",
     "build:watch": "tsc --watch",
     "lint": "tsc --noEmit",
+    "test:rules": "node --test test/rules.test.cjs",
     "serve": "npm run build && firebase emulators:start --only functions,firestore",
     "deploy": "firebase deploy --only functions",
     "logs": "firebase functions:log"
   },
   "devDependencies": {
+    "@firebase/rules-unit-testing": "^6.0.0",
+    "firebase": "^13.1.0",
     "typescript": "^5.9.3"
   },
   "dependencies": {

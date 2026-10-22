@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lottie/lottie.dart';
-import 'package:photo_vault/presentation/widgets/chat/animated_emoji.dart';
+import 'package:photo_vault/features/chat/presentation/widgets/animated_emoji.dart';
 
 void main() {
   setUp(() {

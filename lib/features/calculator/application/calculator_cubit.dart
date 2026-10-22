@@ -58,7 +58,8 @@ class CalculatorCubit extends Cubit<CalculatorState> {
     } else if (input == '.') {
       expression = _appendDecimal(expression);
     } else if (input == 'E') {
-      if (!_endsWithNumber(expression) || _currentNumber(expression).contains('E')) {
+      if (!_endsWithNumber(expression) ||
+          _currentNumber(expression).contains('E')) {
         return;
       }
       expression += 'E';
@@ -268,9 +269,7 @@ class CalculatorCubit extends Cubit<CalculatorState> {
           _digits.contains(char) ||
           char == '.' ||
           char == 'E' ||
-          (char == '-' &&
-              index >= 2 &&
-              expression[index - 2] == 'E');
+          (char == '-' && index >= 2 && expression[index - 2] == 'E');
       if (!isNumeric) break;
       index--;
     }
@@ -278,7 +277,8 @@ class CalculatorCubit extends Cubit<CalculatorState> {
   }
 
   bool _endsWithNumber(String expression) =>
-      expression.isNotEmpty && _digits.contains(expression[expression.length - 1]);
+      expression.isNotEmpty &&
+      _digits.contains(expression[expression.length - 1]);
 
   bool _isOperatorSymbol(String symbol) => kOperators.containsKey(symbol);
 

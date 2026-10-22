@@ -1,6 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:photo_vault/core/app/app_session.dart';
-import 'package:photo_vault/domain/entities/user_mode.dart';
+import 'package:photo_vault/features/vault/domain/entities/user_mode.dart';
 
 void main() {
   group('AppSessionState', () {
@@ -23,15 +23,18 @@ void main() {
       expect(notifications, 1);
     });
 
-    test('unlock() is a no-op (no extra notification) when already unlocked', () {
-      final session = AppSessionState()..unlock();
-      var notifications = 0;
-      session.addListener(() => notifications++);
+    test(
+      'unlock() is a no-op (no extra notification) when already unlocked',
+      () {
+        final session = AppSessionState()..unlock();
+        var notifications = 0;
+        session.addListener(() => notifications++);
 
-      session.unlock();
+        session.unlock();
 
-      expect(notifications, 0);
-    });
+        expect(notifications, 0);
+      },
+    );
 
     test('lock() flips isUnlocked back and notifies listeners', () {
       final session = AppSessionState()..unlock();

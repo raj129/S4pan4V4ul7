@@ -52,3 +52,7 @@ app.*.map.json
 /lib/storage/local_db/*.g.dart
 /lib/storage/local_db/*.drift
 # If other generated files are intentionally committed, document why in README.md
+
+# Local tooling output
+.artifacts/
+.vscode/

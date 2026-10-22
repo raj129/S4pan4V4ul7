@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:photo_vault/crypto/services/aes_gcm_crypto_service.dart';
+import 'package:photo_vault/core/crypto/services/aes_gcm_crypto_service.dart';
 
 void main() {
   group('AesGcmCryptoService', () {

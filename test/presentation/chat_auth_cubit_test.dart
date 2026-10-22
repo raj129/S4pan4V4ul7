@@ -2,11 +2,11 @@ import 'dart:async';
 
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:photo_vault/application/services/chat_auth_service.dart';
-import 'package:photo_vault/application/services/chat_identity_service.dart';
-import 'package:photo_vault/application/services/presence_service.dart';
-import 'package:photo_vault/domain/entities/chat_user.dart';
-import 'package:photo_vault/presentation/state/chat/chat_auth_cubit.dart';
+import 'package:photo_vault/features/chat/application/services/chat_auth_service.dart';
+import 'package:photo_vault/features/chat/application/services/chat_identity_service.dart';
+import 'package:photo_vault/features/chat/application/services/presence_service.dart';
+import 'package:photo_vault/features/chat/domain/entities/chat_user.dart';
+import 'package:photo_vault/features/chat/presentation/state/chat_auth_cubit.dart';
 
 final _user = ChatUser(
   uid: 'me',

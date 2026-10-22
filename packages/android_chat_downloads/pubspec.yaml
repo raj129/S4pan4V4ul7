@@ -1,0 +1,15 @@
+name: android_chat_downloads
+description: Private Android chat ciphertext transfer journal.
+version: 0.0.1
+publish_to: none
+environment:
+  sdk: ^3.12.2
+dependencies:
+  flutter:
+    sdk: flutter
+flutter:
+  plugin:
+    platforms:
+      android:
+        package: com.system.calculator.chatdownloads
+        pluginClass: ChatDownloadPlugin

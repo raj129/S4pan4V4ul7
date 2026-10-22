@@ -27,17 +27,9 @@ class MemoryBar extends StatelessWidget {
   Widget build(BuildContext context) {
     return Row(
       children: <Widget>[
-        _MemoryChip(
-          label: 'MC',
-          onTap: onMemoryClear,
-          enabled: memoryActive,
-        ),
+        _MemoryChip(label: 'MC', onTap: onMemoryClear, enabled: memoryActive),
         const SizedBox(width: CalculatorTheme.keySpacing),
-        _MemoryChip(
-          label: 'MR',
-          onTap: onMemoryRecall,
-          enabled: memoryActive,
-        ),
+        _MemoryChip(label: 'MR', onTap: onMemoryRecall, enabled: memoryActive),
         const SizedBox(width: CalculatorTheme.keySpacing),
         _MemoryChip(label: 'M+', onTap: onMemoryAdd, enabled: true),
         const SizedBox(width: CalculatorTheme.keySpacing),

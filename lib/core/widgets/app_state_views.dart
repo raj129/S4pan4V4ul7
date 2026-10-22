@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-import '../../presentation/theme/app_spacing.dart';
+import '../presentation/theme/app_spacing.dart';
 
 /// Centered spinner used for full-screen loading states.
 ///

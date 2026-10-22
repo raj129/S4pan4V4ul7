@@ -3,7 +3,7 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
-import 'package:photo_vault/application/services/profile_service.dart';
+import 'package:photo_vault/features/chat/application/services/profile_service.dart';
 
 void main() {
   test('a large noisy photo is compressed to a small square JPEG', () {

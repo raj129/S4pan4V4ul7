@@ -34,6 +34,8 @@ android {
         targetSdk = 35
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        manifestPlaceholders["GOOGLE_MAPS_ANDROID_API_KEY"] =
+            System.getenv("GOOGLE_MAPS_ANDROID_API_KEY") ?: ""
     }
 
     signingConfigs {
@@ -54,7 +56,19 @@ android {
         release {
             signingConfig = if (testerKeystorePath != null) {
                 signingConfigs.getByName("testerRelease")
+            } else if (project.hasProperty("allowDebugSigning")) {
+                signingConfigs.getByName("debug")
             } else {
+                // Debug-signed release builds can be impersonated; fail only
+                // when a release task is actually requested.
+                if (gradle.startParameter.taskNames.any {
+                        it.contains("release", ignoreCase = true)
+                    }) {
+                    error(
+                "Release builds need ANDROID_KEYSTORE_PATH (see README) " +
+                            "or allowDebugSigning=true in ~/.gradle/gradle.properties.",
+                    )
+                }
                 signingConfigs.getByName("debug")
             }
         }
@@ -72,5 +86,15 @@ flutter {
 }
 
 dependencies {
+    testImplementation("junit:junit:4.13.2")
+    implementation(platform("com.google.firebase:firebase-bom:34.9.0"))
+    implementation("com.google.firebase:firebase-auth")
+    implementation("com.google.firebase:firebase-storage")
+    implementation("com.google.firebase:firebase-firestore")
+    implementation("androidx.work:work-runtime-ktx:2.11.1")
+    implementation("androidx.media3:media3-exoplayer:1.11.1")
+    implementation("androidx.media3:media3-ui:1.11.1")
+    implementation("androidx.media3:media3-transformer:1.11.1")
+    implementation("androidx.media3:media3-effect:1.11.1")
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
 }

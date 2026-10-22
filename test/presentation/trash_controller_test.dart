@@ -1,10 +1,10 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:photo_vault/application/services/import_manager.dart';
-import 'package:photo_vault/application/services/vault_session.dart';
-import 'package:photo_vault/crypto/services/aes_gcm_crypto_service.dart';
-import 'package:photo_vault/domain/entities/vault_photo.dart';
-import 'package:photo_vault/presentation/state/trash/trash_controller.dart';
-import 'package:photo_vault/test_helpers/repositories/in_memory_photo_repository.dart';
+import 'package:photo_vault/features/vault/application/services/import_manager.dart';
+import 'package:photo_vault/core/session/vault_session.dart';
+import 'package:photo_vault/core/crypto/services/aes_gcm_crypto_service.dart';
+import 'package:photo_vault/features/vault/domain/entities/vault_photo.dart';
+import 'package:photo_vault/features/vault/presentation/state/trash_controller.dart';
+import 'package:photo_vault/core/testing/repositories/in_memory_photo_repository.dart';
 
 VaultPhoto _photo(String id, {bool isTrashed = true}) => VaultPhoto(
   id: id,

@@ -5,24 +5,26 @@ import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter/widgets.dart';
 import 'package:image/image.dart' as img;
-import 'package:photo_vault/crypto/services/chat_crypto_service.dart';
-import 'package:photo_vault/application/services/image_compressor.dart';
-import 'package:photo_vault/domain/entities/chat_message.dart';
-import 'package:photo_vault/domain/entities/chat_thread.dart';
-import 'package:photo_vault/domain/entities/chat_user.dart';
-import 'package:photo_vault/domain/entities/message_metadata.dart';
-import 'package:photo_vault/domain/entities/message_reply.dart';
-import 'package:photo_vault/domain/entities/user_presence.dart';
-import 'package:photo_vault/domain/repositories/chat_search_index_repository.dart';
-import 'package:photo_vault/domain/repositories/message_cache_repository.dart';
-import 'package:photo_vault/domain/repositories/message_repository.dart';
-import 'package:photo_vault/domain/repositories/outbox_repository.dart';
-import 'package:photo_vault/domain/repositories/presence_repository.dart';
-import 'package:photo_vault/domain/repositories/thread_repository.dart';
-import 'package:photo_vault/domain/repositories/typing_repository.dart';
-import 'package:photo_vault/domain/repositories/user_repository.dart';
-import 'package:photo_vault/presentation/state/chat/active_thread_cubit.dart';
-import 'package:photo_vault/presentation/state/chat/media_send_status.dart';
+import 'package:photo_vault/features/chat/application/crypto/chat_crypto_service.dart';
+import 'package:photo_vault/features/chat/application/media/image_compressor.dart';
+import 'package:photo_vault/features/chat/application/media/android_chat_uploads.dart';
+import 'package:photo_vault/features/chat/application/media/android_chat_local_media.dart';
+import 'package:photo_vault/features/chat/domain/entities/chat_message.dart';
+import 'package:photo_vault/features/chat/domain/entities/chat_thread.dart';
+import 'package:photo_vault/features/chat/domain/entities/chat_user.dart';
+import 'package:photo_vault/features/chat/domain/entities/message_metadata.dart';
+import 'package:photo_vault/features/chat/domain/entities/message_reply.dart';
+import 'package:photo_vault/features/chat/domain/entities/user_presence.dart';
+import 'package:photo_vault/features/chat/domain/repositories/chat_search_index_repository.dart';
+import 'package:photo_vault/features/chat/domain/repositories/message_cache_repository.dart';
+import 'package:photo_vault/features/chat/domain/repositories/message_repository.dart';
+import 'package:photo_vault/features/chat/domain/repositories/outbox_repository.dart';
+import 'package:photo_vault/features/chat/domain/repositories/presence_repository.dart';
+import 'package:photo_vault/features/chat/domain/repositories/thread_repository.dart';
+import 'package:photo_vault/features/chat/domain/repositories/typing_repository.dart';
+import 'package:photo_vault/features/chat/domain/repositories/user_repository.dart';
+import 'package:photo_vault/features/chat/presentation/state/active_thread_cubit.dart';
+import 'package:photo_vault/features/chat/application/media/media_send_status.dart';
 
 import '../helpers/memory_chat_search_index.dart';
 import '../helpers/memory_message_cache.dart';
@@ -64,6 +66,86 @@ class _PassThroughCrypto implements ChatCryptoService {
   @override
   dynamic noSuchMethod(Invocation invocation) =>
       throw UnimplementedError('${invocation.memberName} not needed');
+}
+
+class _RetainedMedia extends AndroidChatLocalMedia {
+  final records = <String, Map<String, Object?>>{};
+  bool rejectThumbnail = false;
+  bool rejectRemoval = false;
+  @override
+  Future<void> put({
+    required String uid,
+    required String path,
+    required ChatMediaDirection direction,
+    required Uint8List ciphertext,
+    String? sourceUri,
+    String? sourceDigest,
+    int sourceFlags = 0,
+  }) async {
+    if (rejectThumbnail && path.endsWith('thumb.enc')) {
+      throw const ChatLocalMediaException(
+        'local_media_storage_full',
+        'Storage full',
+      );
+    }
+    records[path] = {
+      'bytes': Uint8List.fromList(ciphertext),
+      'sourceUri': sourceUri,
+      'sourceDigest': sourceDigest,
+      'sourceFlags': sourceFlags,
+    };
+  }
+
+  @override
+  Future<void> remove(String uid, String path) async {
+    if (rejectRemoval) {
+      throw const ChatLocalMediaException(
+        'local_media_unavailable',
+        'Encrypted staging cleanup failed',
+      );
+    }
+    records.remove(path);
+  }
+}
+
+class _FakeAndroidUploads extends AndroidChatUploads {
+  final records = <AndroidUploadJob>[];
+  Object? failure;
+  Future<void> Function()? beforeAccept;
+  final cancelled = <String>[];
+  @override
+  List<AndroidUploadJob> get jobs => records;
+  @override
+  Future<void> enqueue({
+    required ChatMessage message,
+    required String recipientUid,
+    required Uint8List ciphertext,
+    Uint8List? thumbnail,
+  }) async {
+    if (failure case final error?) throw error;
+    await beforeAccept?.call();
+    records.add(
+      AndroidUploadJob(
+        message: message,
+        status: const MediaSendStatus(
+          phase: MediaSendPhase.uploading,
+          lifecycle: MediaUploadLifecycle.queued,
+          progress: 0,
+        ),
+      ),
+    );
+  }
+
+  @override
+  Future<void> cancel(String id) async {
+    cancelled.add(id);
+    final index = records.indexWhere((job) => job.message.messageId == id);
+    final old = records[index];
+    records[index] = AndroidUploadJob(
+      message: old.message,
+      status: old.status.copyWith(lifecycle: MediaUploadLifecycle.cancelled),
+    );
+  }
 }
 
 class _FakeMessageRepository implements MessageRepository {
@@ -122,6 +204,7 @@ class _FakeMessageRepository implements MessageRepository {
     DateTime? sentAt,
     String? mediaRef,
     MessageType? mediaType,
+    String? liveLocationSessionId,
     MediaMeta? mediaMeta,
     MessageReply? replyTo,
     bool isForwarded = false,
@@ -140,6 +223,7 @@ class _FakeMessageRepository implements MessageRepository {
       deletedFor: const [],
       mediaRef: mediaRef,
       mediaType: mediaType,
+      liveLocationSessionId: liveLocationSessionId,
       mediaMeta: mediaMeta,
       replyTo: replyTo,
       isForwarded: isForwarded,
@@ -297,11 +381,15 @@ void main() {
   late List<MediaSendStatus> progressSeen;
 
   ActiveThreadCubit build({
+    AndroidChatUploads? uploads,
+    AndroidChatLocalMedia? localMedia,
     Stream<List<ConnectivityResult>>? connectivityStream,
     MessageCacheRepository messageCache = const NoopMessageCacheRepository(),
     ChatSearchIndexRepository searchIndex =
         const NoopChatSearchIndexRepository(),
   }) => ActiveThreadCubit(
+    androidUploads: uploads,
+    localMedia: localMedia,
     messageRepository: messages,
     threadRepository: threads,
     userRepository: _FakeUserRepository(),
@@ -921,6 +1009,154 @@ void main() {
 
   group('attachments', () {
     test(
+      'encrypted sent fallback precedes queue acceptance and preserves source identity',
+      () async {
+        final local = _RetainedMedia();
+        final uploads = _FakeAndroidUploads();
+        await cubit.close();
+        cubit = build(uploads: uploads, localMedia: local);
+        await open();
+        const path = 'chat_media/me_other/local-first/media.enc';
+        uploads.beforeAccept = () async {
+          expect(local.records[path]?['bytes'], [1, 2]);
+          expect(
+            local.records[path]?['sourceUri'],
+            'content://fixture/document/1',
+          );
+          expect(local.records[path]?['sourceFlags'], 1);
+          expect(local.records[path]?['sourceDigest'], isNotNull);
+        };
+        final borrowed = Uint8List.fromList([1, 2]).asUnmodifiableView();
+        await cubit.sendMedia(
+          messageId: 'local-first',
+          rawBytes: borrowed,
+          type: MessageType.file,
+          filename: 'sample.bin',
+          sourceUri: 'content://fixture/document/1',
+          sourceFlags: 1,
+          propagateFailure: true,
+        );
+        expect(borrowed, [1, 2]);
+        final pending = (cubit.state as ActiveThreadLoaded).messages.single;
+        await cubit.deleteMessageForMe(pending);
+        expect(local.records, isEmpty);
+        uploads.dispose();
+      },
+    );
+
+    test(
+      'partial sent retention is rolled back before a failed handoff',
+      () async {
+        final local = _RetainedMedia()..rejectThumbnail = true;
+        final uploads = _FakeAndroidUploads();
+        await cubit.close();
+        cubit = build(uploads: uploads, localMedia: local);
+        await open();
+        await expectLater(
+          cubit.sendMedia(
+            messageId: 'quota',
+            rawBytes: img.encodePng(img.Image(width: 4, height: 2)),
+            type: MessageType.image,
+            propagateFailure: true,
+          ),
+          throwsA(isA<ChatLocalMediaException>()),
+        );
+        expect(local.records, isEmpty);
+        expect(uploads.records, isEmpty);
+        uploads.dispose();
+      },
+    );
+
+    test(
+      'cleanup failure does not replace cancellation or retain its bubble',
+      () async {
+        final local = _RetainedMedia()..rejectRemoval = true;
+        final uploads = _FakeAndroidUploads();
+        addTearDown(uploads.dispose);
+        await cubit.close();
+        cubit = build(uploads: uploads, localMedia: local);
+        await open();
+        uploads.beforeAccept = () => cubit.cancelUpload('cancel-cleanup');
+        await expectLater(
+          cubit.sendMedia(
+            messageId: 'cancel-cleanup',
+            rawBytes: [1, 2],
+            type: MessageType.file,
+            filename: 'sample.bin',
+            propagateFailure: true,
+          ),
+          throwsA(isA<UploadCancelledException>()),
+        );
+        final state = cubit.state as ActiveThreadLoaded;
+        expect(state.messages, isEmpty);
+        expect(state.uploadProgress, isEmpty);
+        expect(state.actionError, contains('cleanup is incomplete'));
+        expect(uploads.cancelled, ['cancel-cleanup']);
+      },
+    );
+
+    test(
+      'pending delete cancels native intent without deleting a remote message',
+      () async {
+        final uploads = _FakeAndroidUploads();
+        await cubit.close();
+        cubit = build(uploads: uploads);
+        await open();
+        await cubit.sendMedia(
+          messageId: 'native-file',
+          rawBytes: [1, 2],
+          type: MessageType.file,
+          filename: 'file.pdf',
+        );
+        final pending = (cubit.state as ActiveThreadLoaded).messages.single;
+        await cubit.deleteMessageForMe(pending);
+        expect(uploads.cancelled, ['native-file']);
+        expect((cubit.state as ActiveThreadLoaded).messages, isEmpty);
+        expect(messages.sent, isEmpty);
+        uploads.dispose();
+      },
+    );
+
+    test('queue failure propagates explicitly to recording caller', () async {
+      final uploads = _FakeAndroidUploads()
+        ..failure = StateError('storage full');
+      await cubit.close();
+      cubit = build(uploads: uploads);
+      await open();
+      await expectLater(
+        cubit.sendMedia(
+          messageId: 'audio',
+          rawBytes: [1, 2],
+          type: MessageType.audio,
+          filename: 'recording.wav',
+          propagateFailure: true,
+        ),
+        throwsStateError,
+      );
+      expect(uploads.records, isEmpty);
+      uploads.dispose();
+    });
+
+    test(
+      'deleting during queue acceptance cancels the newly committed job',
+      () async {
+        final uploads = _FakeAndroidUploads();
+        await cubit.close();
+        cubit = build(uploads: uploads);
+        await open();
+        uploads.beforeAccept = () => cubit.cancelUpload('accept-race');
+        await cubit.sendMedia(
+          messageId: 'accept-race',
+          rawBytes: [1, 2],
+          type: MessageType.file,
+          filename: 'file.pdf',
+        );
+        expect(uploads.cancelled, ['accept-race']);
+        expect((cubit.state as ActiveThreadLoaded).messages, isEmpty);
+        uploads.dispose();
+      },
+    );
+    test(
       'a document is sent with its name only in the encrypted body',
       () async {
         await open();
@@ -1120,6 +1356,174 @@ void main() {
       expect((cubit.state as ActiveThreadLoaded).uploadProgress, isEmpty);
     });
 
+    test(
+      'sendMultipleImages queues all optimistic messages and delivers batch',
+      () async {
+        await open();
+        final png = img.encodePng(img.Image(width: 4, height: 2));
+
+        await cubit.sendMultipleImages(
+          items: [
+            OutgoingImageItem(messageId: 'multi-1', bytes: png),
+            OutgoingImageItem(messageId: 'multi-2', bytes: png),
+            OutgoingImageItem(messageId: 'multi-3', bytes: png),
+          ],
+          quality: ImageQuality.medium,
+        );
+
+        expect(messages.sent.map((m) => m.messageId), [
+          'multi-1',
+          'multi-2',
+          'multi-3',
+        ]);
+        expect((cubit.state as ActiveThreadLoaded).uploadProgress, isEmpty);
+      },
+    );
+
+    test(
+      'sendMultipleVideos stages all bubbles before sequential sends and continues after a failure',
+      () async {
+        await open();
+        messages.emitLive(const []);
+        await Future<void>.delayed(Duration.zero);
+        media.failOnMessageId = 'video-b';
+        final firstUploadStarted = Completer<void>();
+        final resumeFirstUpload = Completer<void>();
+        media.beforeUpload = (messageId) async {
+          if (messageId == 'video-a') {
+            firstUploadStarted.complete();
+            await resumeFirstUpload.future;
+          }
+        };
+        final items = [
+          OutgoingVideoItem(
+            messageId: 'video-a',
+            bytes: Uint8List.fromList([1, 2, 3]),
+            filename: 'a.mp4',
+          ),
+          OutgoingVideoItem(
+            messageId: 'video-b',
+            bytes: Uint8List.fromList([4, 5, 6]),
+            filename: 'b.mp4',
+          ),
+          OutgoingVideoItem(
+            messageId: 'video-c',
+            bytes: Uint8List.fromList([7, 8, 9]),
+            filename: 'c.mp4',
+          ),
+        ];
+
+        final batch = cubit.sendMultipleVideos(
+          items: items,
+          quality: VideoQuality.medium,
+        );
+        await firstUploadStarted.future.timeout(const Duration(seconds: 2));
+
+        final staged = cubit.state as ActiveThreadLoaded;
+        expect(
+          staged.messages.map((message) => message.messageId),
+          containsAll(['video-a', 'video-b', 'video-c']),
+        );
+        expect(
+          staged.uploadProgress.keys,
+          containsAll(['video-a', 'video-b', 'video-c']),
+          reason: '${staged.uploadProgress}',
+        );
+        expect(
+          staged.uploadProgress['video-a']?.phase,
+          MediaSendPhase.encrypting,
+        );
+        expect(
+          staged.uploadProgress['video-b']?.phase,
+          MediaSendPhase.preparing,
+        );
+        expect(
+          staged.uploadProgress['video-c']?.phase,
+          MediaSendPhase.preparing,
+        );
+
+        resumeFirstUpload.complete();
+        await batch;
+
+        expect(messages.sent.map((message) => message.messageId), [
+          'video-a',
+          'video-c',
+        ]);
+        expect((cubit.state as ActiveThreadLoaded).uploadProgress, isEmpty);
+      },
+    );
+
+    test(
+      'a queued video can be cancelled before its preparation starts',
+      () async {
+        await open();
+        messages.emitLive(const []);
+        await Future<void>.delayed(Duration.zero);
+        final firstUploadStarted = Completer<void>();
+        final resumeFirstUpload = Completer<void>();
+        media.beforeUpload = (messageId) async {
+          if (messageId == 'video-a') {
+            firstUploadStarted.complete();
+            await resumeFirstUpload.future;
+          }
+        };
+
+        final batch = cubit.sendMultipleVideos(
+          items: [
+            OutgoingVideoItem(
+              messageId: 'video-a',
+              bytes: Uint8List.fromList([1, 2, 3]),
+            ),
+            OutgoingVideoItem(
+              messageId: 'video-b',
+              bytes: Uint8List.fromList([4, 5, 6]),
+            ),
+          ],
+          quality: VideoQuality.high,
+        );
+        await firstUploadStarted.future.timeout(const Duration(seconds: 2));
+        await cubit.cancelUpload('video-b');
+
+        var state = cubit.state as ActiveThreadLoaded;
+        expect(
+          state.messages.any((message) => message.messageId == 'video-b'),
+          isFalse,
+        );
+        expect(state.uploadProgress.containsKey('video-b'), isFalse);
+
+        resumeFirstUpload.complete();
+        await batch;
+
+        state = cubit.state as ActiveThreadLoaded;
+        expect(messages.sent.map((message) => message.messageId), ['video-a']);
+      },
+    );
+
+    test(
+      'disposing upload coordinator does not cancel active upload tokens',
+      () async {
+        await open();
+        final png = img.encodePng(img.Image(width: 4, height: 2));
+
+        // Start sending media without awaiting completion
+        final sendFuture = cubit.sendMedia(
+          messageId: 'lock-resilient',
+          rawBytes: png,
+          type: MessageType.image,
+        );
+
+        // Simulate lock / screen exit by disposing the coordinator
+        await cubit.uploadCoordinator.dispose();
+
+        // Ensure the send still succeeds and is not cancelled
+        await sendFuture;
+        expect(
+          messages.sent.map((m) => m.messageId),
+          contains('lock-resilient'),
+        );
+      },
+    );
+
     test('an attachment over the Storage limit is rejected up front', () async {
       await open();
 
@@ -1147,9 +1551,10 @@ class _FakeMediaRepository implements MediaRepository {
   /// Storage object names passed to [uploadEncryptedMedia].
   final List<String> uploadedNames = [];
 
-  /// When set, uploads for this message id throw, to check that one bad photo
+  /// When set, uploads for this message id throw, to check that one bad attachment
   /// in a batch does not stop the others.
   String? failOnMessageId;
+  Future<void> Function(String messageId)? beforeUpload;
 
   @override
   Future<String> uploadEncryptedMedia({
@@ -1160,6 +1565,7 @@ class _FakeMediaRepository implements MediaRepository {
     void Function(double progress)? onProgress,
     UploadCancelToken? cancelToken,
   }) async {
+    await beforeUpload?.call(messageId);
     if (cancelToken?.isCancelled == true) {
       throw const UploadCancelledException();
     }

@@ -19,5 +19,7 @@ class MainActivity : FlutterFragmentActivity() {
         // Ensure all Flutter plugins are properly initialized
         GeneratedPluginRegistrant.registerWith(flutterEngine)
         super.configureFlutterEngine(flutterEngine)
+        flutterEngine.plugins.add(ChatSecureMediaPlugin())
+        flutterEngine.plugins.add(ChatUploadPlugin())
     }
 }

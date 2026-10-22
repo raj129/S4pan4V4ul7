@@ -1,5 +1,5 @@
-import 'package:photo_vault/domain/entities/chat_message.dart';
-import 'package:photo_vault/domain/repositories/message_cache_repository.dart';
+import 'package:photo_vault/features/chat/domain/entities/chat_message.dart';
+import 'package:photo_vault/features/chat/domain/repositories/message_cache_repository.dart';
 
 /// In-memory [MessageCacheRepository] for tests.
 class MemoryMessageCache implements MessageCacheRepository {
