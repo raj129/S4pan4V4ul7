@@ -42,7 +42,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      id-token: write
     concurrency:
       group: firebase-app-distribution-main
       cancel-in-progress: false
@@ -120,11 +119,20 @@ jobs:
             --build-number="${{ steps.version.outputs.build_number }}" \
             --dart-define="GOOGLE_MAPS_ANDROID_API_KEY=$GOOGLE_MAPS_ANDROID_API_KEY"
 
+      - name: Verify Firebase service account secret
+        shell: bash
+        env:
+          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+        run: |
+          if [[ -z "$FIREBASE_SERVICE_ACCOUNT_JSON" ]]; then
+            echo "::error::Set the Actions secret FIREBASE_SERVICE_ACCOUNT_JSON."
+            exit 1
+          fi
+
       - name: Authenticate to Firebase
         uses: google-github-actions/auth@v2
         with:
-          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ vars.GCP_FIREBASE_DEPLOY_SERVICE_ACCOUNT }}
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
 
       - name: Install Firebase CLI
         run: npm install --global firebase-tools
@@ -196,7 +204,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write
     concurrency:
       group: firebase-backend-main
       cancel-in-progress: false
@@ -213,11 +220,20 @@ jobs:
       - name: Install Functions dependencies
         run: npm ci --prefix functions
 
-      - name: Authenticate to Google Cloud with Workload Identity Federation
+      - name: Verify Firebase service account secret
+        shell: bash
+        env:
+          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+        run: |
+          if [[ -z "$FIREBASE_SERVICE_ACCOUNT_JSON" ]]; then
+            echo "::error::Set the Actions secret FIREBASE_SERVICE_ACCOUNT_JSON."
+            exit 1
+          fi
+
+      - name: Authenticate to Firebase
         uses: google-github-actions/auth@v2
         with:
-          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ vars.GCP_FIREBASE_DEPLOY_SERVICE_ACCOUNT }}
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
 
       - name: Install Firebase CLI
         run: npm install --global firebase-tools
