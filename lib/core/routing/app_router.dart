@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
@@ -337,9 +338,12 @@ GoRoute _chatRoute(AppDependencies deps, AppSessionState session) {
             notificationService: deps.chatDependencies.notificationService,
             settingsRepository: deps.settingsRepository,
             profileService: deps.chatDependencies.profileService,
-            liveLocationRepository:
-                deps.chatDependencies.liveLocationRepository,
-            liveLocationService: deps.chatDependencies.liveLocationService,
+            liveLocationRepository: Platform.isAndroid
+                ? deps.chatDependencies.liveLocationRepository
+                : null,
+            liveLocationService: Platform.isAndroid
+                ? deps.chatDependencies.liveLocationService
+                : null,
           );
           final providedCubit = args.activeThreadCubit;
           Widget withThreadList(Widget child) {
