@@ -34,6 +34,8 @@ android {
         targetSdk = 35
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        manifestPlaceholders["GOOGLE_MAPS_ANDROID_API_KEY"] =
+            System.getenv("GOOGLE_MAPS_ANDROID_API_KEY") ?: ""
     }
 
     signingConfigs {

@@ -12,13 +12,16 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 import 'package:uuid/uuid.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
+import 'package:permission_handler/permission_handler.dart';
 
+import '../../application/services/live_location_service.dart';
 import '../../application/services/chat_notification_service.dart';
 import 'package:photo_vault/core/integrations/chat_vault_bridge.dart';
 import '../../application/media/image_compressor.dart';
@@ -27,6 +30,8 @@ import '../../domain/entities/chat_message.dart';
 import '../../domain/entities/message_metadata.dart';
 import '../../domain/entities/chat_thread.dart';
 import '../../domain/entities/chat_user.dart';
+import '../../domain/entities/live_location.dart';
+import '../../domain/repositories/live_location_repository.dart';
 import 'package:photo_vault/features/vault/domain/repositories/settings_repository.dart';
 import 'package:photo_vault/core/widgets/app_state_views.dart';
 import '../state/active_thread_cubit.dart';
@@ -106,6 +111,8 @@ class ThreadScreen extends StatefulWidget {
     this.notificationService,
     this.settingsRepository,
     this.profileService,
+    this.liveLocationRepository,
+    this.liveLocationService,
   });
 
   final ChatThread thread;
@@ -127,6 +134,8 @@ class ThreadScreen extends StatefulWidget {
 
   /// Remembers the last attachment quality the user chose.
   final SettingsRepository? settingsRepository;
+  final LiveLocationRepository? liveLocationRepository;
+  final LiveLocationService? liveLocationService;
 
   @override
   State<ThreadScreen> createState() => _ThreadScreenState();
@@ -172,6 +181,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
   final _showJumpToLatest = ValueNotifier<bool>(false);
   Timer? _scrollbarHide;
   Timer? _positionThrottle;
+  StreamSubscription<Object>? _liveLocationErrorSubscription;
 
   /// Whether the rows in [_items] were built from a detached window.
   bool _renderedDetached = false;
@@ -186,6 +196,14 @@ class _ThreadScreenState extends State<ThreadScreen> {
     _prepareChat();
     _itemPositions.itemPositions.addListener(_onScroll);
     widget.notificationService?.setActiveThread(widget.thread.threadId);
+    _liveLocationErrorSubscription = widget.liveLocationService?.errors.listen((
+      error,
+    ) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Live location update failed: $error')),
+      );
+    });
   }
 
   Future<void> _prepareChat() async {
@@ -424,6 +442,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
     _itemPositions.itemPositions.removeListener(_onScroll);
     _scrollbarHide?.cancel();
     _positionThrottle?.cancel();
+    unawaited(_liveLocationErrorSubscription?.cancel());
     _historyPosition.dispose();
     _scrollbarVisible.dispose();
     _showJumpToLatest.dispose();
@@ -885,6 +904,8 @@ class _ThreadScreenState extends State<ThreadScreen> {
               otherUid: widget.otherUser.uid,
               isOffline: state.isOffline,
               mediaLoader: widget.mediaLoader,
+              liveLocationRepository: widget.liveLocationRepository,
+              onStopLiveLocation: _stopLiveLocation,
               sendStatus: state.uploadProgress[msg.messageId],
               onPauseUpload: () => cubit.pauseUpload(msg.messageId),
               onResumeUpload: () => cubit.resumeUpload(msg.messageId),
@@ -912,7 +933,11 @@ class _ThreadScreenState extends State<ThreadScreen> {
               // centrally, inside `_promptEdit`, so both the long-press menu
               // entry and the Signal-style double-tap give the same
               // accept/reject behaviour instead of silently disappearing.
-              onEdit: isMine && !msg.isMedia && cubit.canEditMessage(msg)
+              onEdit:
+                  isMine &&
+                      !msg.isMedia &&
+                      msg.mediaType != MessageType.liveLocation &&
+                      cubit.canEditMessage(msg)
                   ? () => _promptEdit(msg)
                   : null,
               onCopy: msg.localDecryptedText?.trim().isNotEmpty == true
@@ -923,7 +948,9 @@ class _ThreadScreenState extends State<ThreadScreen> {
               onSaveToVault: msg.isMedia && msg.senderId != cubit.myUid
                   ? () => _saveToVault(msg)
                   : null,
-              onForward: () => _promptForward(msg),
+              onForward: msg.mediaType == MessageType.liveLocation
+                  ? null
+                  : () => _promptForward(msg),
               onRetry: msg.status == MessageStatus.failed
                   ? () => cubit.retryMessage(msg.messageId)
                   : null,
@@ -1286,6 +1313,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
     );
     if (ok != true || !mounted) return;
     try {
+      await _stopOwnLiveLocationBeforeDelete(msg, cubit);
       await cubit.deleteMessageForMe(msg);
     } catch (error) {
       if (mounted) {
@@ -1327,6 +1355,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
     );
     if (ok != true || !mounted) return;
     try {
+      await _stopOwnLiveLocationBeforeDelete(msg, cubit);
       await cubit.deleteMessageForEveryone(msg);
     } catch (error) {
       if (mounted) {
@@ -1335,6 +1364,19 @@ class _ThreadScreenState extends State<ThreadScreen> {
         );
       }
     }
+  }
+
+  Future<void> _stopOwnLiveLocationBeforeDelete(
+    ChatMessage message,
+    ActiveThreadCubit cubit,
+  ) async {
+    final sessionId = message.liveLocationSessionId;
+    if (message.mediaType != MessageType.liveLocation ||
+        message.senderId != cubit.myUid ||
+        sessionId == null) {
+      return;
+    }
+    await _stopLiveLocation(message.threadId, message.senderId, sessionId);
   }
 
   /// Pick a conversation and re-send the message into it.
@@ -1897,11 +1939,22 @@ class _ThreadScreenState extends State<ThreadScreen> {
               title: const Text('Vault attachments'),
               onTap: () => Navigator.pop(sheetContext, 'saved'),
             ),
+            if (Platform.isAndroid)
+              ListTile(
+                leading: const Icon(Icons.location_on_outlined),
+                title: const Text('Share live location'),
+                subtitle: const Text('Share for a limited time'),
+                onTap: () => Navigator.pop(sheetContext, 'liveLocation'),
+              ),
           ],
         ),
       ),
     );
     if (choice == null || !mounted || !context.mounted) return;
+    if (choice == 'liveLocation') {
+      await _shareLiveLocation(cubit);
+      return;
+    }
     if (choice == 'saved') {
       await Navigator.of(context).push(
         MaterialPageRoute<void>(
@@ -2012,10 +2065,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
               )
               .toList(growable: false);
 
-          await cubit.sendMultipleImages(
-            items: items,
-            quality: quality,
-          );
+          await cubit.sendMultipleImages(items: items, quality: quality);
           return;
         }
 
@@ -2173,6 +2223,227 @@ class _ThreadScreenState extends State<ThreadScreen> {
     }
   }
 
+  Future<void> _shareLiveLocation(ActiveThreadCubit cubit) async {
+    final service = widget.liveLocationService;
+    final repository = widget.liveLocationRepository;
+    if (!Platform.isAndroid || service == null || repository == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Live location sharing is unavailable on this device.'),
+        ),
+      );
+      return;
+    }
+
+    if (service.isSharing && service.activeThreadId != widget.thread.threadId) {
+      final replace = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Live location already shared'),
+          content: const Text(
+            'Starting a new session will stop sharing in the other chat.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: const Text('Continue'),
+            ),
+          ],
+        ),
+      );
+      if (replace != true || !mounted) return;
+    }
+
+    final duration = await showModalBottomSheet<Duration>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const ListTile(
+              title: Text(
+                'Share live location',
+                style: TextStyle(fontWeight: FontWeight.w600),
+              ),
+              subtitle: Text(
+                'Your encrypted location is visible only in this chat.',
+              ),
+            ),
+            ListTile(
+              leading: const Icon(Icons.timer_outlined),
+              title: const Text('For 15 minutes'),
+              onTap: () =>
+                  Navigator.pop(sheetContext, const Duration(minutes: 15)),
+            ),
+            ListTile(
+              leading: const Icon(Icons.timer_outlined),
+              title: const Text('For 1 hour'),
+              onTap: () =>
+                  Navigator.pop(sheetContext, const Duration(hours: 1)),
+            ),
+            ListTile(
+              leading: const Icon(Icons.timer_outlined),
+              title: const Text('For 8 hours'),
+              onTap: () =>
+                  Navigator.pop(sheetContext, const Duration(hours: 8)),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (duration == null || !mounted) return;
+
+    try {
+      await _requestLiveLocationPermissions();
+      if (!mounted) return;
+      if (!await Geolocator.isLocationServiceEnabled()) {
+        throw StateError(
+          'Turn on device location services, then try sharing again.',
+        );
+      }
+
+      final position = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+          timeLimit: Duration(seconds: 20),
+        ),
+      );
+      final point = LiveLocationPoint(
+        latitude: position.latitude,
+        longitude: position.longitude,
+        accuracy: position.accuracy,
+        heading: position.heading,
+        speed: position.speed,
+        timestamp: position.timestamp.toUtc(),
+      );
+
+      final sessionId = await service.startSharing(
+        threadId: widget.thread.threadId,
+        userId: cubit.myUid,
+        duration: duration,
+        initialPoint: point,
+      );
+      if (!await cubit.sendLiveLocationMessage(sessionId: sessionId)) {
+        await service.stopSharing();
+        return;
+      }
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Live location shared for ${_durationLabel(duration)}.',
+          ),
+        ),
+      );
+    } catch (error) {
+      if (service.isSharing &&
+          service.activeThreadId == widget.thread.threadId) {
+        try {
+          await service.stopSharing();
+        } catch (stopError) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('Could not stop the failed session: $stopError'),
+              ),
+            );
+          }
+        }
+      }
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not share live location: $error')),
+        );
+      }
+    }
+  }
+
+  Future<void> _requestLiveLocationPermissions() async {
+    final foregroundPermission = await Permission.locationWhenInUse.request();
+    if (!mounted) throw StateError('The chat closed before sharing started.');
+    if (!foregroundPermission.isGranted) {
+      throw StateError(
+        'Allow location access while using the app to share your location.',
+      );
+    }
+
+    var backgroundPermission = await Permission.locationAlways.status;
+    if (!backgroundPermission.isGranted) {
+      backgroundPermission = await Permission.locationAlways.request();
+    }
+    if (!backgroundPermission.isGranted) {
+      if (!mounted) {
+        throw StateError('The chat closed before sharing started.');
+      }
+      final openSettings = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Allow background location'),
+          content: const Text(
+            'Choose “Allow all the time” in app settings so sharing can '
+            'continue while the app is in the background.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: const Text('Open settings'),
+            ),
+          ],
+        ),
+      );
+      if (openSettings != true) {
+        throw StateError('Background location permission is required.');
+      }
+      await openAppSettings();
+      if (!mounted) throw StateError('The chat closed before sharing started.');
+      backgroundPermission = await Permission.locationAlways.status;
+      if (!backgroundPermission.isGranted) {
+        throw StateError('Background location permission is required.');
+      }
+    }
+
+    final notificationPermission = await Permission.notification.request();
+    if (!notificationPermission.isGranted) {
+      throw StateError(
+        'Allow notifications so Android can show the active sharing notice.',
+      );
+    }
+  }
+
+  String _durationLabel(Duration duration) {
+    if (duration.inHours > 0) return '${duration.inHours} hour(s)';
+    return '${duration.inMinutes} minutes';
+  }
+
+  Future<void> _stopLiveLocation(
+    String threadId,
+    String userId,
+    String sessionId,
+  ) async {
+    final service = widget.liveLocationService;
+    if (service != null &&
+        service.activeThreadId == threadId &&
+        service.activeSessionId == sessionId &&
+        userId == context.read<ActiveThreadCubit>().myUid) {
+      await service.stopSharing();
+      return;
+    }
+    await widget.liveLocationRepository?.stopSession(
+      sessionId: sessionId,
+      threadId: threadId,
+      userId: userId,
+    );
+  }
+
   String _originalSourceUri(XFile file) => file.path.startsWith('content:')
       ? file.path
       : File(file.path).uri.toString();
@@ -2221,10 +2492,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
       );
     }
 
-    await cubit.sendMultipleImages(
-      items: items,
-      quality: quality,
-    );
+    await cubit.sendMultipleImages(items: items, quality: quality);
   }
 
   /// Shows the quality sheet, seeded with the last choice and remembering a

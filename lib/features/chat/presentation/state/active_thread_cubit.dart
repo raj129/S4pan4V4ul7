@@ -701,6 +701,56 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
     }
   }
 
+  /// Sends one encrypted chat marker for a live-location session. Coordinate
+  /// updates are stored separately and never create additional chat messages.
+  Future<bool> sendLiveLocationMessage({required String sessionId}) async {
+    final threadId = _currentThreadId;
+    final recipientUid = _otherUser?.uid;
+    if (threadId == null || recipientUid == null) {
+      _reportActionError('Open a chat before sharing your location.');
+      return false;
+    }
+
+    const preview = 'Shared live location';
+    late final ChatMessage sent;
+    try {
+      final encrypted = await cryptoService.encryptMessage(
+        threadId: threadId,
+        plaintext: preview,
+      );
+      sent = await messageRepository
+          .sendMessage(
+            threadId: threadId,
+            senderId: myUid,
+            encryptedText: encrypted,
+            messageId: _uuid.v4(),
+            mediaType: MessageType.liveLocation,
+            liveLocationSessionId: sessionId,
+          )
+          .timeout(const Duration(seconds: 20));
+    } catch (error) {
+      _reportActionError('Could not send live location: $error');
+      return false;
+    }
+
+    try {
+      await threadRepository.updateLastMessage(
+        threadId: threadId,
+        preview: preview,
+        sentAt: sent.sentAt,
+      );
+      await threadRepository.incrementUnread(
+        threadId: threadId,
+        recipientUid: recipientUid,
+      );
+    } catch (error) {
+      _reportActionError(
+        'Location was shared, but the chat preview could not be updated: $error',
+      );
+    }
+    return true;
+  }
+
   // ---------------------------------------------------------------------------
   // Outbox
   // ---------------------------------------------------------------------------
@@ -1616,10 +1666,7 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
   Future<void> sendMultipleImages({
     required List<OutgoingImageItem> items,
     required ImageQuality quality,
-  }) => _uploadCoordinator.sendMultipleImages(
-    items: items,
-    quality: quality,
-  );
+  }) => _uploadCoordinator.sendMultipleImages(items: items, quality: quality);
 
   /// Stages all selected videos immediately and processes them sequentially.
   Future<void> sendMultipleVideos({

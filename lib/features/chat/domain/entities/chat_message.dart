@@ -3,7 +3,7 @@ import 'package:equatable/equatable.dart';
 import 'message_metadata.dart';
 import 'message_reply.dart';
 
-enum MessageType { text, image, video, audio, file }
+enum MessageType { text, image, video, audio, file, liveLocation }
 
 enum DeleteScope { forMe, forEveryone }
 
@@ -17,6 +17,7 @@ class ChatMessage extends Equatable {
     required this.deletedFor,
     this.mediaRef,
     this.mediaType,
+    this.liveLocationSessionId,
     this.mediaMeta,
     this.encryptedMediaKey,
     this.localDecryptedText,
@@ -40,6 +41,9 @@ class ChatMessage extends Equatable {
   /// Firebase Storage path for encrypted media blob (nullable for text-only).
   final String? mediaRef;
   final MessageType? mediaType;
+
+  /// Firestore session document for a live-location message.
+  final String? liveLocationSessionId;
 
   /// Clear-text layout hints (dimensions, size, duration) for the attachment.
   final MediaMeta? mediaMeta;
@@ -105,6 +109,7 @@ class ChatMessage extends Equatable {
   /// Photos and videos carry no label: the attachment speaks for itself.
   static String mediaPreviewFor(MessageType? type, {String? filename}) =>
       switch (type) {
+        MessageType.liveLocation => 'Live location',
         MessageType.file || MessageType.audio =>
           filename == null || filename.isEmpty ? 'Document' : filename,
         _ => '',
@@ -154,6 +159,7 @@ class ChatMessage extends Equatable {
     MessageStatus? status,
     String? mediaRef,
     MessageType? mediaType,
+    String? liveLocationSessionId,
     MediaMeta? mediaMeta,
   }) {
     return ChatMessage(
@@ -165,6 +171,8 @@ class ChatMessage extends Equatable {
       deletedFor: deletedFor ?? this.deletedFor,
       mediaRef: mediaRef ?? this.mediaRef,
       mediaType: mediaType ?? this.mediaType,
+      liveLocationSessionId:
+          liveLocationSessionId ?? this.liveLocationSessionId,
       mediaMeta: mediaMeta ?? this.mediaMeta,
       encryptedMediaKey: encryptedMediaKey,
       localDecryptedText: localDecryptedText ?? this.localDecryptedText,
@@ -195,6 +203,8 @@ class ChatMessage extends Equatable {
     'deliveredTo': deliveredTo,
     if (mediaRef != null) 'mediaRef': mediaRef,
     if (mediaType != null) 'mediaType': mediaType!.name,
+    if (liveLocationSessionId != null)
+      'liveLocationSessionId': liveLocationSessionId,
     if (mediaMeta != null) 'mediaMeta': mediaMeta!.toFirestore(),
     if (encryptedMediaKey != null) 'encryptedMediaKey': encryptedMediaKey,
     if (replyTo != null) 'replyTo': replyTo!.toFirestore(),
@@ -224,6 +234,7 @@ class ChatMessage extends Equatable {
         const {},
     mediaRef: data['mediaRef'] as String?,
     mediaType: _parseMediaType(data['mediaType'] as String?),
+    liveLocationSessionId: data['liveLocationSessionId'] as String?,
     mediaMeta: MediaMeta.fromFirestore(
       (data['mediaMeta'] as Map?)?.cast<String, dynamic>(),
     ),
@@ -265,6 +276,7 @@ class ChatMessage extends Equatable {
     deletedForEveryone,
     mediaRef,
     mediaType,
+    liveLocationSessionId,
     mediaMeta,
     replyTo,
     reactions,

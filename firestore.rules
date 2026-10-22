@@ -36,6 +36,51 @@ service cloud.firestore {
              threadId.split('_').hasAny([request.auth.uid]);
     }
 
+    function isExistingThreadParticipant(threadId) {
+      let threadPath = /databases/$(database)/documents/threads/$(threadId);
+      return isThreadParticipant(threadId)
+             && exists(threadPath)
+             && request.auth.uid in get(threadPath).data.participantIds;
+    }
+
+    function isValidLiveLocation(threadId, sessionId) {
+      let data = request.resource.data;
+      return data.keys().hasAll([
+               'threadId',
+               'sessionId',
+               'userId',
+               'isActive',
+               'startedAt',
+               'expiresAt',
+               'lastUpdatedAt',
+               'encryptedPayload'
+             ])
+             && data.keys().hasOnly([
+               'threadId',
+               'sessionId',
+               'userId',
+               'isActive',
+               'startedAt',
+               'expiresAt',
+               'lastUpdatedAt',
+               'encryptedPayload'
+             ])
+             && data.threadId == threadId
+             && data.sessionId == sessionId
+             && data.userId == request.auth.uid
+             && data.isActive is bool
+             && data.startedAt is int
+             && data.startedAt <= request.time.toMillis()
+             && data.expiresAt is int
+             && data.expiresAt > data.startedAt
+             && data.expiresAt <= data.startedAt + 28800000
+             && (!data.isActive || data.expiresAt > request.time.toMillis())
+             && data.lastUpdatedAt is int
+             && data.lastUpdatedAt <= request.time.toMillis()
+             && data.encryptedPayload is string
+             && data.encryptedPayload.size() <= 8192;
+    }
+
     // Fields a non-sender may touch on someone else's message: their own
     // reaction/receipts and hiding it for themselves.
     function onlyRecipientFieldsChanged() {
@@ -158,6 +203,17 @@ service cloud.firestore {
 
       match /meta/{docId} {
         allow read, write: if isThreadParticipant(threadId);
+      }
+
+      // ── Live location ──────────────────────────────────────────────────────
+      // Live coordinates are E2EE encrypted under the thread key. Only thread
+      // participants can read, and users can only update their own live location doc.
+      match /live_locations/{sessionId} {
+        allow read: if isExistingThreadParticipant(threadId);
+        allow create, update: if isExistingThreadParticipant(threadId)
+                              && isValidLiveLocation(threadId, sessionId);
+        allow delete: if isExistingThreadParticipant(threadId)
+                      && isSelf(resource.data.userId);
       }
     }
 

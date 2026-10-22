@@ -204,6 +204,7 @@ class _FakeMessageRepository implements MessageRepository {
     DateTime? sentAt,
     String? mediaRef,
     MessageType? mediaType,
+    String? liveLocationSessionId,
     MediaMeta? mediaMeta,
     MessageReply? replyTo,
     bool isForwarded = false,
@@ -222,6 +223,7 @@ class _FakeMessageRepository implements MessageRepository {
       deletedFor: const [],
       mediaRef: mediaRef,
       mediaType: mediaType,
+      liveLocationSessionId: liveLocationSessionId,
       mediaMeta: mediaMeta,
       replyTo: replyTo,
       isForwarded: isForwarded,
@@ -1354,22 +1356,29 @@ void main() {
       expect((cubit.state as ActiveThreadLoaded).uploadProgress, isEmpty);
     });
 
-    test('sendMultipleImages queues all optimistic messages and delivers batch', () async {
-      await open();
-      final png = img.encodePng(img.Image(width: 4, height: 2));
+    test(
+      'sendMultipleImages queues all optimistic messages and delivers batch',
+      () async {
+        await open();
+        final png = img.encodePng(img.Image(width: 4, height: 2));
 
-      await cubit.sendMultipleImages(
-        items: [
-          OutgoingImageItem(messageId: 'multi-1', bytes: png),
-          OutgoingImageItem(messageId: 'multi-2', bytes: png),
-          OutgoingImageItem(messageId: 'multi-3', bytes: png),
-        ],
-        quality: ImageQuality.medium,
-      );
+        await cubit.sendMultipleImages(
+          items: [
+            OutgoingImageItem(messageId: 'multi-1', bytes: png),
+            OutgoingImageItem(messageId: 'multi-2', bytes: png),
+            OutgoingImageItem(messageId: 'multi-3', bytes: png),
+          ],
+          quality: ImageQuality.medium,
+        );
 
-      expect(messages.sent.map((m) => m.messageId), ['multi-1', 'multi-2', 'multi-3']);
-      expect((cubit.state as ActiveThreadLoaded).uploadProgress, isEmpty);
-    });
+        expect(messages.sent.map((m) => m.messageId), [
+          'multi-1',
+          'multi-2',
+          'multi-3',
+        ]);
+        expect((cubit.state as ActiveThreadLoaded).uploadProgress, isEmpty);
+      },
+    );
 
     test(
       'sendMultipleVideos stages all bubbles before sequential sends and continues after a failure',
@@ -1436,7 +1445,10 @@ void main() {
         resumeFirstUpload.complete();
         await batch;
 
-        expect(messages.sent.map((message) => message.messageId), ['video-a', 'video-c']);
+        expect(messages.sent.map((message) => message.messageId), [
+          'video-a',
+          'video-c',
+        ]);
         expect((cubit.state as ActiveThreadLoaded).uploadProgress, isEmpty);
       },
     );
@@ -1487,24 +1499,30 @@ void main() {
       },
     );
 
-    test('disposing upload coordinator does not cancel active upload tokens', () async {
-      await open();
-      final png = img.encodePng(img.Image(width: 4, height: 2));
+    test(
+      'disposing upload coordinator does not cancel active upload tokens',
+      () async {
+        await open();
+        final png = img.encodePng(img.Image(width: 4, height: 2));
 
-      // Start sending media without awaiting completion
-      final sendFuture = cubit.sendMedia(
-        messageId: 'lock-resilient',
-        rawBytes: png,
-        type: MessageType.image,
-      );
+        // Start sending media without awaiting completion
+        final sendFuture = cubit.sendMedia(
+          messageId: 'lock-resilient',
+          rawBytes: png,
+          type: MessageType.image,
+        );
 
-      // Simulate lock / screen exit by disposing the coordinator
-      await cubit.uploadCoordinator.dispose();
+        // Simulate lock / screen exit by disposing the coordinator
+        await cubit.uploadCoordinator.dispose();
 
-      // Ensure the send still succeeds and is not cancelled
-      await sendFuture;
-      expect(messages.sent.map((m) => m.messageId), contains('lock-resilient'));
-    });
+        // Ensure the send still succeeds and is not cancelled
+        await sendFuture;
+        expect(
+          messages.sent.map((m) => m.messageId),
+          contains('lock-resilient'),
+        );
+      },
+    );
 
     test('an attachment over the Storage limit is rejected up front', () async {
       await open();

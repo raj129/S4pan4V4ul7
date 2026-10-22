@@ -17,6 +17,7 @@ abstract class MessageRepository {
     DateTime? sentAt,
     String? mediaRef,
     MessageType? mediaType,
+    String? liveLocationSessionId,
     MediaMeta? mediaMeta,
     MessageReply? replyTo,
     bool isForwarded = false,

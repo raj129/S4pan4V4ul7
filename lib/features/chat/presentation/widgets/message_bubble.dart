@@ -11,6 +11,7 @@ import '../../domain/entities/chat_message.dart';
 import '../../application/media/android_chat_local_media.dart';
 import '../../domain/entities/message_metadata.dart';
 import '../../domain/entities/message_reply.dart';
+import '../../domain/repositories/live_location_repository.dart';
 import '../../domain/search/chat_search_tokenizer.dart';
 import '../screens/chat_image_viewer_screen.dart';
 import '../screens/chat_video_player_screen.dart';
@@ -22,6 +23,7 @@ import 'chat_bubble_shape.dart';
 import 'chat_media_preview.dart';
 import 'chat_audio_player.dart';
 import 'attachment_download_progress.dart';
+import 'live_location_bubble.dart';
 import '../../application/media/media_send_status.dart';
 
 /// Emoji offered in the quick reaction bar, matching WhatsApp's default set.
@@ -65,6 +67,8 @@ class MessageBubble extends StatelessWidget {
     this.onCancelUpload,
     this.onPauseUpload,
     this.onResumeUpload,
+    this.liveLocationRepository,
+    this.onStopLiveLocation,
   });
 
   final ChatMessage message;
@@ -121,6 +125,13 @@ class MessageBubble extends StatelessWidget {
   final FutureOr<void> Function()? onCancelUpload;
   final FutureOr<void> Function()? onPauseUpload;
   final FutureOr<void> Function()? onResumeUpload;
+  final LiveLocationRepository? liveLocationRepository;
+  final FutureOr<void> Function(
+    String threadId,
+    String userId,
+    String sessionId,
+  )?
+  onStopLiveLocation;
 
   @override
   Widget build(BuildContext context) {
@@ -134,6 +145,22 @@ class MessageBubble extends StatelessWidget {
         isMine: isMine,
         isLastInGroup: isLastInGroup,
         onReply: onReply,
+      );
+    }
+    if (message.mediaType == MessageType.liveLocation) {
+      return LiveLocationBubble(
+        message: message,
+        isMine: isMine,
+        repository: liveLocationRepository,
+        sessionId: message.liveLocationSessionId,
+        onStopSharing:
+            onStopLiveLocation == null || message.liveLocationSessionId == null
+            ? null
+            : () async => onStopLiveLocation!(
+                message.threadId,
+                message.senderId,
+                message.liveLocationSessionId!,
+              ),
       );
     }
 
@@ -367,7 +394,10 @@ class MessageBubble extends StatelessWidget {
                   onReply!();
                 },
               ),
-            if (isMine && onEdit != null && !message.isMedia)
+            if (isMine &&
+                onEdit != null &&
+                !message.isMedia &&
+                message.mediaType != MessageType.liveLocation)
               ListTile(
                 leading: const Icon(Icons.edit_outlined),
                 title: const Text('Edit'),
@@ -376,7 +406,9 @@ class MessageBubble extends StatelessWidget {
                   onEdit!();
                 },
               ),
-            if (onCopy != null && !message.isMedia)
+            if (onCopy != null &&
+                !message.isMedia &&
+                message.mediaType != MessageType.liveLocation)
               ListTile(
                 leading: const Icon(Icons.content_copy_rounded),
                 title: const Text('Copy message'),
@@ -572,7 +604,10 @@ class _BubbleContent extends StatelessWidget {
             ),
           ),
         // A document's body is its file name, already shown in the tile.
-        if (text != null && text.isNotEmpty && !message.isDocument)
+        if (text != null &&
+            text.isNotEmpty &&
+            !message.isDocument &&
+            message.mediaType != MessageType.liveLocation)
           Padding(
             padding: EdgeInsets.only(top: message.isMedia ? AppSpacing.sm : 0),
             child: bare

@@ -3,12 +3,14 @@ import '../application/media/android_chat_uploads.dart';
 import '../application/media/android_chat_downloads.dart';
 import '../application/media/android_chat_local_media.dart';
 import '../application/media/android_chat_secure_media_service.dart';
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import '../application/services/chat_backup_service.dart';
 import '../application/services/chat_identity_service.dart';
 import '../application/services/chat_notification_service.dart';
 import '../application/services/contact_discovery_service.dart';
+import '../application/services/live_location_service.dart';
 import '../application/services/presence_service.dart';
 import '../application/services/profile_service.dart';
 import '../application/services/push_notification_service.dart';
@@ -23,6 +25,7 @@ import '../data/repositories/firestore_push_token_repository.dart';
 import '../data/repositories/google_drive_chat_backup_store.dart';
 import '../data/repositories/local_chat_backup_store.dart';
 import '../data/repositories/firestore_message_repository.dart';
+import '../data/repositories/firestore_live_location_repository.dart';
 import '../data/repositories/firestore_presence_repository.dart';
 import '../data/repositories/firestore_thread_repository.dart';
 import '../data/repositories/firestore_typing_repository.dart';
@@ -32,6 +35,7 @@ import '../domain/repositories/chat_search_index_repository.dart';
 import '../domain/repositories/message_cache_repository.dart';
 import '../domain/repositories/outbox_repository.dart';
 import '../domain/repositories/message_repository.dart';
+import '../domain/repositories/live_location_repository.dart';
 import '../domain/repositories/presence_repository.dart';
 import '../domain/repositories/push_token_repository.dart';
 import '../domain/repositories/thread_repository.dart';
@@ -60,6 +64,8 @@ class ChatDependencies {
     MediaRepository? mediaRepository,
     PresenceRepository? presenceRepository,
     TypingRepository? typingRepository,
+    LiveLocationRepository? liveLocationRepository,
+    LiveLocationService? liveLocationService,
     ChatCryptoService? cryptoService,
     PushTokenRepository? pushTokenRepository,
   }) : _authRepository = authRepository,
@@ -67,6 +73,14 @@ class ChatDependencies {
        _database = database {
     if (pushTokenRepository != null) {
       this.pushTokenRepository = pushTokenRepository;
+    }
+    final locationService = liveLocationService;
+    if (locationService?.isSharing == true) {
+      unawaited(
+        locationService!.stopSharing().catchError((Object error) {
+          debugPrint('Could not stop live location after vault lock: $error');
+        }),
+      );
     }
     if (userRepository != null) {
       this.userRepository = userRepository;
@@ -85,6 +99,12 @@ class ChatDependencies {
     }
     if (typingRepository != null) {
       this.typingRepository = typingRepository;
+    }
+    if (liveLocationRepository != null) {
+      this.liveLocationRepository = liveLocationRepository;
+    }
+    if (liveLocationService != null) {
+      this.liveLocationService = liveLocationService;
     }
     if (cryptoService != null) {
       this.cryptoService = cryptoService;
@@ -136,6 +156,11 @@ class ChatDependencies {
   /// Database implementations is the whole cost of that migration.
   late PresenceRepository presenceRepository = FirestorePresenceRepository();
   late TypingRepository typingRepository = FirestoreTypingRepository();
+  late LiveLocationRepository liveLocationRepository =
+      FirestoreLiveLocationRepository(cryptoService: cryptoService);
+  late LiveLocationService? liveLocationService = Platform.isAndroid
+      ? LiveLocationService(repository: liveLocationRepository)
+      : null;
 
   /// Offline message cache. Falls back to a no-op when no local database is
   /// available, so the chat still works (online-only) in tests.
@@ -223,6 +248,10 @@ class ChatDependencies {
       downloads?.clearAccount();
       uploads?.stop();
       cryptoService.clearKeyCache();
+      final locationService = liveLocationService;
+      if (locationService?.isSharing == true) {
+        await locationService!.stopSharing();
+      }
       await _pushService?.stop();
       if (localMedia == null) {
         await mediaLoader.clearAll();
@@ -250,6 +279,7 @@ class ChatDependencies {
     _vaultSession.removeListener(_onVaultSessionChanged);
     presenceService.dispose();
     _pushService?.dispose();
+    liveLocationService?.dispose();
     notificationService.dispose();
     mediaLoader.clear();
   }

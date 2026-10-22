@@ -337,6 +337,9 @@ GoRoute _chatRoute(AppDependencies deps, AppSessionState session) {
             notificationService: deps.chatDependencies.notificationService,
             settingsRepository: deps.settingsRepository,
             profileService: deps.chatDependencies.profileService,
+            liveLocationRepository:
+                deps.chatDependencies.liveLocationRepository,
+            liveLocationService: deps.chatDependencies.liveLocationService,
           );
           final providedCubit = args.activeThreadCubit;
           Widget withThreadList(Widget child) {

@@ -35,10 +35,14 @@ jobs:
 
   distribute_android:
     if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
-    needs: analyze_and_test
+    needs:
+      - analyze_and_test
+      - firebase_backend_ci
+      - deploy_firebase_backend
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      id-token: write
     concurrency:
       group: firebase-app-distribution-main
       cancel-in-progress: false
@@ -109,15 +113,18 @@ jobs:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          GOOGLE_MAPS_ANDROID_API_KEY: ${{ secrets.GOOGLE_MAPS_ANDROID_API_KEY }}
         run: |
           flutter build apk --release \
             --build-name="${{ steps.version.outputs.version }}" \
-            --build-number="${{ steps.version.outputs.build_number }}"
+            --build-number="${{ steps.version.outputs.build_number }}" \
+            --dart-define="GOOGLE_MAPS_ANDROID_API_KEY=$GOOGLE_MAPS_ANDROID_API_KEY"
 
       - name: Authenticate to Firebase
         uses: google-github-actions/auth@v2
         with:
-          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_FIREBASE_DEPLOY_SERVICE_ACCOUNT }}
 
       - name: Install Firebase CLI
         run: npm install --global firebase-tools
@@ -144,3 +151,80 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git tag "v$VERSION" "$GITHUB_SHA"
           git push origin "v$VERSION"
+
+  firebase_backend_ci:
+    needs: analyze_and_test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: functions/package-lock.json
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Install Functions dependencies
+        run: npm ci --prefix functions
+
+      - name: Build Cloud Functions
+        run: npm --prefix functions run build
+
+      - name: Install Firebase CLI
+        run: npm install --global firebase-tools
+
+      - name: Test Firestore and Storage rules in emulators
+        run: >-
+          firebase emulators:exec
+          --only firestore,storage
+          --project demo-shadow4726262
+          "npm --prefix functions run test:rules"
+
+  deploy_firebase_backend:
+    if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
+    needs:
+      - analyze_and_test
+      - firebase_backend_ci
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    concurrency:
+      group: firebase-backend-main
+      cancel-in-progress: false
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: functions/package-lock.json
+
+      - name: Install Functions dependencies
+        run: npm ci --prefix functions
+
+      - name: Authenticate to Google Cloud with Workload Identity Federation
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_FIREBASE_DEPLOY_SERVICE_ACCOUNT }}
+
+      - name: Install Firebase CLI
+        run: npm install --global firebase-tools
+
+      - name: Deploy Firestore rules, Storage rules, and Cloud Functions
+        run: |
+          FIREBASE_PROJECT_ID="$(node -e "process.stdout.write(require('./firebase.json').flutter.platforms.android.default.projectId)")"
+          firebase deploy \
+            --only firestore:rules,storage,functions \
+            --project "$FIREBASE_PROJECT_ID"
