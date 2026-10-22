@@ -43,6 +43,11 @@ service cloud.firestore {
              && request.auth.uid in get(threadPath).data.participantIds;
     }
 
+    function isWithinClientClockSkew(clientMillis) {
+      // Device clocks can be slightly ahead of Firestore's server clock.
+      return clientMillis <= request.time.toMillis() + 60000;
+    }
+
     function isValidLiveLocation(threadId, sessionId) {
       let data = request.resource.data;
       return data.keys().hasAll([
@@ -70,13 +75,13 @@ service cloud.firestore {
              && data.userId == request.auth.uid
              && data.isActive is bool
              && data.startedAt is int
-             && data.startedAt <= request.time.toMillis()
+             && isWithinClientClockSkew(data.startedAt)
              && data.expiresAt is int
              && data.expiresAt > data.startedAt
              && data.expiresAt <= data.startedAt + 28800000
              && (!data.isActive || data.expiresAt > request.time.toMillis())
              && data.lastUpdatedAt is int
-             && data.lastUpdatedAt <= request.time.toMillis()
+             && isWithinClientClockSkew(data.lastUpdatedAt)
              && data.encryptedPayload is string
              && data.encryptedPayload.size() <= 8192;
     }

@@ -36,4 +36,29 @@ Do not put the JSON key in the repository or workflow YAML. Rotate the key if it
 3. Create a JSON key for that service account, then copy its complete JSON contents into the GitHub Actions secret `FIREBASE_SERVICE_ACCOUNT_JSON`.
 4. Keep the key out of source control and rotate it periodically.
 
+### Cloud Storage API 403 during deployment
+
+If deployment fails with an error like:
+
+```text
+storage: ensuring required API firebasestorage.googleapis.com is enabled...
+403 Permission denied to get service [firebasestorage.googleapis.com]
+```
+
+the service account can authenticate, but cannot query the API's enablement state through Google Cloud Service Usage. This is separate from the Storage rules and from the roles used to deploy rules.
+
+Use the least-privilege setup:
+
+1. Have a project owner or administrator enable **Cloud Storage for Firebase API** (`firebasestorage.googleapis.com`) once for project `shadow4726262`. In Google Cloud Console, choose that project, open **APIs & Services → Library**, search for the API, then select **Enable**. Alternatively, an administrator can run:
+
+   ```sh
+   gcloud services enable firebasestorage.googleapis.com --project=shadow4726262
+   ```
+
+2. Grant the deployment service account **Service Usage Viewer** (`roles/serviceusage.serviceUsageViewer`) on project `shadow4726262`. It allows the Firebase CLI to inspect service enablement status without granting permission to enable APIs.
+3. Check that the other APIs required by the configured Firebase products and Cloud Functions runtime are enabled as well. Enable any missing APIs administratively, not from this CI identity.
+4. Rerun the workflow on `main`.
+
+The Firebase CLI derives the deploy project ID from `firebase.json`; no separate project-ID secret or variable is needed. Updating IAM roles does **not** require regenerating or replacing `FIREBASE_SERVICE_ACCOUNT_JSON`. Only replace that secret if the service-account key itself was rotated or revoked.
+
 The deploy and distribution jobs run only on `main`; pull requests use local Firebase emulators and do not access the production service-account secret.

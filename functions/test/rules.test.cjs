@@ -61,6 +61,50 @@ test('Firestore lets a participant write and read their live location', async ()
   await assertSucceeds(getDoc(location));
 });
 
+test('Firestore allows live-location timestamps slightly ahead of server time', async () => {
+  const participantDb = testEnvironment.authenticatedContext('alice').firestore();
+  const location = doc(
+    participantDb,
+    'threads/alice_bob/live_locations/client-clock-skew',
+  );
+  const startedAt = Date.now() + 30_000;
+
+  await assertSucceeds(
+    setDoc(location, {
+      sessionId: 'client-clock-skew',
+      threadId: 'alice_bob',
+      userId: 'alice',
+      isActive: true,
+      startedAt,
+      expiresAt: startedAt + 15 * 60 * 1000,
+      lastUpdatedAt: startedAt,
+      encryptedPayload: 'opaque-ciphertext',
+    }),
+  );
+});
+
+test('Firestore rejects live-location timestamps beyond the clock-skew allowance', async () => {
+  const participantDb = testEnvironment.authenticatedContext('alice').firestore();
+  const location = doc(
+    participantDb,
+    'threads/alice_bob/live_locations/excessive-clock-skew',
+  );
+  const startedAt = Date.now() + 120_000;
+
+  await assertFails(
+    setDoc(location, {
+      sessionId: 'excessive-clock-skew',
+      threadId: 'alice_bob',
+      userId: 'alice',
+      isActive: true,
+      startedAt,
+      expiresAt: startedAt + 15 * 60 * 1000,
+      lastUpdatedAt: startedAt,
+      encryptedPayload: 'opaque-ciphertext',
+    }),
+  );
+});
+
 test('Firestore denies nonparticipants and forged live-location owners', async () => {
   const outsiderDb = testEnvironment.authenticatedContext('mallory').firestore();
   const forgedOwnerLocation = doc(
