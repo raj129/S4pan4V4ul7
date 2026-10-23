@@ -205,6 +205,43 @@ abstract final class AppTheme {
         labelTextStyle: WidgetStatePropertyAll(text.labelLarge),
       ),
 
+      tabBarTheme: TabBarThemeData(
+        indicatorSize: TabBarIndicatorSize.tab,
+        labelColor: scheme.primary,
+        unselectedLabelColor: scheme.onSurfaceVariant,
+        indicatorColor: scheme.primary,
+        dividerColor: scheme.outlineVariant.withValues(alpha: 0.3),
+        labelStyle: text.titleSmall?.copyWith(fontWeight: FontWeight.w600),
+        unselectedLabelStyle: text.titleSmall?.copyWith(
+          fontWeight: FontWeight.w500,
+        ),
+      ),
+
+      segmentedButtonTheme: SegmentedButtonThemeData(
+        style: SegmentedButton.styleFrom(
+          selectedBackgroundColor: scheme.primaryContainer,
+          selectedForegroundColor: scheme.onPrimaryContainer,
+          shape: RoundedRectangleBorder(
+            borderRadius: AppRadius.all(AppRadius.pill),
+          ),
+        ),
+      ),
+
+      floatingActionButtonTheme: FloatingActionButtonThemeData(
+        elevation: AppElevation.raised,
+        backgroundColor: scheme.primaryContainer,
+        foregroundColor: scheme.onPrimaryContainer,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+        ),
+      ),
+
+      badgeTheme: BadgeThemeData(
+        backgroundColor: scheme.primary,
+        textColor: scheme.onPrimary,
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      ),
+
       switchTheme: SwitchThemeData(
         thumbColor: WidgetStateProperty.resolveWith(
           (states) => states.contains(WidgetState.selected)
