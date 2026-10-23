@@ -35,7 +35,22 @@ android {
         versionCode = flutter.versionCode
         versionName = flutter.versionName
         manifestPlaceholders["GOOGLE_MAPS_ANDROID_API_KEY"] =
-            System.getenv("GOOGLE_MAPS_ANDROID_API_KEY") ?: ""
+            System.getenv("GOOGLE_MAPS_ANDROID_API_KEY")
+                ?.takeIf { it.isNotBlank() }
+                ?: rootProject.file("google_maps_key.json").let { keyFile ->
+                    if (!keyFile.isFile) {
+                        ""
+                    } else {
+                        val configuration =
+                            groovy.json.JsonSlurper().parse(keyFile) as? Map<*, *>
+                                ?: error("android/google_maps_key.json must contain a JSON object.")
+                        configuration["GOOGLE_MAPS_ANDROID_API_KEY"] as? String
+                            ?: error(
+                                "android/google_maps_key.json must define " +
+                                    "GOOGLE_MAPS_ANDROID_API_KEY as a string.",
+                            )
+                    }
+                }
     }
 
     signingConfigs {

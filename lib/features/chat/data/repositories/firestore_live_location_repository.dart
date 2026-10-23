@@ -101,7 +101,11 @@ class FirestoreLiveLocationRepository implements LiveLocationRepository {
     if (snapshot.data()?['userId'] != userId) {
       throw StateError('Cannot stop another user’s live-location session.');
     }
-    await ref.delete();
+    final now = DateTime.now().toUtc();
+    await ref.update({
+      'isActive': false,
+      'lastUpdatedAt': now.millisecondsSinceEpoch,
+    });
   }
 
   @override

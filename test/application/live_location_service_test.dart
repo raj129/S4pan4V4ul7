@@ -129,6 +129,23 @@ void main() {
     expect(failure, isA<ArgumentError>());
     expect(repository.started, isEmpty);
   });
+
+  test('LiveLocationSession retains last known coordinates when ended or expired', () {
+    final session = LiveLocationSession(
+      sessionId: 'session_1',
+      threadId: 'alice_bob',
+      userId: 'alice',
+      isActive: false,
+      startedAt: DateTime.utc(2026, 10, 21, 11),
+      expiresAt: DateTime.utc(2026, 10, 21, 11, 15),
+      lastUpdatedAt: DateTime.utc(2026, 10, 21, 11, 10),
+      currentPoint: firstPoint,
+    );
+
+    expect(session.isActive, isFalse);
+    expect(session.isLive, isFalse);
+    expect(session.currentPoint, equals(firstPoint));
+  });
 }
 
 class _FakeLiveLocationRepository implements LiveLocationRepository {

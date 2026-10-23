@@ -21,5 +21,6 @@ class MainActivity : FlutterFragmentActivity() {
         super.configureFlutterEngine(flutterEngine)
         flutterEngine.plugins.add(ChatSecureMediaPlugin())
         flutterEngine.plugins.add(ChatUploadPlugin())
+        flutterEngine.plugins.add(MapsDiagnosticsPlugin())
     }
 }

@@ -42,6 +42,7 @@ app.*.map.json
 # Android signing keys
 *.jks
 *.keystore
+android/google_maps_key.json
 
 # Android Studio will place build artifacts here
 /android/app/debug
