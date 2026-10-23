@@ -1601,8 +1601,12 @@ class _ThreadScreenState extends State<ThreadScreen> {
             Expanded(
               child: Container(
                 decoration: BoxDecoration(
-                  color: cs.surfaceContainerHighest,
+                  color: cs.surfaceContainerHighest.withValues(alpha: 0.6),
                   borderRadius: AppRadius.all(AppRadius.pill),
+                  border: Border.all(
+                    color: cs.outlineVariant.withValues(alpha: 0.4),
+                    width: 1,
+                  ),
                 ),
                 padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xxs),
                 child: Row(
@@ -1900,54 +1904,69 @@ class _ThreadScreenState extends State<ThreadScreen> {
     final messenger = ScaffoldMessenger.of(context);
     final choice = await showModalBottomSheet<String>(
       context: context,
-      isScrollControlled: true,
+      showDragHandle: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
       builder: (sheetContext) => SafeArea(
-        child: ListView(
-          shrinkWrap: true,
-          children: [
-            ListTile(
-              leading: const Icon(Icons.photo_library_outlined),
-              title: const Text('Photos from gallery'),
-              onTap: () => Navigator.pop(sheetContext, 'photo'),
-            ),
-            ListTile(
-              leading: const Icon(Icons.camera_alt_outlined),
-              title: const Text('Take photo'),
-              onTap: () => Navigator.pop(sheetContext, 'camera'),
-            ),
-            ListTile(
-              leading: const Icon(Icons.lock_outline),
-              title: const Text('Send from vault'),
-              onTap: () => Navigator.pop(sheetContext, 'vault'),
-            ),
-            ListTile(
-              leading: const Icon(Icons.video_library_outlined),
-              title: const Text('Video from gallery'),
-              onTap: () => Navigator.pop(sheetContext, 'video'),
-            ),
-            ListTile(
-              leading: const Icon(Icons.insert_drive_file_outlined),
-              title: const Text('Document'),
-              onTap: () => Navigator.pop(sheetContext, 'document'),
-            ),
-            ListTile(
-              leading: const Icon(Icons.mic_none),
-              title: const Text('Record audio'),
-              onTap: () => Navigator.pop(sheetContext, 'audio'),
-            ),
-            ListTile(
-              leading: const Icon(Icons.folder_special_outlined),
-              title: const Text('Vault attachments'),
-              onTap: () => Navigator.pop(sheetContext, 'saved'),
-            ),
-            if (Platform.isAndroid)
-              ListTile(
-                leading: const Icon(Icons.location_on_outlined),
-                title: const Text('Share live location'),
-                subtitle: const Text('Share for a limited time'),
-                onTap: () => Navigator.pop(sheetContext, 'liveLocation'),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+          child: Wrap(
+            spacing: 12,
+            runSpacing: 12,
+            alignment: WrapAlignment.spaceEvenly,
+            children: [
+              _AttachmentOption(
+                icon: Icons.photo_library_rounded,
+                label: 'Gallery',
+                color: const Color(0xFF7C4DFF),
+                onTap: () => Navigator.pop(sheetContext, 'photo'),
               ),
-          ],
+              _AttachmentOption(
+                icon: Icons.camera_alt_rounded,
+                label: 'Camera',
+                color: const Color(0xFFE91E63),
+                onTap: () => Navigator.pop(sheetContext, 'camera'),
+              ),
+              _AttachmentOption(
+                icon: Icons.lock_rounded,
+                label: 'From Vault',
+                color: const Color(0xFFFF9800),
+                onTap: () => Navigator.pop(sheetContext, 'vault'),
+              ),
+              _AttachmentOption(
+                icon: Icons.videocam_rounded,
+                label: 'Video',
+                color: const Color(0xFF2196F3),
+                onTap: () => Navigator.pop(sheetContext, 'video'),
+              ),
+              _AttachmentOption(
+                icon: Icons.insert_drive_file_rounded,
+                label: 'Document',
+                color: const Color(0xFF009688),
+                onTap: () => Navigator.pop(sheetContext, 'document'),
+              ),
+              _AttachmentOption(
+                icon: Icons.mic_rounded,
+                label: 'Audio',
+                color: const Color(0xFFFF5722),
+                onTap: () => Navigator.pop(sheetContext, 'audio'),
+              ),
+              _AttachmentOption(
+                icon: Icons.folder_special_rounded,
+                label: 'Saved Files',
+                color: const Color(0xFF673AB7),
+                onTap: () => Navigator.pop(sheetContext, 'saved'),
+              ),
+              if (Platform.isAndroid)
+                _AttachmentOption(
+                  icon: Icons.location_on_rounded,
+                  label: 'Live Location',
+                  color: const Color(0xFF4CAF50),
+                  onTap: () => Navigator.pop(sheetContext, 'liveLocation'),
+                ),
+            ],
+          ),
         ),
       ),
     );
@@ -2790,6 +2809,8 @@ class _SendButton extends StatelessWidget {
             child: Material(
               color: enabled ? cs.primary : cs.surfaceContainerHighest,
               shape: const CircleBorder(),
+              elevation: enabled ? 2 : 0,
+              shadowColor: cs.primary.withValues(alpha: 0.4),
               clipBehavior: Clip.antiAlias,
               child: InkWell(
                 onTap: enabled ? onSend : null,
@@ -2806,6 +2827,60 @@ class _SendButton extends StatelessWidget {
           ),
         );
       },
+    );
+  }
+}
+
+class _AttachmentOption extends StatelessWidget {
+  const _AttachmentOption({
+    required this.icon,
+    required this.label,
+    required this.color,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String label;
+  final Color color;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(16),
+      child: Container(
+        width: 78,
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 52,
+              height: 52,
+              decoration: BoxDecoration(
+                color: color.withValues(alpha: 0.14),
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: color.withValues(alpha: 0.32),
+                  width: 1.5,
+                ),
+              ),
+              child: Icon(icon, color: color, size: 24),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              label,
+              textAlign: TextAlign.center,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

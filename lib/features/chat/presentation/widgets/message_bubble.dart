@@ -202,6 +202,9 @@ class MessageBubble extends StatelessWidget {
               isOffline: isOffline,
               mediaLoader: mediaLoader,
               sendStatus: sendStatus,
+              onCancelUpload: onCancelUpload,
+              onPauseUpload: onPauseUpload,
+              onResumeUpload: onResumeUpload,
               onTapQuote: onTapQuote,
               textColor: cs.onSurface,
               metaColor: cs.onSurfaceVariant,
@@ -231,6 +234,9 @@ class MessageBubble extends StatelessWidget {
                 isOffline: isOffline,
                 mediaLoader: mediaLoader,
                 sendStatus: sendStatus,
+                onCancelUpload: onCancelUpload,
+                onPauseUpload: onPauseUpload,
+                onResumeUpload: onResumeUpload,
                 onTapQuote: onTapQuote,
                 textColor: isHighlighted ? cs.onTertiaryContainer : textColor,
                 metaColor: isHighlighted ? cs.onTertiaryContainer : textColor,
@@ -481,6 +487,9 @@ class _BubbleContent extends StatelessWidget {
     this.highlightQuery = '',
 
     this.sendStatus,
+    this.onCancelUpload,
+    this.onPauseUpload,
+    this.onResumeUpload,
   });
 
   final ChatMessage message;
@@ -498,6 +507,9 @@ class _BubbleContent extends StatelessWidget {
 
   /// Send progress of this attachment, null once it is sent.
   final MediaSendStatus? sendStatus;
+  final VoidCallback? onCancelUpload;
+  final VoidCallback? onPauseUpload;
+  final VoidCallback? onResumeUpload;
 
   @override
   Widget build(BuildContext context) {
@@ -541,9 +553,11 @@ class _BubbleContent extends StatelessWidget {
                 : () => onTapQuote!(message.replyTo!.messageId),
           ),
         if (message.mediaType == MessageType.audio && sendStatus != null)
-          const ListTile(
-            leading: Icon(Icons.audio_file_outlined),
-            title: Text('Audio recording'),
+          AttachmentUploadProgress(
+            status: sendStatus!,
+            onCancel: onCancelUpload,
+            onPause: onPauseUpload,
+            onResume: onResumeUpload,
           )
         else if (message.mediaType == MessageType.audio &&
             message.mediaRef != null)
@@ -578,6 +592,7 @@ class _BubbleContent extends StatelessWidget {
             loader: mediaLoader,
             textColor: textColor,
             sendStatus: sendStatus,
+            onCancel: onCancelUpload,
           )
         else if (message.hasMediaSlot)
           ClipRRect(
@@ -586,6 +601,7 @@ class _BubbleContent extends StatelessWidget {
               message: message,
               loader: mediaLoader,
               sendStatus: sendStatus,
+              onCancel: onCancelUpload,
               onTap: message.mediaRef == null || sendStatus != null
                   ? null
                   : message.mediaType == MessageType.image

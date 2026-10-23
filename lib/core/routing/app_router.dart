@@ -459,9 +459,7 @@ GoRoute _settingsRoute(
       unlockVaultUseCase: deps.unlockVaultUseCase,
       pinValidator: deps.pinValidator,
       onSettingsChanged: onSettingsChanged,
-      chatBackupService: session.mode == UserMode.googleEnabled
-          ? () => deps.chatDependencies.backupService
-          : null,
+      chatBackupService: () => deps.chatDependencies.backupService,
     ),
     routes: [
       GoRoute(

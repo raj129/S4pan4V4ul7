@@ -2,13 +2,11 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:intl/intl.dart';
 import 'package:permission_handler/permission_handler.dart';
 
-import '../../application/services/maps_diagnostics.dart';
 import '../../domain/entities/live_location.dart';
 
 class LiveLocationMapScreen extends StatefulWidget {
@@ -35,7 +33,6 @@ class LiveLocationMapScreen extends StatefulWidget {
 
 class _LiveLocationMapScreenState extends State<LiveLocationMapScreen> {
   Timer? _countdownTimer;
-  MapsDiagnostics? _diagnostics;
   bool _locationGranted = false;
 
   @override
@@ -50,11 +47,9 @@ class _LiveLocationMapScreenState extends State<LiveLocationMapScreen> {
   }
 
   Future<void> _loadEnvironment() async {
-    final diagnostics = await MapsDiagnostics.load();
     final granted = await Permission.locationWhenInUse.isGranted;
     if (!mounted) return;
     setState(() {
-      _diagnostics = diagnostics;
       _locationGranted = granted;
     });
   }
@@ -96,9 +91,6 @@ class _LiveLocationMapScreenState extends State<LiveLocationMapScreen> {
     final isLive = session?.isLive ?? false;
     final isStale = session?.isStale ?? false;
     final isActive = session?.isActive == true && session?.isExpired == false;
-    // Unknown (channel unavailable) is treated as configured; only a confirmed
-    // empty manifest key is reported as missing.
-    final mapConfigured = _diagnostics?.keyPresent ?? true;
 
     return Scaffold(
       appBar: AppBar(
@@ -143,13 +135,7 @@ class _LiveLocationMapScreenState extends State<LiveLocationMapScreen> {
       body: Stack(
         children: [
           Positioned.fill(
-            child: !mapConfigured
-                ? const _MapUnavailable(
-                    message:
-                        'Google Maps is not configured. Set the Android Maps '
-                        'API key in the app build environment.',
-                  )
-                : point == null
+            child: point == null
                 ? _MapUnavailable(
                     message: isActive
                         ? 'Waiting for the sender’s first location…'
@@ -163,13 +149,6 @@ class _LiveLocationMapScreenState extends State<LiveLocationMapScreen> {
                     myLocationEnabled: _locationGranted,
                   ),
           ),
-          if (kDebugMode && _diagnostics != null)
-            Positioned(
-              left: 12,
-              right: 12,
-              top: 8,
-              child: _MapDiagnosticsCard(diagnostics: _diagnostics!),
-            ),
           if (session != null)
             Positioned(
               left: 12,
@@ -259,11 +238,14 @@ class _LiveGoogleMapState extends State<_LiveGoogleMap> {
     final markerTitle = widget.isActive
         ? (widget.isMine ? 'Your live location' : 'Shared live location')
         : (widget.isMine ? 'Your last known location' : 'Last known location');
-    final markerSnippet = widget.isActive
-        ? null
-        : widget.lastUpdatedAt != null
-        ? 'Last seen at ${DateFormat.jm().format(widget.lastUpdatedAt!.toLocal())}'
-        : null;
+    final updatedAt = widget.lastUpdatedAt ?? point.timestamp;
+    final markerSnippet = [
+      if (!widget.isActive)
+        'Last seen ${DateFormat.jm().format(updatedAt.toLocal())}',
+      'Accuracy ±${point.accuracy.toStringAsFixed(0)} m',
+      if (point.heading != null)
+        'Heading ${point.heading!.toStringAsFixed(0)}°',
+    ].join(' · ');
 
     return GoogleMap(
       initialCameraPosition: CameraPosition(target: center, zoom: 16),
@@ -272,7 +254,11 @@ class _LiveGoogleMapState extends State<_LiveGoogleMap> {
         Marker(
           markerId: const MarkerId('shared-location'),
           position: center,
-          rotation: point.heading ?? 0,
+          icon: BitmapDescriptor.defaultMarkerWithHue(
+            widget.isActive
+                ? BitmapDescriptor.hueAzure
+                : BitmapDescriptor.hueOrange,
+          ),
           infoWindow: InfoWindow(
             title: markerTitle,
             snippet: markerSnippet,
@@ -284,9 +270,9 @@ class _LiveGoogleMapState extends State<_LiveGoogleMap> {
           circleId: const CircleId('location-accuracy'),
           center: center,
           radius: math.max(point.accuracy, 5.0),
-          fillColor: (widget.isActive ? Colors.blue : Colors.grey)
+          fillColor: (widget.isActive ? Colors.blue : Colors.orange)
               .withValues(alpha: 0.12),
-          strokeColor: (widget.isActive ? Colors.blue : Colors.grey)
+          strokeColor: (widget.isActive ? Colors.blue : Colors.orange)
               .withValues(alpha: 0.5),
           strokeWidth: 1,
         ),
@@ -295,41 +281,6 @@ class _LiveGoogleMapState extends State<_LiveGoogleMap> {
       myLocationButtonEnabled: widget.myLocationEnabled,
       zoomControlsEnabled: false,
       mapToolbarEnabled: false,
-    );
-  }
-}
-
-class _MapDiagnosticsCard extends StatelessWidget {
-  const _MapDiagnosticsCard({required this.diagnostics});
-
-  final MapsDiagnostics diagnostics;
-
-  @override
-  Widget build(BuildContext context) {
-    final style = Theme.of(context).textTheme.labelSmall;
-    return Card(
-      color: Colors.black.withValues(alpha: 0.78),
-      child: Padding(
-        padding: const EdgeInsets.all(10),
-        child: DefaultTextStyle(
-          style: (style ?? const TextStyle()).copyWith(color: Colors.white),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Text('DEBUG · Map diagnostics'),
-              Text('Package: ${diagnostics.packageName ?? '?'}'),
-              Text(
-                'API key: ${diagnostics.keyPresent ? diagnostics.keyMasked : 'MISSING in manifest'}',
-              ),
-              Text('Signing SHA-1: ${diagnostics.signingSha1 ?? '?'}'),
-              const Text(
-                'Blank tiles? Run: adb logcat | findstr "Google Maps Android API"',
-              ),
-            ],
-          ),
-        ),
-      ),
     );
   }
 }

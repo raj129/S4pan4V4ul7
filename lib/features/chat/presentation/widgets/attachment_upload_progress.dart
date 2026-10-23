@@ -61,10 +61,19 @@ class _AttachmentUploadProgressState extends State<AttachmentUploadProgress> {
     String label,
     IconData icon,
     FutureOr<void> Function()? action,
-  ) => TextButton.icon(
-    onPressed: _busy || action == null ? null : () => _act(action),
-    icon: Icon(icon, size: 18),
-    label: Text(label),
+  ) => Padding(
+    padding: const EdgeInsets.only(right: 6, top: 4),
+    child: TextButton.icon(
+      style: TextButton.styleFrom(
+        visualDensity: VisualDensity.compact,
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        backgroundColor: Theme.of(context).colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
+      ),
+      onPressed: _busy || action == null ? null : () => _act(action),
+      icon: Icon(icon, size: 16),
+      label: Text(label, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+    ),
   );
 
   @override
@@ -77,46 +86,96 @@ class _AttachmentUploadProgressState extends State<AttachmentUploadProgress> {
     final terminal =
         state == MediaUploadLifecycle.completed ||
         state == MediaUploadLifecycle.cancelled;
-    return SizedBox(
-      width: 260,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 8),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              widget.label ?? status.label,
-              style: Theme.of(context).textTheme.labelLarge,
-            ),
-            const SizedBox(height: 6),
-            LinearProgressIndicator(
-              value: status.isIndeterminate ? null : status.progress,
-              semanticsLabel: widget.label ?? status.label,
-            ),
-            if (measured) ...[
-              const SizedBox(height: 6),
-              Text(
-                '${_size(status.processedBytes!)} / ${_size(total)}'
-                ' · ${(status.progress * 100).clamp(0, 100).toStringAsFixed(0)}%',
+    final cs = Theme.of(context).colorScheme;
+
+    final progressColor = state == MediaUploadLifecycle.failed
+        ? cs.error
+        : state == MediaUploadLifecycle.paused
+        ? cs.tertiary
+        : cs.primary;
+
+    final stateIcon = state == MediaUploadLifecycle.failed
+        ? Icons.error_outline_rounded
+        : state == MediaUploadLifecycle.paused
+        ? Icons.pause_circle_outline_rounded
+        : state == MediaUploadLifecycle.completed
+        ? Icons.check_circle_outline_rounded
+        : Icons.cloud_sync_outlined;
+
+    return Container(
+      width: 270,
+      margin: const EdgeInsets.symmetric(vertical: 4),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: cs.surfaceContainerHighest.withValues(alpha: 0.35),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: cs.outlineVariant.withValues(alpha: 0.4),
+          width: 1,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            children: [
+              Icon(stateIcon, size: 18, color: progressColor),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  widget.label ?? status.label,
+                  style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                    fontWeight: FontWeight.w600,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
               ),
             ],
-            if (!terminal)
-              Wrap(
-                children: [
-                  if (state == MediaUploadLifecycle.paused)
-                    _action('Resume', Icons.play_arrow, widget.onResume)
-                  else if (state == MediaUploadLifecycle.failed)
-                    _action('Retry', Icons.refresh, widget.onRetry)
-                  else if (state != null)
-                    _action('Pause', Icons.pause, widget.onPause),
-                  _action('Cancel', Icons.close, widget.onCancel),
-                ],
+          ),
+          const SizedBox(height: 8),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(6),
+            child: LinearProgressIndicator(
+              minHeight: 6,
+              value: status.isIndeterminate ? null : status.progress,
+              semanticsLabel: widget.label ?? status.label,
+              color: progressColor,
+              backgroundColor: progressColor.withValues(alpha: 0.18),
+            ),
+          ),
+          if (measured) ...[
+            const SizedBox(height: 6),
+            Text(
+              '${_size(status.processedBytes!)} / ${_size(total)}'
+              ' · ${(status.progress * 100).clamp(0, 100).toStringAsFixed(0)}%',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: cs.onSurfaceVariant,
+                fontWeight: FontWeight.w500,
               ),
-            if (state == MediaUploadLifecycle.cancelled &&
-                widget.retryCancelled)
-              _action('Retry download', Icons.refresh, widget.onRetry),
+            ),
           ],
-        ),
+          if (!terminal) ...[
+            const SizedBox(height: 4),
+            Wrap(
+              children: [
+                if (state == MediaUploadLifecycle.paused)
+                  _action('Resume', Icons.play_arrow, widget.onResume)
+                else if (state == MediaUploadLifecycle.failed)
+                  _action('Retry', Icons.refresh, widget.onRetry)
+                else if (state != null)
+                  _action('Pause', Icons.pause, widget.onPause),
+                _action('Cancel', Icons.close, widget.onCancel),
+              ],
+            ),
+          ],
+          if (state == MediaUploadLifecycle.cancelled &&
+              widget.retryCancelled) ...[
+            const SizedBox(height: 4),
+            _action('Retry download', Icons.refresh, widget.onRetry),
+          ],
+        ],
       ),
     );
   }

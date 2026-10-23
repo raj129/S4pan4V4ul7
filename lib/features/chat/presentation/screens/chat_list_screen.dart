@@ -36,11 +36,19 @@ class ChatListScreen extends StatefulWidget {
 class _ChatListScreenState extends State<ChatListScreen> {
   ChatNotificationService? _notifications;
   ProfileService? get _profile => widget.profileService;
+  bool _isSearching = false;
+  final _searchController = TextEditingController();
+  String _searchQuery = '';
 
   @override
   void initState() {
     super.initState();
     context.read<ThreadListCubit>().startWatching();
+    _searchController.addListener(() {
+      setState(() {
+        _searchQuery = _searchController.text.trim().toLowerCase();
+      });
+    });
     try {
       _notifications = context.read<ChatNotificationService>();
       _notifications!.pendingThreadId.addListener(_openPendingThread);
@@ -53,6 +61,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
   @override
   void dispose() {
     _notifications?.pendingThreadId.removeListener(_openPendingThread);
+    _searchController.dispose();
     super.dispose();
   }
 
@@ -94,28 +103,60 @@ class _ChatListScreenState extends State<ChatListScreen> {
   Widget _buildScaffold(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Chats'),
-        leading: IconButton(
-          icon: const Icon(Icons.menu),
-          onPressed: () => openAppNavigationDrawer(context),
-        ),
+        title: _isSearching
+            ? TextField(
+                controller: _searchController,
+                autofocus: true,
+                decoration: const InputDecoration(
+                  hintText: 'Search conversations…',
+                  border: InputBorder.none,
+                ),
+              )
+            : const Text('Chats'),
+        leading: _isSearching
+            ? IconButton(
+                icon: const Icon(Icons.arrow_back),
+                onPressed: () {
+                  setState(() {
+                    _isSearching = false;
+                    _searchController.clear();
+                  });
+                },
+              )
+            : IconButton(
+                icon: const Icon(Icons.menu),
+                onPressed: () => openAppNavigationDrawer(context),
+              ),
         actions: [
-          if (_profile != null)
+          if (_isSearching)
             IconButton(
-              icon: const Icon(Icons.account_circle_outlined),
-              tooltip: 'My profile',
-              onPressed: () {
-                final auth = context.read<ChatAuthCubit>().state;
-                if (auth is ChatAuthAuthenticated) {
-                  context.push('/chat/profile', extra: auth.user);
-                }
-              },
+              icon: const Icon(Icons.close_rounded),
+              tooltip: 'Clear',
+              onPressed: () => _searchController.clear(),
+            )
+          else ...[
+            IconButton(
+              icon: const Icon(Icons.search_rounded),
+              tooltip: 'Search',
+              onPressed: () => setState(() => _isSearching = true),
             ),
-          IconButton(
-            icon: const Icon(Icons.edit_outlined),
-            tooltip: 'New chat',
-            onPressed: () => _openNewChat(context),
-          ),
+            if (_profile != null)
+              IconButton(
+                icon: const Icon(Icons.account_circle_outlined),
+                tooltip: 'My profile',
+                onPressed: () {
+                  final auth = context.read<ChatAuthCubit>().state;
+                  if (auth is ChatAuthAuthenticated) {
+                    context.push('/chat/profile', extra: auth.user);
+                  }
+                },
+              ),
+            IconButton(
+              icon: const Icon(Icons.edit_outlined),
+              tooltip: 'New chat',
+              onPressed: () => _openNewChat(context),
+            ),
+          ],
         ],
       ),
       body: Column(
@@ -179,14 +220,34 @@ class _ChatListScreenState extends State<ChatListScreen> {
           );
         }
 
+        final filteredItems = _searchQuery.isEmpty
+            ? state.items
+            : state.items.where((item) {
+                final name =
+                    (profile?.nameFor(item.otherUser) ??
+                            item.otherUser.displayName)
+                        .toLowerCase();
+                final last = item.thread.lastMessage.toLowerCase();
+                return name.contains(_searchQuery) ||
+                    last.contains(_searchQuery);
+              }).toList();
+
+        if (filteredItems.isEmpty) {
+          return EmptyView(
+            icon: Icons.search_off_rounded,
+            title: 'No matches found',
+            subtitle: 'No conversations match "$_searchQuery".',
+          );
+        }
+
         return ListView.builder(
           padding: const EdgeInsets.symmetric(
             horizontal: AppSpacing.sm,
             vertical: AppSpacing.sm,
           ),
-          itemCount: state.items.length,
+          itemCount: filteredItems.length,
           itemBuilder: (context, i) {
-            final item = state.items[i];
+            final item = filteredItems[i];
             final unread = item.thread.unreadCountFor(widget.myUid);
             return _ThreadTile(
               key: ValueKey(item.thread.threadId),
@@ -422,21 +483,30 @@ class _UnreadBadge extends StatelessWidget {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     return Container(
-      constraints: const BoxConstraints(minWidth: 20),
+      constraints: const BoxConstraints(minWidth: 22, minHeight: 18),
       padding: const EdgeInsets.symmetric(
-        horizontal: AppSpacing.xs,
-        vertical: 1,
+        horizontal: 6,
+        vertical: 2,
       ),
       decoration: BoxDecoration(
         color: cs.primary,
-        borderRadius: AppRadius.all(AppRadius.pill),
+        borderRadius: BorderRadius.circular(10),
+        boxShadow: [
+          BoxShadow(
+            color: cs.primary.withValues(alpha: 0.35),
+            blurRadius: 4,
+            offset: const Offset(0, 1),
+          ),
+        ],
       ),
+      alignment: Alignment.center,
       child: Text(
         count > 99 ? '99+' : '$count',
         textAlign: TextAlign.center,
         style: Theme.of(context).textTheme.labelSmall?.copyWith(
           color: cs.onPrimary,
           fontWeight: FontWeight.w700,
+          fontSize: 11,
         ),
       ),
     );
