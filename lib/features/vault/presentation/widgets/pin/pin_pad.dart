@@ -155,8 +155,6 @@ class PinKey extends StatefulWidget {
 }
 
 class _PinKeyState extends State<PinKey> {
-  bool _pressed = false;
-
   void _handleTap() {
     HapticFeedback.lightImpact();
     widget.onTap();
@@ -166,35 +164,22 @@ class _PinKeyState extends State<PinKey> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final enabled = widget.enabled;
-    final foreground = enabled
-        ? theme.colorScheme.onSurface
-        : theme.colorScheme.onSurface.withValues(alpha: 0.38);
-
-    final key = AnimatedScale(
-      scale: _pressed ? 0.96 : 1,
-      duration: AppDuration.fast,
-      child: Material(
-        color: _pressed
-            ? theme.colorScheme.primaryContainer.withValues(alpha: 0.55)
-            : theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.45),
-        shape: const CircleBorder(),
-        child: InkResponse(
-          onTap: enabled ? _handleTap : null,
-          onHighlightChanged: (value) => setState(() => _pressed = value),
-          containedInkWell: true,
-          customBorder: const CircleBorder(),
-          radius: widget.size / 2,
-          child: IconTheme.merge(
-            data: IconThemeData(color: foreground),
-            child: DefaultTextStyle.merge(
-              style: TextStyle(color: foreground),
-              child: SizedBox.square(
-                dimension: widget.size,
-                child: Center(child: widget.child),
-              ),
-            ),
-          ),
+    final colors = theme.colorScheme;
+    final key = SizedBox.square(
+      dimension: widget.size,
+      child: FilledButton.tonal(
+        onPressed: enabled ? _handleTap : null,
+        style: FilledButton.styleFrom(
+          backgroundColor: colors.surfaceContainerHigh,
+          foregroundColor: enabled
+              ? colors.onSurface
+              : colors.onSurface.withValues(alpha: 0.38),
+          padding: EdgeInsets.zero,
+          minimumSize: Size.zero,
+          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          shape: const CircleBorder(),
         ),
+        child: Center(child: widget.child),
       ),
     );
 

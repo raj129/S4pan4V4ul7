@@ -33,7 +33,7 @@ class AppNavigationDrawer extends StatelessWidget {
             AppSpacing.xl,
             AppSpacing.xl,
             AppSpacing.xl,
-            AppSpacing.lg,
+            AppSpacing.xxl,
           ),
           child: Row(
             children: [
@@ -62,6 +62,7 @@ class AppNavigationDrawer extends StatelessWidget {
           ),
         ),
         const Divider(),
+        const SizedBox(height: AppSpacing.xs),
         const NavigationDrawerDestination(
           icon: Icon(Icons.chat_bubble_outline),
           selectedIcon: Icon(Icons.chat_bubble),

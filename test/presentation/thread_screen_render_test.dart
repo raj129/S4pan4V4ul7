@@ -22,6 +22,7 @@ import 'package:photo_vault/features/chat/domain/repositories/user_repository.da
 import 'package:photo_vault/features/chat/presentation/screens/thread_screen.dart';
 import 'package:photo_vault/features/chat/presentation/state/active_thread_cubit.dart';
 import 'package:photo_vault/features/chat/presentation/widgets/chat_bubble_shape.dart';
+import 'package:photo_vault/features/chat/presentation/widgets/chat_media_picker.dart';
 import 'package:photo_vault/features/chat/presentation/widgets/chat_media_preview.dart';
 import 'package:photo_vault/features/chat/presentation/widgets/message_bubble.dart';
 
@@ -273,6 +274,26 @@ void main() {
     expect(find.byType(MessageBubble), findsNWidgets(2));
     expect(find.textContaining('my reply', findRichText: true), findsOneWidget);
     expect(tester.takeException(), isNull);
+
+    await tester.enterText(find.byType(TextField).last, 'draft in composer');
+    await tester.tap(find.byTooltip('Emoji, stickers, and GIFs'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.byType(ChatMediaPickerPanel), findsOneWidget);
+    final pickerComposer = find.byType(TextField).last;
+    expect(
+      tester.widget<TextField>(pickerComposer).controller!.text,
+      'draft in composer',
+    );
+    expect(
+      tester.getRect(pickerComposer).bottom,
+      lessThanOrEqualTo(tester.getRect(find.byType(ChatMediaPickerPanel)).top),
+    );
+    expect(tester.takeException(), isNull);
+    await tester.binding.handlePopRoute();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.byType(ChatMediaPickerPanel), findsNothing);
 
     await tester.tap(find.byTooltip('Lock vault'));
     expect(locked, isTrue);

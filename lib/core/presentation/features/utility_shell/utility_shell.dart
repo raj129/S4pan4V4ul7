@@ -3,9 +3,6 @@ import 'package:flutter/material.dart';
 import 'package:photo_vault/features/calculator/presentation/theme/calculator_theme.dart';
 
 /// Chrome for the facade's utility pages.
-///
-/// Deliberately styled from [CalculatorTheme] rather than the app theme: this
-/// surface is part of the disguise and must never inherit the vault's look.
 class UtilityShell extends StatelessWidget {
   const UtilityShell({required this.child, this.title, super.key});
 

@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
@@ -16,6 +15,110 @@ enum ChatMediaPickerTab { emoji, stickers, gifs }
 
 enum _StickerSource { giphy, personal }
 
+Future<void> showChatMediaPickerSheet(
+  BuildContext context, {
+  required LocalStickerPackRepository stickerPack,
+  required Widget Function(double height) buildEmojiPicker,
+  required Widget composer,
+  required Future<void> Function(
+    Uint8List bytes,
+    MessageType type,
+    String fileName,
+  )
+  onSend,
+  required ValueChanged<String> onInsertEmoji,
+  required VoidCallback onBackspace,
+}) {
+  return showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    useSafeArea: true,
+    enableDrag: false,
+    showDragHandle: false,
+    backgroundColor: Colors.transparent,
+    builder: (_) => _DraggableChatMediaPickerSheet(
+      stickerPack: stickerPack,
+      buildEmojiPicker: buildEmojiPicker,
+      composer: composer,
+      onSend: onSend,
+      onInsertEmoji: onInsertEmoji,
+      onBackspace: onBackspace,
+    ),
+  );
+}
+
+class _DraggableChatMediaPickerSheet extends StatefulWidget {
+  const _DraggableChatMediaPickerSheet({
+    required this.stickerPack,
+    required this.buildEmojiPicker,
+    required this.composer,
+    required this.onSend,
+    required this.onInsertEmoji,
+    required this.onBackspace,
+  });
+
+  final LocalStickerPackRepository stickerPack;
+  final Widget Function(double height) buildEmojiPicker;
+  final Widget composer;
+  final Future<void> Function(
+    Uint8List bytes,
+    MessageType type,
+    String fileName,
+  )
+  onSend;
+  final ValueChanged<String> onInsertEmoji;
+  final VoidCallback onBackspace;
+
+  @override
+  State<_DraggableChatMediaPickerSheet> createState() =>
+      _DraggableChatMediaPickerSheetState();
+}
+
+class _DraggableChatMediaPickerSheetState
+    extends State<_DraggableChatMediaPickerSheet> {
+  static const _minSheetSize = 0.38;
+  static const _maxSheetSize = 0.94;
+  final _controller = DraggableScrollableController();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: MediaQuery.sizeOf(context).height * 0.94,
+      child: Align(
+        alignment: Alignment.bottomCenter,
+        child: DraggableScrollableSheet(
+          controller: _controller,
+          expand: false,
+          initialChildSize: 0.62,
+          minChildSize: _minSheetSize,
+          maxChildSize: _maxSheetSize,
+          builder: (context, scrollController) => Column(
+            children: [
+              widget.composer,
+              Expanded(
+                child: ChatMediaPickerPanel(
+                  stickerPack: widget.stickerPack,
+                  buildEmojiPicker: widget.buildEmojiPicker,
+                  onSend: widget.onSend,
+                  onInsertEmoji: widget.onInsertEmoji,
+                  onBackspace: widget.onBackspace,
+                  sheetScrollController: scrollController,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class ChatMediaPickerPanel extends StatefulWidget {
   const ChatMediaPickerPanel({
     required this.stickerPack,
@@ -23,7 +126,7 @@ class ChatMediaPickerPanel extends StatefulWidget {
     required this.onSend,
     required this.onInsertEmoji,
     required this.onBackspace,
-    required this.onClose,
+    required this.sheetScrollController,
     super.key,
   });
 
@@ -37,7 +140,7 @@ class ChatMediaPickerPanel extends StatefulWidget {
   onSend;
   final ValueChanged<String> onInsertEmoji;
   final VoidCallback onBackspace;
-  final VoidCallback onClose;
+  final ScrollController sheetScrollController;
 
   @override
   State<ChatMediaPickerPanel> createState() => _ChatMediaPickerPanelState();
@@ -388,216 +491,233 @@ class _ChatMediaPickerPanelState extends State<ChatMediaPickerPanel> {
 
   @override
   Widget build(BuildContext context) {
-    final mediaQuery = MediaQuery.of(context);
-    final availableHeight =
-        mediaQuery.size.height - mediaQuery.viewInsets.bottom;
-    final panelHeight = math
-        .min(400.0, availableHeight * 0.62)
-        .clamp(240.0, 400.0)
-        .toDouble();
     final showPersonalStickers =
         _tab == ChatMediaPickerTab.stickers &&
         _stickerSource == _StickerSource.personal;
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surface,
-        border: Border(
-          top: BorderSide(
-            color: Theme.of(
-              context,
-            ).colorScheme.outlineVariant.withValues(alpha: 0.5),
-          ),
-        ),
-      ),
-      child: SizedBox(
-        height: panelHeight,
-        child: Column(
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(8, 5, 8, 5),
-              child: SizedBox(
-                height: 36,
-                child: Stack(
-                  children: [
-                    Row(
-                      children: [
-                        IconButton(
-                          key: const ValueKey('open-picker-search'),
-                          tooltip: 'Search ${_tab.name}',
-                          visualDensity: VisualDensity.compact,
-                          constraints: const BoxConstraints.tightFor(
-                            width: 36,
-                            height: 36,
-                          ),
-                          padding: EdgeInsets.zero,
-                          onPressed: _expandSearch,
-                          icon: const Icon(Icons.search_rounded, size: 20),
+    final colors = Theme.of(context).colorScheme;
+    return CustomScrollView(
+      controller: widget.sheetScrollController,
+      physics: const ClampingScrollPhysics(),
+      slivers: [
+        SliverFillRemaining(
+          hasScrollBody: true,
+          child: Material(
+            color: colors.surface,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+            clipBehavior: Clip.antiAlias,
+            child: SafeArea(
+              top: false,
+              child: Column(
+                children: [
+                  SizedBox(
+                    key: const ValueKey('picker-drag-handle'),
+                    height: 24,
+                    child: Center(
+                      child: Container(
+                        width: 32,
+                        height: 4,
+                        decoration: BoxDecoration(
+                          color: colors.onSurfaceVariant.withValues(alpha: 0.4),
+                          borderRadius: BorderRadius.circular(4),
                         ),
-                        const SizedBox(width: 4),
-                        Container(
-                          padding: const EdgeInsets.all(2),
-                          decoration: BoxDecoration(
-                            color: Theme.of(
-                              context,
-                            ).colorScheme.surfaceContainerHigh,
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
+                      ),
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(8, 2, 8, 4),
+                    child: SizedBox(
+                      height: 40,
+                      child: Stack(
+                        children: [
+                          Row(
                             children: [
-                              _tabButton(
-                                tab: ChatMediaPickerTab.emoji,
-                                icon: Icons.emoji_emotions_outlined,
-                                label: 'Emoji',
+                              IconButton(
+                                key: const ValueKey('open-picker-search'),
+                                tooltip: 'Search ${_tab.name}',
+                                visualDensity: VisualDensity.compact,
+                                constraints: const BoxConstraints.tightFor(
+                                  width: 40,
+                                  height: 40,
+                                ),
+                                padding: EdgeInsets.zero,
+                                onPressed: _expandSearch,
+                                icon: const Icon(
+                                  Icons.search_rounded,
+                                  size: 20,
+                                ),
                               ),
-                              _tabButton(
-                                tab: ChatMediaPickerTab.stickers,
-                                icon: Icons.sticky_note_2_outlined,
-                                label: 'Stickers',
+                              Expanded(
+                                child: Center(
+                                  child: Container(
+                                    padding: const EdgeInsets.all(2),
+                                    decoration: BoxDecoration(
+                                      color: colors.surfaceContainerHigh,
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        _tabButton(
+                                          tab: ChatMediaPickerTab.emoji,
+                                          icon: Icons.emoji_emotions_outlined,
+                                          label: 'Emoji',
+                                        ),
+                                        _tabButton(
+                                          tab: ChatMediaPickerTab.stickers,
+                                          icon: Icons.sticky_note_2_outlined,
+                                          label: 'Stickers',
+                                        ),
+                                        _tabButton(
+                                          tab: ChatMediaPickerTab.gifs,
+                                          icon: Icons.gif_box_outlined,
+                                          label: 'GIFs',
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
                               ),
-                              _tabButton(
-                                tab: ChatMediaPickerTab.gifs,
-                                icon: Icons.gif_box_outlined,
-                                label: 'GIFs',
+                              IconButton(
+                                tooltip: 'Backspace',
+                                visualDensity: VisualDensity.compact,
+                                constraints: const BoxConstraints.tightFor(
+                                  width: 40,
+                                  height: 40,
+                                ),
+                                padding: EdgeInsets.zero,
+                                onPressed:
+                                    _tab == ChatMediaPickerTab.emoji &&
+                                        !_searchExpanded
+                                    ? widget.onBackspace
+                                    : null,
+                                icon: const Icon(
+                                  Icons.backspace_outlined,
+                                  size: 19,
+                                ),
                               ),
                             ],
                           ),
-                        ),
-                        IconButton(
-                          tooltip: 'Backspace',
-                          visualDensity: VisualDensity.compact,
-                          constraints: const BoxConstraints.tightFor(
-                            width: 36,
-                            height: 36,
-                          ),
-                          padding: EdgeInsets.zero,
-                          onPressed:
-                              _tab == ChatMediaPickerTab.emoji &&
-                                  !_searchExpanded
-                              ? widget.onBackspace
-                              : null,
-                          icon: const Icon(Icons.backspace_outlined, size: 19),
-                        ),
-                        const Spacer(),
-                        IconButton(
-                          tooltip: 'Close media picker',
-                          visualDensity: VisualDensity.compact,
-                          constraints: const BoxConstraints.tightFor(
-                            width: 36,
-                            height: 36,
-                          ),
-                          padding: EdgeInsets.zero,
-                          onPressed: widget.onClose,
-                          icon: const Icon(Icons.close_rounded, size: 20),
-                        ),
-                      ],
-                    ),
-                    if (_searchExpanded)
-                      Positioned(
-                        left: 0,
-                        right: 40,
-                        top: 0,
-                        bottom: 0,
-                        child: TextField(
-                          controller: _searchController,
-                          focusNode: _searchFocusNode,
-                          onChanged: _onQueryChanged,
-                          textInputAction: TextInputAction.search,
-                          maxLength: 50,
-                          decoration: InputDecoration(
-                            hintText: switch (_tab) {
-                              ChatMediaPickerTab.emoji => 'Search emoji',
-                              ChatMediaPickerTab.stickers
-                                  when showPersonalStickers =>
-                                'Search My stickers',
-                              _ => 'Search GIPHY',
-                            },
-                            prefixIcon: const Icon(
-                              Icons.search_rounded,
-                              size: 18,
-                            ),
-                            prefixIconConstraints: const BoxConstraints(
-                              minWidth: 32,
-                              minHeight: 32,
-                            ),
-                            suffixIcon: IconButton(
-                              tooltip: 'Close search',
-                              visualDensity: VisualDensity.compact,
-                              constraints: const BoxConstraints.tightFor(
-                                width: 32,
-                                height: 32,
+                          if (_searchExpanded)
+                            Positioned(
+                              left: 0,
+                              right: 40,
+                              top: 0,
+                              bottom: 0,
+                              child: TextField(
+                                controller: _searchController,
+                                focusNode: _searchFocusNode,
+                                onChanged: _onQueryChanged,
+                                textInputAction: TextInputAction.search,
+                                maxLength: 50,
+                                decoration: InputDecoration(
+                                  hintText: switch (_tab) {
+                                    ChatMediaPickerTab.emoji => 'Search emoji',
+                                    ChatMediaPickerTab.stickers
+                                        when showPersonalStickers =>
+                                      'Search My stickers',
+                                    _ => 'Search GIPHY',
+                                  },
+                                  prefixIcon: const Icon(
+                                    Icons.search_rounded,
+                                    size: 18,
+                                  ),
+                                  prefixIconConstraints: const BoxConstraints(
+                                    minWidth: 32,
+                                    minHeight: 32,
+                                  ),
+                                  suffixIcon: IconButton(
+                                    tooltip: 'Close search',
+                                    visualDensity: VisualDensity.compact,
+                                    constraints: const BoxConstraints.tightFor(
+                                      width: 32,
+                                      height: 32,
+                                    ),
+                                    padding: EdgeInsets.zero,
+                                    onPressed: _collapseSearch,
+                                    icon: const Icon(
+                                      Icons.close_rounded,
+                                      size: 18,
+                                    ),
+                                  ),
+                                  border: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(18),
+                                  ),
+                                  isDense: true,
+                                  counterText: '',
+                                  contentPadding: const EdgeInsets.symmetric(
+                                    horizontal: 8,
+                                    vertical: 8,
+                                  ),
+                                ),
                               ),
-                              padding: EdgeInsets.zero,
-                              onPressed: _collapseSearch,
-                              icon: const Icon(Icons.close_rounded, size: 18),
                             ),
-                            border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(18),
-                            ),
-                            isDense: true,
-                            counterText: '',
-                            contentPadding: const EdgeInsets.symmetric(
-                              horizontal: 8,
-                              vertical: 8,
-                            ),
-                          ),
-                        ),
-                      ),
-                  ],
-                ),
-              ),
-            ),
-            if (_tab == ChatMediaPickerTab.stickers)
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 10),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: SegmentedButton<_StickerSource>(
-                        showSelectedIcon: false,
-                        segments: const [
-                          ButtonSegment(
-                            value: _StickerSource.giphy,
-                            label: Text('Explore'),
-                          ),
-                          ButtonSegment(
-                            value: _StickerSource.personal,
-                            label: Text('My stickers'),
-                          ),
                         ],
-                        selected: {_stickerSource},
-                        onSelectionChanged: (selection) =>
-                            _selectStickerSource(selection.first),
                       ),
                     ),
-                    if (showPersonalStickers)
-                      IconButton(
-                        tooltip: 'Add sticker from device',
-                        visualDensity: VisualDensity.compact,
-                        onPressed: _importSticker,
-                        icon: const Icon(Icons.add_photo_alternate_outlined),
+                  ),
+                  if (_tab == ChatMediaPickerTab.stickers)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 10),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: SegmentedButton<_StickerSource>(
+                              showSelectedIcon: false,
+                              segments: const [
+                                ButtonSegment(
+                                  value: _StickerSource.giphy,
+                                  label: Text('Explore'),
+                                ),
+                                ButtonSegment(
+                                  value: _StickerSource.personal,
+                                  label: Text('My stickers'),
+                                ),
+                              ],
+                              selected: {_stickerSource},
+                              onSelectionChanged: (selection) =>
+                                  _selectStickerSource(selection.first),
+                            ),
+                          ),
+                          if (showPersonalStickers)
+                            IconButton(
+                              tooltip: 'Add sticker from device',
+                              visualDensity: VisualDensity.compact,
+                              onPressed: _importSticker,
+                              icon: const Icon(
+                                Icons.add_photo_alternate_outlined,
+                              ),
+                            ),
+                        ],
                       ),
-                  ],
-                ),
-              ),
-            Expanded(
-              child: PageView.builder(
-                key: const ValueKey('chat-media-pages'),
-                controller: _pageController,
-                itemCount: ChatMediaPickerTab.values.length,
-                onPageChanged: _onPageChanged,
-                itemBuilder: (context, index) =>
-                    _buildPage(ChatMediaPickerTab.values[index], panelHeight),
+                    ),
+                  Expanded(
+                    child: LayoutBuilder(
+                      builder: (context, constraints) => PageView.builder(
+                        key: const ValueKey('chat-media-pages'),
+                        controller: _pageController,
+                        itemCount: ChatMediaPickerTab.values.length,
+                        onPageChanged: _onPageChanged,
+                        itemBuilder: (context, index) => _buildPage(
+                          ChatMediaPickerTab.values[index],
+                          constraints.maxHeight,
+                        ),
+                      ),
+                    ),
+                  ),
+                  if (_showGiphy)
+                    const Padding(
+                      padding: EdgeInsets.fromLTRB(8, 2, 8, 4),
+                      child: Text(
+                        'Powered by GIPHY',
+                        style: TextStyle(fontSize: 11),
+                      ),
+                    ),
+                ],
               ),
             ),
-            if (_showGiphy)
-              const Padding(
-                padding: EdgeInsets.fromLTRB(8, 2, 8, 4),
-                child: Text('Powered by GIPHY', style: TextStyle(fontSize: 11)),
-              ),
-          ],
+          ),
         ),
-      ),
+      ],
     );
   }
 
@@ -643,7 +763,7 @@ class _ChatMediaPickerPanelState extends State<ChatMediaPickerPanel> {
     if (tab == ChatMediaPickerTab.emoji) {
       final query = _searchController.text.trim().toLowerCase();
       if (query.isNotEmpty) return _buildEmojiSearchResults(query);
-      return widget.buildEmojiPicker(math.max(180.0, panelHeight - 52));
+      return widget.buildEmojiPicker(panelHeight);
     }
     if (tab == ChatMediaPickerTab.stickers &&
         _stickerSource == _StickerSource.personal) {

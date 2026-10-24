@@ -106,22 +106,38 @@ class _ContactInfoSheetState extends State<_ContactInfoSheet> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            UserAvatar(avatar: user.avatar, name: shownName, radius: 44),
-            const SizedBox(height: AppSpacing.md),
-            Text(
-              shownName,
-              style: theme.textTheme.titleLarge,
-              textAlign: TextAlign.center,
-            ),
-            if (_initialAlias != null) ...[
-              const SizedBox(height: AppSpacing.xxs),
-              Text(
-                'Real name: ${user.displayName}',
-                style: theme.textTheme.bodyMedium?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
+            Card(
+              margin: EdgeInsets.zero,
+              color: theme.colorScheme.surfaceContainerLow,
+              child: Padding(
+                padding: const EdgeInsets.all(AppSpacing.lg),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    UserAvatar(
+                      avatar: user.avatar,
+                      name: shownName,
+                      radius: 44,
+                    ),
+                    const SizedBox(height: AppSpacing.md),
+                    Text(
+                      shownName,
+                      style: theme.textTheme.titleLarge,
+                      textAlign: TextAlign.center,
+                    ),
+                    if (_initialAlias != null) ...[
+                      const SizedBox(height: AppSpacing.xxs),
+                      Text(
+                        'Real name: ${user.displayName}',
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
               ),
-            ],
+            ),
             const SizedBox(height: AppSpacing.lg),
             TextField(
               controller: _controller,

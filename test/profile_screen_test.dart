@@ -7,6 +7,7 @@ import 'package:photo_vault/features/chat/domain/entities/chat_user.dart';
 import 'package:photo_vault/features/chat/domain/repositories/message_cache_repository.dart';
 import 'package:photo_vault/features/chat/domain/repositories/user_repository.dart';
 import 'package:photo_vault/features/chat/presentation/screens/profile_screen.dart';
+import 'package:photo_vault/core/presentation/theme/app_theme.dart';
 
 class _Store extends NoopMessageCacheRepository {
   final values = <String, String>{};
@@ -82,7 +83,9 @@ void main() {
         ),
       ],
     );
-    await tester.pumpWidget(MaterialApp.router(routerConfig: router));
+    await tester.pumpWidget(
+      MaterialApp.router(theme: AppTheme.light, routerConfig: router),
+    );
     await tester.tap(find.text('chat list'));
     await tester.pumpAndSettle();
     return (service, users);
@@ -108,6 +111,25 @@ void main() {
     expect(find.text('Profile saved.'), findsOneWidget);
     expect(service.profile!.displayName, 'New name');
     expect(users.upserts.single.displayName, 'New name');
+  });
+
+  testWidgets('avatar picker uses Material 3 tabs and photo source cards', (
+    tester,
+  ) async {
+    await pump(tester);
+    await tester.tap(find.text('Change picture'));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(TabBar), findsOneWidget);
+    expect(find.text('Default'), findsOneWidget);
+    expect(find.text('Emoji'), findsOneWidget);
+    expect(find.text('Photo'), findsOneWidget);
+
+    await tester.tap(find.text('Photo'));
+    await tester.pumpAndSettle();
+    expect(find.text('Choose from gallery'), findsOneWidget);
+    expect(find.text('Take a photo'), findsOneWidget);
+    expect(find.byType(Card), findsAtLeastNWidgets(1));
   });
 
   testWidgets('a failed save stays on the screen with an error', (

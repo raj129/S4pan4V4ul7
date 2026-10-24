@@ -431,7 +431,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
 
   void _onInputFocusChanged() {
     if (_inputFocus.hasFocus && _showEmojiPicker && mounted) {
-      setState(() => _showEmojiPicker = false);
+      Navigator.of(context).maybePop();
     }
   }
 
@@ -571,7 +571,6 @@ class _ThreadScreenState extends State<ThreadScreen> {
             ),
             _buildOfflineBanner(),
             _buildComposerSurface(context),
-            _buildEmojiPicker(),
           ],
         ),
       ),
@@ -1575,7 +1574,10 @@ class _ThreadScreenState extends State<ThreadScreen> {
 
   /// The composer surface: reply strip + edit header + input bar sharing one
   /// elevated plane.
-  Widget _buildComposerSurface(BuildContext context) {
+  Widget _buildComposerSurface(
+    BuildContext context, {
+    bool applyBottomSafeArea = true,
+  }) {
     final cs = Theme.of(context).colorScheme;
     return DecoratedBox(
       decoration: BoxDecoration(
@@ -1589,18 +1591,20 @@ class _ThreadScreenState extends State<ThreadScreen> {
         children: [
           if (_isEditing) _buildEditHeader(),
           if (!_isEditing) _buildReplyPreview(),
-          _buildInputBar(context),
+          _buildInputBar(context, applyBottomSafeArea: applyBottomSafeArea),
         ],
       ),
     );
   }
 
-  Widget _buildInputBar(BuildContext context) {
+  Widget _buildInputBar(
+    BuildContext context, {
+    bool applyBottomSafeArea = true,
+  }) {
     final cs = Theme.of(context).colorScheme;
     return SafeArea(
       top: false,
-      // The picker supplies its own bottom inset when open.
-      bottom: !_showEmojiPicker,
+      bottom: applyBottomSafeArea,
       child: Padding(
         padding: const EdgeInsets.fromLTRB(
           AppSpacing.sm,
@@ -1961,44 +1965,48 @@ class _ThreadScreenState extends State<ThreadScreen> {
     context.read<ActiveThreadCubit>().sendText(text);
   }
 
-  void _toggleEmojiPicker() {
+  Future<void> _toggleEmojiPicker() async {
     if (_showEmojiPicker) {
-      setState(() => _showEmojiPicker = false);
-      _inputFocus.requestFocus();
+      Navigator.of(context).maybePop();
       return;
     }
-    // Drop the keyboard first, otherwise both compete for the same space.
     _inputFocus.unfocus();
     setState(() => _showEmojiPicker = true);
-  }
-
-  Widget _buildEmojiPicker() {
-    if (!_showEmojiPicker) return const SizedBox.shrink();
     final cubit = context.read<ActiveThreadCubit>();
-    return ChatMediaPickerPanel(
-      stickerPack: _stickerPackFor(cubit.myUid),
-      buildEmojiPicker: (height) => ThemedEmojiPicker(
-        textEditingController: _textCtrl,
-        height: height,
-        searchHeight: height * 0.7,
-        showSearchButton: false,
-        showBackspace: false,
-        columns: 9,
-        onEmojiSelected: (category, emoji) {
-          context.read<ActiveThreadCubit>().onTextChanged(_textCtrl.text);
-        },
-      ),
-      onSend: (bytes, type, fileName) => cubit.sendMedia(
-        messageId: _uuid.v4(),
-        rawBytes: bytes,
-        type: type,
-        filename: fileName,
-        propagateFailure: true,
-      ),
-      onInsertEmoji: _insertEmoji,
-      onBackspace: _backspaceComposerText,
-      onClose: _toggleEmojiPicker,
-    );
+    try {
+      await showChatMediaPickerSheet(
+        context,
+        stickerPack: _stickerPackFor(cubit.myUid),
+        composer: BlocProvider.value(
+          value: cubit,
+          child: _buildComposerSurface(context, applyBottomSafeArea: false),
+        ),
+        buildEmojiPicker: (height) => ThemedEmojiPicker(
+          textEditingController: _textCtrl,
+          height: height,
+          searchHeight: height * 0.7,
+          showSearchButton: false,
+          showBackspace: false,
+          columns: 9,
+          onEmojiSelected: (category, emoji) {
+            context.read<ActiveThreadCubit>().onTextChanged(_textCtrl.text);
+          },
+        ),
+        onSend: (bytes, type, fileName) => cubit.sendMedia(
+          messageId: _uuid.v4(),
+          rawBytes: bytes,
+          type: type,
+          filename: fileName,
+          propagateFailure: true,
+        ),
+        onInsertEmoji: _insertEmoji,
+        onBackspace: _backspaceComposerText,
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _showEmojiPicker = false);
+      }
+    }
   }
 
   void _insertEmoji(String emoji) {

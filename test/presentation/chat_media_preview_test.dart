@@ -8,10 +8,14 @@ import 'package:provider/provider.dart';
 import 'package:image/image.dart' as img;
 import 'package:photo_vault/features/chat/application/crypto/chat_crypto_service.dart';
 import 'package:photo_vault/features/chat/application/media/android_chat_local_media.dart';
+import 'package:photo_vault/features/chat/application/media/media_send_status.dart';
 import 'package:photo_vault/features/chat/domain/entities/chat_message.dart';
 import 'package:photo_vault/features/chat/domain/repositories/message_repository.dart';
 import 'package:photo_vault/features/chat/presentation/screens/chat_image_viewer_screen.dart';
+import 'package:photo_vault/features/chat/presentation/widgets/attachment_upload_progress.dart';
 import 'package:photo_vault/features/chat/presentation/widgets/chat_media_preview.dart';
+import 'package:photo_vault/features/chat/presentation/widgets/message_bubble.dart';
+import 'package:photo_vault/core/presentation/theme/app_theme.dart';
 
 class _UnusedMedia implements MediaRepository {
   @override
@@ -96,6 +100,110 @@ void main() {
     mediaType: MessageType.image,
     mediaRef: 'image',
   );
+  const uploadStatus = MediaSendStatus(
+    phase: MediaSendPhase.uploading,
+    progress: .5,
+  );
+  const failedUploadStatus = MediaSendStatus(
+    phase: MediaSendPhase.uploading,
+    progress: .5,
+    lifecycle: MediaUploadLifecycle.failed,
+  );
+
+  testWidgets('audio upload progress appears once inside the message bubble', (
+    tester,
+  ) async {
+    final loader = _Loader();
+    var retries = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light,
+        home: Scaffold(
+          body: MessageBubble(
+            message: message.copyWith(mediaType: MessageType.audio),
+            isMine: true,
+            myUid: 'me',
+            otherUid: 'alice',
+            mediaLoader: loader,
+            onDeleteForMe: () {},
+            sendStatus: failedUploadStatus,
+            onRetry: () => retries++,
+          ),
+        ),
+      ),
+    );
+
+    expect(find.byType(AttachmentUploadProgress), findsOneWidget);
+    await tester.tap(find.text('Retry'));
+    await tester.pump();
+    expect(retries, 1);
+    await tester.pumpWidget(const SizedBox.shrink());
+    loader.dispose();
+  });
+
+  testWidgets('other attachment upload progress remains outside the bubble', (
+    tester,
+  ) async {
+    final loader = _Loader();
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light,
+        home: Scaffold(
+          body: MessageBubble(
+            message: message,
+            isMine: true,
+            myUid: 'me',
+            otherUid: 'alice',
+            mediaLoader: loader,
+            onDeleteForMe: () {},
+            sendStatus: uploadStatus,
+          ),
+        ),
+      ),
+    );
+
+    expect(find.byType(AttachmentUploadProgress), findsOneWidget);
+    await tester.pumpWidget(const SizedBox.shrink());
+    loader.dispose();
+  });
+
+  for (final mediaType in [MessageType.gif, MessageType.sticker]) {
+    testWidgets('$mediaType renders without a message bubble', (tester) async {
+      final loader = _Loader();
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: AppTheme.light,
+          home: Scaffold(
+            body: MessageBubble(
+              message: message.copyWith(mediaType: mediaType),
+              isMine: false,
+              myUid: 'me',
+              otherUid: 'alice',
+              mediaLoader: loader,
+              onDeleteForMe: () {},
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      final media = find.byType(ChatMediaPreview);
+      final bareContainer = find
+          .ancestor(of: media, matching: find.byType(AnimatedContainer))
+          .first;
+      expect(media, findsOneWidget);
+      expect(bareContainer, findsOneWidget);
+      expect(
+        (tester.widget<AnimatedContainer>(bareContainer).decoration!
+                as BoxDecoration)
+            .color,
+        Colors.transparent,
+      );
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      loader.dispose();
+    });
+  }
 
   testWidgets('same-reference seed immediately updates an open thumbnail', (
     tester,

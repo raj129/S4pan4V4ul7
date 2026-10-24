@@ -180,113 +180,117 @@ class _ProfileScreenState extends State<ProfileScreen> {
         body: ListView(
           padding: const EdgeInsets.all(AppSpacing.lg),
           children: [
-            Container(
-              padding: const EdgeInsets.symmetric(
-                vertical: AppSpacing.xl,
-                horizontal: AppSpacing.lg,
-              ),
-              decoration: BoxDecoration(
-                color: theme.colorScheme.surfaceContainerLow,
+            Card(
+              margin: EdgeInsets.zero,
+              elevation: 0,
+              color: theme.colorScheme.surfaceContainerLow,
+              shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(24),
-                border: Border.all(
-                  color: theme.colorScheme.outlineVariant.withValues(alpha: 0.5),
-                  width: 1,
+                side: BorderSide(
+                  color: theme.colorScheme.outlineVariant.withValues(
+                    alpha: 0.5,
+                  ),
                 ),
               ),
-              child: Column(
-                children: [
-                  GestureDetector(
-                    onTap: _saving ? null : _pickAvatar,
-                    child: Stack(
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.all(4),
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            border: Border.all(
-                              color: theme.colorScheme.primary.withValues(alpha: 0.35),
-                              width: 2.5,
-                            ),
-                          ),
-                          child: _pickedPhoto != null
-                              ? CircleAvatar(
-                                  radius: 54,
-                                  backgroundImage: MemoryImage(_pickedPhoto!),
-                                )
-                              : UserAvatar(
-                                  avatar: _avatar,
-                                  name: shownName,
-                                  radius: 54,
-                                ),
-                        ),
-                        Positioned(
-                          right: 4,
-                          bottom: 4,
-                          child: Container(
-                            width: 36,
-                            height: 36,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  vertical: AppSpacing.xl,
+                  horizontal: AppSpacing.lg,
+                ),
+                child: Column(
+                  children: [
+                    InkWell(
+                      customBorder: const CircleBorder(),
+                      onTap: _saving ? null : _pickAvatar,
+                      child: Stack(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(4),
                             decoration: BoxDecoration(
-                              color: theme.colorScheme.primary,
                               shape: BoxShape.circle,
-                              boxShadow: [
-                                BoxShadow(
-                                  color: Colors.black.withValues(alpha: 0.2),
-                                  blurRadius: 6,
-                                  offset: const Offset(0, 2),
+                              border: Border.all(
+                                color: theme.colorScheme.primary.withValues(
+                                  alpha: 0.35,
                                 ),
-                              ],
+                                width: 2.5,
+                              ),
                             ),
-                            child: Icon(
-                              Icons.camera_alt_rounded,
-                              size: 18,
-                              color: theme.colorScheme.onPrimary,
+                            child: _pickedPhoto != null
+                                ? CircleAvatar(
+                                    radius: 54,
+                                    backgroundImage: MemoryImage(_pickedPhoto!),
+                                  )
+                                : UserAvatar(
+                                    avatar: _avatar,
+                                    name: shownName,
+                                    radius: 54,
+                                  ),
+                          ),
+                          Positioned(
+                            right: 4,
+                            bottom: 4,
+                            child: Material(
+                              color: theme.colorScheme.primary,
+                              shape: const CircleBorder(),
+                              elevation: 2,
+                              child: SizedBox.square(
+                                dimension: 36,
+                                child: Icon(
+                                  Icons.camera_alt_rounded,
+                                  size: 18,
+                                  color: theme.colorScheme.onPrimary,
+                                ),
+                              ),
                             ),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: AppSpacing.md),
-                  Text(
-                    shownName,
-                    style: theme.textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.w700,
+                    const SizedBox(height: AppSpacing.md),
+                    Text(
+                      shownName,
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                     ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  const SizedBox(height: AppSpacing.xs),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: theme.colorScheme.surfaceContainerHighest,
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          Icons.alternate_email_rounded,
-                          size: 13,
-                          color: theme.colorScheme.onSurfaceVariant,
-                        ),
-                        const SizedBox(width: 4),
-                        Text(
-                          widget.me.email,
-                          style: theme.textTheme.labelSmall?.copyWith(
+                    const SizedBox(height: AppSpacing.xs),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 4,
+                      ),
+                      decoration: BoxDecoration(
+                        color: theme.colorScheme.surfaceContainerHighest,
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.alternate_email_rounded,
+                            size: 13,
                             color: theme.colorScheme.onSurfaceVariant,
                           ),
-                        ),
-                      ],
+                          const SizedBox(width: 4),
+                          Text(
+                            widget.me.email,
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: AppSpacing.md),
-                  OutlinedButton.icon(
-                    onPressed: _saving ? null : _pickAvatar,
-                    icon: const Icon(Icons.edit_outlined, size: 18),
-                    label: const Text('Change picture'),
-                  ),
-                ],
+                    const SizedBox(height: AppSpacing.md),
+                    OutlinedButton.icon(
+                      onPressed: _saving ? null : _pickAvatar,
+                      icon: const Icon(Icons.edit_outlined, size: 18),
+                      label: const Text('Change picture'),
+                    ),
+                  ],
+                ),
               ),
             ),
             const SizedBox(height: AppSpacing.xl),
@@ -345,18 +349,9 @@ class _AvatarPickerSheet extends StatelessWidget {
           children: [
             const TabBar(
               tabs: [
-                Tab(
-                  icon: Icon(Icons.palette_outlined),
-                  text: 'Default',
-                ),
-                Tab(
-                  icon: Icon(Icons.emoji_emotions_outlined),
-                  text: 'Emoji',
-                ),
-                Tab(
-                  icon: Icon(Icons.photo_camera_outlined),
-                  text: 'Photo',
-                ),
+                Tab(icon: Icon(Icons.palette_outlined), text: 'Default'),
+                Tab(icon: Icon(Icons.emoji_emotions_outlined), text: 'Emoji'),
+                Tab(icon: Icon(Icons.photo_camera_outlined), text: 'Photo'),
               ],
             ),
             Expanded(
@@ -399,8 +394,10 @@ class _AvatarPickerSheet extends StatelessWidget {
                               shape: BoxShape.circle,
                               boxShadow: [
                                 BoxShadow(
-                                  color: avatarPresetColors[i % avatarPresetColors.length]
-                                      .withValues(alpha: 0.3),
+                                  color:
+                                      avatarPresetColors[i %
+                                              avatarPresetColors.length]
+                                          .withValues(alpha: 0.3),
                                   blurRadius: 4,
                                   offset: const Offset(0, 2),
                                 ),
@@ -428,7 +425,7 @@ class _AvatarPickerSheet extends StatelessWidget {
                       children: [
                         _PhotoSourceCard(
                           icon: Icons.photo_library_rounded,
-                          color: const Color(0xFF7C4DFF),
+                          color: theme.colorScheme.primary,
                           title: 'Choose from gallery',
                           subtitle: 'Select an existing image from your device',
                           onTap: () =>
@@ -437,7 +434,7 @@ class _AvatarPickerSheet extends StatelessWidget {
                         const SizedBox(height: AppSpacing.md),
                         _PhotoSourceCard(
                           icon: Icons.photo_camera_rounded,
-                          color: const Color(0xFFE91E63),
+                          color: theme.colorScheme.secondary,
                           title: 'Take a photo',
                           subtitle: 'Use your camera to take a new picture',
                           onTap: () =>

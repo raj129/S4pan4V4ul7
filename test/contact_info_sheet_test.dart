@@ -6,6 +6,7 @@ import 'package:photo_vault/features/chat/domain/entities/chat_user.dart';
 import 'package:photo_vault/features/chat/domain/repositories/message_cache_repository.dart';
 import 'package:photo_vault/features/chat/domain/repositories/user_repository.dart';
 import 'package:photo_vault/features/chat/presentation/widgets/contact_info_sheet.dart';
+import 'package:photo_vault/core/presentation/theme/app_theme.dart';
 
 class _Store extends NoopMessageCacheRepository {
   final values = <String, String>{};
@@ -55,6 +56,7 @@ void main() {
     );
     await tester.pumpWidget(
       MaterialApp(
+        theme: AppTheme.light,
         home: Scaffold(
           body: Builder(
             builder: (context) => TextButton(
@@ -102,6 +104,19 @@ void main() {
     await tester.pumpAndSettle();
     expect(service.aliasFor('a'), isNull);
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('nickname sheet uses shared Material 3 card and actions', (
+    tester,
+  ) async {
+    await pumpHost(tester);
+    await open(tester);
+
+    final card = tester.widget<Card>(find.byType(Card));
+    expect(card.color, AppTheme.light.colorScheme.surfaceContainerLow);
+    expect(find.byType(TextField), findsOneWidget);
+    expect(find.byType(FilledButton), findsOneWidget);
+    expect(find.byType(OutlinedButton), findsOneWidget);
   });
 
   testWidgets('a blank nickname removes it', (tester) async {

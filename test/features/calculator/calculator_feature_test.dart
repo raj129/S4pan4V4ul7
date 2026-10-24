@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:photo_vault/core/presentation/theme/app_theme.dart';
 import 'package:photo_vault/features/calculator/presentation/calculator_feature.dart';
+import 'package:photo_vault/features/calculator/presentation/theme/calculator_theme.dart';
 import 'package:photo_vault/features/calculator/presentation/widgets/display_panel.dart';
 import 'package:photo_vault/features/calculator/presentation/widgets/keypad_layouts.dart';
 
@@ -15,6 +17,8 @@ void main() {
   }) {
     return tester.pumpWidget(
       MaterialApp(
+        theme: AppTheme.light,
+        darkTheme: AppTheme.dark,
         home: Scaffold(
           body: SizedBox(
             height: 700,
@@ -42,6 +46,32 @@ void main() {
     await tester.pump();
 
     expect(displayText('5'), findsOneWidget);
+  });
+
+  testWidgets('calculator keys retain the dedicated calculator palette', (
+    tester,
+  ) async {
+    await pumpCalculator(tester);
+
+    final digit = tester.widget<Material>(
+      find
+          .descendant(
+            of: find.byKey(const ValueKey<String>('digit-2')),
+            matching: find.byType(Material),
+          )
+          .first,
+    );
+    final operator = tester.widget<Material>(
+      find
+          .descendant(
+            of: find.byKey(const ValueKey<String>('add')),
+            matching: find.byType(Material),
+          )
+          .first,
+    );
+    expect(digit.color, CalculatorTheme.keyBackground);
+    expect(operator.color, CalculatorTheme.accent);
+    expect(find.byType(FilledButton), findsNothing);
   });
 
   testWidgets('AC clears the display', (tester) async {

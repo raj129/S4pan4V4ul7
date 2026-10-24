@@ -180,13 +180,17 @@ class MessageBubble extends StatelessWidget {
         isMine &&
         (message.mediaType == MessageType.image ||
             message.mediaType == MessageType.video);
+    final bareAnimation =
+        message.mediaType == MessageType.gif ||
+        message.mediaType == MessageType.sticker;
+    final bareAttachment = bareOutgoingMedia || bareAnimation;
 
     final shape = ChatBubbleShape(
       isMine: isMine,
-      withTail: isFirstInGroup && !bare && !bareOutgoingMedia,
+      withTail: isFirstInGroup && !bare && !bareAttachment,
     );
 
-    final bubble = bare || bareOutgoingMedia
+    final bubble = bare || bareAttachment
         ? AnimatedContainer(
             duration: AppDuration.normal,
             decoration: BoxDecoration(
@@ -194,7 +198,7 @@ class MessageBubble extends StatelessWidget {
                   ? cs.tertiaryContainer
                   : Colors.transparent,
               borderRadius: AppRadius.all(AppRadius.sm),
-              border: bareOutgoingMedia && isHighlighted
+              border: bareAttachment && isHighlighted
                   ? Border.all(color: cs.tertiary, width: 2)
                   : null,
             ),
@@ -209,6 +213,7 @@ class MessageBubble extends StatelessWidget {
               onCancelUpload: onCancelUpload,
               onPauseUpload: onPauseUpload,
               onResumeUpload: onResumeUpload,
+              onRetry: onRetry,
               onTapQuote: onTapQuote,
               textColor: cs.onSurface,
               metaColor: cs.onSurfaceVariant,
@@ -241,6 +246,7 @@ class MessageBubble extends StatelessWidget {
                 onCancelUpload: onCancelUpload,
                 onPauseUpload: onPauseUpload,
                 onResumeUpload: onResumeUpload,
+                onRetry: onRetry,
                 onTapQuote: onTapQuote,
                 textColor: isHighlighted ? cs.onTertiaryContainer : textColor,
                 metaColor: isHighlighted ? cs.onTertiaryContainer : textColor,
@@ -302,7 +308,7 @@ class MessageBubble extends StatelessWidget {
                 ),
               ),
             ),
-            if (sendStatus != null)
+            if (sendStatus != null && message.mediaType != MessageType.audio)
               AttachmentUploadProgress(
                 status: sendStatus!,
                 onPause: onPauseUpload,
@@ -503,6 +509,7 @@ class _BubbleContent extends StatelessWidget {
     this.onCancelUpload,
     this.onPauseUpload,
     this.onResumeUpload,
+    this.onRetry,
   });
 
   final ChatMessage message;
@@ -523,6 +530,7 @@ class _BubbleContent extends StatelessWidget {
   final VoidCallback? onCancelUpload;
   final VoidCallback? onPauseUpload;
   final VoidCallback? onResumeUpload;
+  final FutureOr<void> Function()? onRetry;
 
   @override
   Widget build(BuildContext context) {
@@ -571,6 +579,7 @@ class _BubbleContent extends StatelessWidget {
             onCancel: onCancelUpload,
             onPause: onPauseUpload,
             onResume: onResumeUpload,
+            onRetry: onRetry,
           )
         else if (message.mediaType == MessageType.audio &&
             message.mediaRef != null)

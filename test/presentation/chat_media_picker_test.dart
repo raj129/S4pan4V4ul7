@@ -28,36 +28,59 @@ void main() {
     if (await root.exists()) await root.delete(recursive: true);
   });
 
-  testWidgets('offers Emoji, Stickers, and GIF tabs in one panel', (
+  testWidgets('offers a draggable Emoji, Stickers, and GIF picker', (
     tester,
   ) async {
     String? insertedEmoji;
     var backspacePresses = 0;
     await tester.pumpWidget(
       MaterialApp(
-        home: Scaffold(
-          body: ChatMediaPickerPanel(
-            stickerPack: LocalStickerPackRepository(
-              userId: 'test-user',
-              rootDirectory: root,
-              keyStore: _MemoryStickerKeyStore(),
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: Center(
+              child: FilledButton(
+                onPressed: () => showChatMediaPickerSheet(
+                  context,
+                  stickerPack: LocalStickerPackRepository(
+                    userId: 'test-user',
+                    rootDirectory: root,
+                    keyStore: _MemoryStickerKeyStore(),
+                  ),
+                  buildEmojiPicker: (_) =>
+                      const Center(child: Text('Emoji grid')),
+                  composer: const SizedBox(
+                    key: ValueKey('visible-chat-composer'),
+                    height: 56,
+                    child: Center(child: Text('Draft stays visible')),
+                  ),
+                  onSend: (_, _, _) async {},
+                  onInsertEmoji: (emoji) => insertedEmoji = emoji,
+                  onBackspace: () => backspacePresses++,
+                ),
+                child: const Text('Open picker'),
+              ),
             ),
-            buildEmojiPicker: (_) => const Center(child: Text('Emoji grid')),
-            onSend: (_, _, _) async {},
-            onInsertEmoji: (emoji) => insertedEmoji = emoji,
-            onBackspace: () => backspacePresses++,
-            onClose: () {},
           ),
         ),
       ),
     );
+    await tester.tap(find.text('Open picker'));
     await tester.pumpAndSettle();
 
+    expect(find.byType(ChatMediaPickerPanel), findsOneWidget);
+    expect(find.text('Draft stays visible'), findsOneWidget);
+    expect(
+      tester
+          .getRect(find.byKey(const ValueKey('visible-chat-composer')))
+          .bottom,
+      lessThanOrEqualTo(tester.getRect(find.byType(ChatMediaPickerPanel)).top),
+    );
     expect(find.byTooltip('Emoji'), findsOneWidget);
     expect(find.byTooltip('Stickers'), findsOneWidget);
     expect(find.byTooltip('GIFs'), findsOneWidget);
     expect(find.byType(TextField), findsNothing);
     expect(find.text('Emoji grid'), findsOneWidget);
+    expect(find.byTooltip('Close media picker'), findsNothing);
     expect(
       tester.getRect(find.byTooltip('Search emoji')).left,
       lessThan(tester.getRect(find.byTooltip('Emoji')).left),
@@ -65,6 +88,29 @@ void main() {
     expect(
       tester.getRect(find.byTooltip('Backspace')).left,
       greaterThan(tester.getRect(find.byTooltip('GIFs')).left),
+    );
+    final tabBounds = Rect.fromLTRB(
+      tester.getRect(find.byTooltip('Emoji')).left,
+      tester.getRect(find.byTooltip('Emoji')).top,
+      tester.getRect(find.byTooltip('GIFs')).right,
+      tester.getRect(find.byTooltip('GIFs')).bottom,
+    );
+    expect(
+      tabBounds.center.dx,
+      closeTo(tester.getRect(find.byType(ChatMediaPickerPanel)).center.dx, 3),
+    );
+
+    final initialHeight = tester
+        .getSize(find.byType(ChatMediaPickerPanel))
+        .height;
+    await tester.drag(
+      find.byKey(const ValueKey('picker-drag-handle')),
+      const Offset(0, -100),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      tester.getSize(find.byType(ChatMediaPickerPanel)).height,
+      greaterThan(initialHeight + 50),
     );
 
     await tester.tap(find.byTooltip('Backspace'));
@@ -115,5 +161,9 @@ void main() {
       findsOneWidget,
     );
     expect(find.text('Powered by GIPHY'), findsOneWidget);
+
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(find.byType(ChatMediaPickerPanel), findsNothing);
   });
 }
