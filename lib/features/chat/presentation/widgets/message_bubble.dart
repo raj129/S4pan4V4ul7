@@ -54,6 +54,7 @@ class MessageBubble extends StatelessWidget {
     this.onReact,
     this.onEdit,
     this.onSaveToVault,
+    this.onSaveAsSticker,
     this.onForward,
     this.onTapQuote,
     this.onRetry,
@@ -92,6 +93,9 @@ class MessageBubble extends StatelessWidget {
 
   /// Copy this attachment into the encrypted photo vault.
   final VoidCallback? onSaveToVault;
+
+  /// Save an image, GIF, or sticker to the local personal sticker pack.
+  final VoidCallback? onSaveAsSticker;
 
   /// Re-send this message into another conversation.
   final VoidCallback? onForward;
@@ -441,6 +445,15 @@ class MessageBubble extends StatelessWidget {
                   onSaveToVault!();
                 },
               ),
+            if (onSaveAsSticker != null)
+              ListTile(
+                leading: const Icon(Icons.bookmark_add_outlined),
+                title: const Text('Add to My stickers'),
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  onSaveAsSticker!();
+                },
+              ),
             ListTile(
               leading: Icon(Icons.delete_outline_rounded, color: cs.error),
               title: Text('Delete for me', style: TextStyle(color: cs.error)),
@@ -705,6 +718,8 @@ class ThemedEmojiPicker extends StatefulWidget {
     this.height = 280,
     this.searchHeight = 170,
     this.showBackspace = true,
+    this.showSearchButton = true,
+    this.columns = 8,
   });
 
   final OnEmojiSelected onEmojiSelected;
@@ -712,6 +727,8 @@ class ThemedEmojiPicker extends StatefulWidget {
   final double height;
   final double searchHeight;
   final bool showBackspace;
+  final bool showSearchButton;
+  final int columns;
 
   @override
   State<ThemedEmojiPicker> createState() => _ThemedEmojiPickerState();
@@ -734,7 +751,7 @@ class _ThemedEmojiPickerState extends State<ThemedEmojiPicker> {
       height: height,
       checkPlatformCompatibility: true,
       emojiViewConfig: EmojiViewConfig(
-        columns: 8,
+        columns: widget.columns,
         emojiSizeMax: 28,
         backgroundColor: bg,
       ),
@@ -751,7 +768,7 @@ class _ThemedEmojiPickerState extends State<ThemedEmojiPicker> {
         buttonColor: Colors.transparent,
         buttonIconColor: cs.onSurfaceVariant,
         showBackspaceButton: widget.showBackspace,
-        showSearchViewButton: true,
+        showSearchViewButton: widget.showSearchButton,
       ),
       searchViewConfig: SearchViewConfig(
         backgroundColor: bg,

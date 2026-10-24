@@ -3,7 +3,7 @@ import 'package:equatable/equatable.dart';
 import 'message_metadata.dart';
 import 'message_reply.dart';
 
-enum MessageType { text, image, video, audio, file, liveLocation }
+enum MessageType { text, image, gif, sticker, video, audio, file, liveLocation }
 
 enum DeleteScope { forMe, forEveryone }
 
@@ -110,6 +110,8 @@ class ChatMessage extends Equatable {
   static String mediaPreviewFor(MessageType? type, {String? filename}) =>
       switch (type) {
         MessageType.liveLocation => 'Live location',
+        MessageType.gif => 'GIF',
+        MessageType.sticker => 'Sticker',
         MessageType.file || MessageType.audio =>
           filename == null || filename.isEmpty ? 'Document' : filename,
         _ => '',

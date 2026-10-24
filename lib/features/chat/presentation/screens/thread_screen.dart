@@ -8,6 +8,7 @@ import '../../application/services/chat_backup_scheduler.dart';
 import '../../application/media/android_chat_secure_media_service.dart';
 import 'package:photo_vault/core/app/external_activity_guard.dart';
 import 'package:file_picker/file_picker.dart';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -26,6 +27,7 @@ import '../../application/services/chat_notification_service.dart';
 import 'package:photo_vault/core/integrations/chat_vault_bridge.dart';
 import '../../application/media/image_compressor.dart';
 import '../../application/services/profile_service.dart';
+import '../../data/repositories/local_sticker_pack_repository.dart';
 import '../../domain/entities/chat_message.dart';
 import '../../domain/entities/message_metadata.dart';
 import '../../domain/entities/chat_thread.dart';
@@ -50,6 +52,7 @@ import '../widgets/user_avatar.dart';
 import '../widgets/typing_indicator.dart';
 import '../widgets/vault_picker_sheet.dart';
 import '../widgets/chat_audio_recorder.dart';
+import '../widgets/chat_media_picker.dart';
 import 'chat_saved_attachments_screen.dart';
 
 /// Arguments needed to build [ThreadScreen].
@@ -162,6 +165,8 @@ class _ThreadScreenState extends State<ThreadScreen> {
   bool _recoveringCamera = false;
   bool _capturingCamera = false;
   final Set<String> _cameraShown = {};
+  String? _stickerPackUserId;
+  LocalStickerPackRepository? _stickerPackRepository;
 
   bool get _isEditing => _editingMessage != null;
 
@@ -948,6 +953,16 @@ class _ThreadScreenState extends State<ThreadScreen> {
               onSaveToVault: msg.isMedia && msg.senderId != cubit.myUid
                   ? () => _saveToVault(msg)
                   : null,
+              onSaveAsSticker:
+                  msg.mediaRef != null &&
+                      state.uploadProgress[msg.messageId] == null &&
+                      const {
+                        MessageType.image,
+                        MessageType.gif,
+                        MessageType.sticker,
+                      }.contains(msg.mediaType)
+                  ? () => unawaited(_saveAsSticker(msg, cubit))
+                  : null,
               onForward: msg.mediaType == MessageType.liveLocation
                   ? null
                   : () => _promptForward(msg),
@@ -1616,7 +1631,9 @@ class _ThreadScreenState extends State<ThreadScreen> {
                       icon: _showEmojiPicker
                           ? Icons.keyboard_outlined
                           : Icons.emoji_emotions_outlined,
-                      tooltip: _showEmojiPicker ? 'Keyboard' : 'Emoji',
+                      tooltip: _showEmojiPicker
+                          ? 'Keyboard'
+                          : 'Emoji, stickers, and GIFs',
                       onPressed: _toggleEmojiPicker,
                     ),
                     Expanded(
@@ -1688,6 +1705,75 @@ class _ThreadScreenState extends State<ThreadScreen> {
         crypto: cubit.cryptoService,
         currentUid: () => widget.mediaLoader.accountId,
       );
+
+  Future<void> _saveAsSticker(
+    ChatMessage message,
+    ActiveThreadCubit cubit,
+  ) async {
+    final storagePath = message.mediaRef;
+    if (storagePath == null) return;
+    Uint8List? bytes;
+    try {
+      bytes = await widget.mediaLoader.fetchUncached(
+        threadId: message.threadId,
+        storagePath: storagePath,
+        senderId: message.senderId,
+      );
+      final extension = _stickerExtension(bytes);
+      await _stickerPackFor(
+        cubit.myUid,
+      ).addSticker(bytes: bytes, extension: extension, label: 'Chat sticker');
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Added to My stickers')));
+      }
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not save sticker: $error')),
+        );
+      }
+    } finally {
+      bytes?.fillRange(0, bytes.length, 0);
+    }
+  }
+
+  String _stickerExtension(Uint8List bytes) {
+    if (bytes.length >= 6 &&
+        bytes[0] == 0x47 &&
+        bytes[1] == 0x49 &&
+        bytes[2] == 0x46) {
+      return 'gif';
+    }
+    if (bytes.length >= 12 &&
+        bytes[0] == 0x52 &&
+        bytes[1] == 0x49 &&
+        bytes[2] == 0x46 &&
+        bytes[3] == 0x46 &&
+        bytes[8] == 0x57 &&
+        bytes[9] == 0x45 &&
+        bytes[10] == 0x42 &&
+        bytes[11] == 0x50) {
+      return 'webp';
+    }
+    if (bytes.length >= 8 &&
+        bytes[0] == 0x89 &&
+        bytes[1] == 0x50 &&
+        bytes[2] == 0x4e &&
+        bytes[3] == 0x47) {
+      return 'png';
+    }
+    if (bytes.length >= 3 &&
+        bytes[0] == 0xff &&
+        bytes[1] == 0xd8 &&
+        bytes[2] == 0xff) {
+      return 'jpg';
+    }
+    throw const FormatException(
+      'Only GIF, WebP, PNG, or JPEG images can be saved as stickers.',
+    );
+  }
 
   Future<void> _deleteOwnedCameraCopy(XFile source) async {
     final file = File(source.path);
@@ -1888,14 +1974,86 @@ class _ThreadScreenState extends State<ThreadScreen> {
 
   Widget _buildEmojiPicker() {
     if (!_showEmojiPicker) return const SizedBox.shrink();
-    return ThemedEmojiPicker(
-      textEditingController: _textCtrl,
-      onEmojiSelected: (category, emoji) {
-        // The controller is updated by the picker itself; this only keeps
-        // the typing indicator in sync.
-        context.read<ActiveThreadCubit>().onTextChanged(_textCtrl.text);
-      },
+    final cubit = context.read<ActiveThreadCubit>();
+    return ChatMediaPickerPanel(
+      stickerPack: _stickerPackFor(cubit.myUid),
+      buildEmojiPicker: (height) => ThemedEmojiPicker(
+        textEditingController: _textCtrl,
+        height: height,
+        searchHeight: height * 0.7,
+        showSearchButton: false,
+        showBackspace: false,
+        columns: 9,
+        onEmojiSelected: (category, emoji) {
+          context.read<ActiveThreadCubit>().onTextChanged(_textCtrl.text);
+        },
+      ),
+      onSend: (bytes, type, fileName) => cubit.sendMedia(
+        messageId: _uuid.v4(),
+        rawBytes: bytes,
+        type: type,
+        filename: fileName,
+        propagateFailure: true,
+      ),
+      onInsertEmoji: _insertEmoji,
+      onBackspace: _backspaceComposerText,
+      onClose: _toggleEmojiPicker,
     );
+  }
+
+  void _insertEmoji(String emoji) {
+    final current = _textCtrl.value;
+    final text = current.text;
+    final selection = current.selection;
+    final start = selection.isValid && selection.start <= text.length
+        ? selection.start
+        : text.length;
+    final end = selection.isValid && selection.end <= text.length
+        ? selection.end
+        : start;
+    final updated = text.replaceRange(start, end, emoji);
+    _textCtrl.value = TextEditingValue(
+      text: updated,
+      selection: TextSelection.collapsed(offset: start + emoji.length),
+      composing: TextRange.empty,
+    );
+    context.read<ActiveThreadCubit>().onTextChanged(updated);
+  }
+
+  void _backspaceComposerText() {
+    final current = _textCtrl.value;
+    final text = current.text;
+    final selection = current.selection;
+    late final String updated;
+    late final int cursor;
+    if (selection.isValid && selection.start != selection.end) {
+      updated = text.replaceRange(selection.start, selection.end, '');
+      cursor = selection.start;
+    } else {
+      final offset = selection.isValid ? selection.extentOffset : text.length;
+      if (offset <= 0 || offset > text.length) return;
+      final before = text
+          .substring(0, offset)
+          .characters
+          .skipLast(1)
+          .toString();
+      updated = before + text.substring(offset);
+      cursor = before.length;
+    }
+    _textCtrl.value = TextEditingValue(
+      text: updated,
+      selection: TextSelection.collapsed(offset: cursor),
+      composing: TextRange.empty,
+    );
+    context.read<ActiveThreadCubit>().onTextChanged(updated);
+  }
+
+  LocalStickerPackRepository _stickerPackFor(String userId) {
+    if (_stickerPackUserId != userId) {
+      _stickerPackUserId = userId;
+      _stickerPackRepository = LocalStickerPackRepository(userId: userId);
+    }
+    return _stickerPackRepository!;
   }
 
   Future<void> _pickMedia(BuildContext context) async {
@@ -2874,9 +3032,9 @@ class _AttachmentOption extends StatelessWidget {
               textAlign: TextAlign.center,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                fontWeight: FontWeight.w600,
-              ),
+              style: Theme.of(
+                context,
+              ).textTheme.labelSmall?.copyWith(fontWeight: FontWeight.w600),
             ),
           ],
         ),

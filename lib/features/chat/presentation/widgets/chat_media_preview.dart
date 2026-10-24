@@ -219,7 +219,9 @@ class _ChatMediaPreviewState extends State<ChatMediaPreview> {
     // Reserve the final size up front using the clear-text dimensions, so the
     // bubble does not jump when the decrypted image arrives.
     const width = 220.0;
-    final height = (width / (meta?.aspectRatio ?? 4 / 3)).clamp(80.0, 320.0);
+    final height = widget.message.mediaType == MessageType.sticker
+        ? width
+        : (width / (meta?.aspectRatio ?? 4 / 3)).clamp(80.0, 320.0);
 
     return GestureDetector(
       onTap: widget.onTap,
@@ -384,7 +386,11 @@ class _ChatMediaPreviewState extends State<ChatMediaPreview> {
       children: [
         Image(
           image: _previewImage!,
-          fit: BoxFit.cover,
+          fit:
+              widget.message.mediaType == MessageType.gif ||
+                  widget.message.mediaType == MessageType.sticker
+              ? BoxFit.contain
+              : BoxFit.cover,
           // Videos have no decodable poster frame yet; show a
           // neutral tile under the play button instead.
           errorBuilder: (_, _, _) => const ColoredBox(
@@ -401,8 +407,7 @@ class _ChatMediaPreviewState extends State<ChatMediaPreview> {
             ),
           ),
         ),
-        if (widget.sendStatus != null)
-          _buildUploadOverlay(),
+        if (widget.sendStatus != null) _buildUploadOverlay(),
         if (widget.message.mediaType == MessageType.video &&
             widget.sendStatus == null)
           const Center(
