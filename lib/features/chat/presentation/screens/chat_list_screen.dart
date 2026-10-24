@@ -107,9 +107,17 @@ class _ChatListScreenState extends State<ChatListScreen> {
             ? TextField(
                 controller: _searchController,
                 autofocus: true,
-                decoration: const InputDecoration(
+                style: Theme.of(context).textTheme.bodyLarge,
+                decoration: InputDecoration(
                   hintText: 'Search conversations…',
+                  hintStyle: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
                   border: InputBorder.none,
+                  enabledBorder: InputBorder.none,
+                  focusedBorder: InputBorder.none,
+                  contentPadding: EdgeInsets.zero,
+                  filled: false,
                 ),
               )
             : const Text('Chats'),

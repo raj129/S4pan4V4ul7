@@ -31,24 +31,38 @@ class AppNavigationDrawer extends StatelessWidget {
         Padding(
           padding: const EdgeInsets.fromLTRB(
             AppSpacing.xl,
-            AppSpacing.xl,
-            AppSpacing.xl,
             AppSpacing.xxl,
+            AppSpacing.xl,
+            AppSpacing.lg,
           ),
           child: Row(
             children: [
-              CircleAvatar(
-                backgroundColor: theme.colorScheme.primaryContainer,
-                foregroundColor: theme.colorScheme.onPrimaryContainer,
-                child: const Icon(Icons.lock_outline_rounded),
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.primaryContainer,
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(
+                  Icons.lock_outline_rounded,
+                  color: theme.colorScheme.onPrimaryContainer,
+                  size: 22,
+                ),
               ),
               const SizedBox(width: AppSpacing.md),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    Text('Photo Vault', style: theme.textTheme.titleMedium),
-                    const SizedBox(height: AppSpacing.xxs),
+                    Text(
+                      'Photo Vault',
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
                     Text(
                       'Encrypted private space',
                       style: theme.textTheme.bodySmall?.copyWith(
@@ -61,8 +75,13 @@ class AppNavigationDrawer extends StatelessWidget {
             ],
           ),
         ),
-        const Divider(),
-        const SizedBox(height: AppSpacing.xs),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
+          child: Divider(
+            color: theme.colorScheme.outlineVariant.withValues(alpha: 0.5),
+          ),
+        ),
+        const SizedBox(height: AppSpacing.sm),
         const NavigationDrawerDestination(
           icon: Icon(Icons.chat_bubble_outline),
           selectedIcon: Icon(Icons.chat_bubble),

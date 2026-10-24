@@ -21,6 +21,9 @@ Future<void> showContactInfoSheet(
     isScrollControlled: true,
     useSafeArea: true,
     showDragHandle: true,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+    ),
     builder: (_) => _ContactInfoSheet(
       service: profileService,
       user: user,
@@ -99,38 +102,68 @@ class _ContactInfoSheetState extends State<_ContactInfoSheet> {
       child: SingleChildScrollView(
         padding: const EdgeInsets.fromLTRB(
           AppSpacing.lg,
-          0,
+          AppSpacing.xs,
           AppSpacing.lg,
           AppSpacing.lg,
         ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Card(
               margin: EdgeInsets.zero,
+              elevation: 0,
               color: theme.colorScheme.surfaceContainerLow,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(24),
+                side: BorderSide(
+                  color: theme.colorScheme.outlineVariant.withValues(alpha: 0.5),
+                ),
+              ),
               child: Padding(
-                padding: const EdgeInsets.all(AppSpacing.lg),
+                padding: const EdgeInsets.all(AppSpacing.xl),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    UserAvatar(
-                      avatar: user.avatar,
-                      name: shownName,
-                      radius: 44,
+                    Container(
+                      padding: const EdgeInsets.all(3),
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                          color: theme.colorScheme.primary.withValues(alpha: 0.35),
+                          width: 2,
+                        ),
+                      ),
+                      child: UserAvatar(
+                        avatar: user.avatar,
+                        name: shownName,
+                        radius: 44,
+                      ),
                     ),
                     const SizedBox(height: AppSpacing.md),
                     Text(
                       shownName,
-                      style: theme.textTheme.titleLarge,
+                      style: theme.textTheme.headlineSmall?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
                       textAlign: TextAlign.center,
                     ),
                     if (_initialAlias != null) ...[
-                      const SizedBox(height: AppSpacing.xxs),
-                      Text(
-                        'Real name: ${user.displayName}',
-                        style: theme.textTheme.bodyMedium?.copyWith(
-                          color: theme.colorScheme.onSurfaceVariant,
+                      const SizedBox(height: AppSpacing.xs),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 4,
+                        ),
+                        decoration: BoxDecoration(
+                          color: theme.colorScheme.surfaceContainerHighest,
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: Text(
+                          'Real name: ${user.displayName}',
+                          style: theme.textTheme.labelMedium?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
                         ),
                       ),
                     ],
@@ -148,7 +181,7 @@ class _ContactInfoSheetState extends State<_ContactInfoSheet> {
               decoration: InputDecoration(
                 labelText: 'Nickname',
                 hintText: user.displayName,
-                helperText: 'Only you can see this name.',
+                helperText: 'Visible only to you on this device.',
                 prefixIcon: const Icon(Icons.edit_outlined),
                 suffixIcon: ListenableBuilder(
                   listenable: _controller,
@@ -162,11 +195,11 @@ class _ContactInfoSheetState extends State<_ContactInfoSheet> {
                 ),
               ),
             ),
-            const SizedBox(height: AppSpacing.md),
+            const SizedBox(height: AppSpacing.lg),
             Row(
               children: [
                 Expanded(
-                  child: OutlinedButton(
+                  child: TextButton(
                     onPressed: () => Navigator.of(context).pop(),
                     child: const Text('Cancel'),
                   ),
@@ -182,6 +215,7 @@ class _ContactInfoSheetState extends State<_ContactInfoSheet> {
                 ],
                 const SizedBox(width: AppSpacing.sm),
                 Expanded(
+                  flex: _initialAlias != null ? 1 : 2,
                   child: FilledButton(
                     onPressed: () => _commit(_controller.text),
                     child: const Text('Save'),

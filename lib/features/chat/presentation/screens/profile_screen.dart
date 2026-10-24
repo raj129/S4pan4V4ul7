@@ -340,20 +340,49 @@ class _AvatarPickerSheet extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final height = MediaQuery.sizeOf(context).height * 0.65;
+    final height = MediaQuery.sizeOf(context).height * 0.70;
     return SizedBox(
       height: height,
       child: DefaultTabController(
         length: 3,
         child: Column(
           children: [
-            const TabBar(
-              tabs: [
-                Tab(icon: Icon(Icons.palette_outlined), text: 'Default'),
-                Tab(icon: Icon(Icons.emoji_emotions_outlined), text: 'Emoji'),
-                Tab(icon: Icon(Icons.photo_camera_outlined), text: 'Photo'),
-              ],
+            Container(
+              margin: const EdgeInsets.symmetric(
+                horizontal: AppSpacing.lg,
+                vertical: AppSpacing.xs,
+              ),
+              decoration: BoxDecoration(
+                color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: TabBar(
+                dividerColor: Colors.transparent,
+                indicator: BoxDecoration(
+                  borderRadius: BorderRadius.circular(12),
+                  color: theme.colorScheme.surface,
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.08),
+                      blurRadius: 4,
+                      offset: const Offset(0, 1),
+                    ),
+                  ],
+                ),
+                indicatorSize: TabBarIndicatorSize.tab,
+                labelColor: theme.colorScheme.primary,
+                unselectedLabelColor: theme.colorScheme.onSurfaceVariant,
+                labelStyle: theme.textTheme.labelLarge?.copyWith(
+                  fontWeight: FontWeight.w600,
+                ),
+                tabs: const [
+                  Tab(icon: Icon(Icons.palette_outlined, size: 20), text: 'Default'),
+                  Tab(icon: Icon(Icons.emoji_emotions_outlined, size: 20), text: 'Emoji'),
+                  Tab(icon: Icon(Icons.photo_camera_outlined, size: 20), text: 'Photo'),
+                ],
+              ),
             ),
+            const SizedBox(height: AppSpacing.xs),
             Expanded(
               child: TabBarView(
                 children: [
@@ -363,50 +392,72 @@ class _AvatarPickerSheet extends StatelessWidget {
                     mainAxisSpacing: AppSpacing.md,
                     crossAxisSpacing: AppSpacing.md,
                     children: [
-                      InkWell(
-                        customBorder: const CircleBorder(),
-                        onTap: () => Navigator.pop(
-                          context,
-                          const ProfileAvatar.initials(),
-                        ),
-                        child: Container(
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            border: Border.all(
-                              color: theme.colorScheme.outlineVariant,
-                              width: 1.5,
-                            ),
+                      Material(
+                        color: theme.colorScheme.surfaceContainerLow,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(20),
+                          side: BorderSide(
+                            color: theme.colorScheme.outlineVariant.withValues(alpha: 0.5),
                           ),
-                          child: const UserAvatar(
-                            avatar: ProfileAvatar.initials(),
-                            name: 'Aa',
-                            radius: 30,
+                        ),
+                        clipBehavior: Clip.antiAlias,
+                        child: InkWell(
+                          onTap: () => Navigator.pop(
+                            context,
+                            const ProfileAvatar.initials(),
+                          ),
+                          child: Center(
+                            child: Container(
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                border: Border.all(
+                                  color: theme.colorScheme.outlineVariant,
+                                  width: 1.5,
+                                ),
+                              ),
+                              child: const UserAvatar(
+                                avatar: ProfileAvatar.initials(),
+                                name: 'Aa',
+                                radius: 26,
+                              ),
+                            ),
                           ),
                         ),
                       ),
                       for (var i = 0; i < avatarPresetColors.length; i++)
-                        InkWell(
-                          customBorder: const CircleBorder(),
-                          onTap: () =>
-                              Navigator.pop(context, ProfileAvatar.preset(i)),
-                          child: Container(
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              boxShadow: [
-                                BoxShadow(
-                                  color:
-                                      avatarPresetColors[i %
-                                              avatarPresetColors.length]
-                                          .withValues(alpha: 0.3),
-                                  blurRadius: 4,
-                                  offset: const Offset(0, 2),
-                                ),
-                              ],
+                        Material(
+                          color: theme.colorScheme.surfaceContainerLow,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(20),
+                            side: BorderSide(
+                              color: theme.colorScheme.outlineVariant.withValues(alpha: 0.5),
                             ),
-                            child: UserAvatar(
-                              avatar: ProfileAvatar.preset(i),
-                              name: '',
-                              radius: 30,
+                          ),
+                          clipBehavior: Clip.antiAlias,
+                          child: InkWell(
+                            onTap: () =>
+                                Navigator.pop(context, ProfileAvatar.preset(i)),
+                            child: Center(
+                              child: Container(
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color:
+                                          avatarPresetColors[i %
+                                                  avatarPresetColors.length]
+                                              .withValues(alpha: 0.35),
+                                      blurRadius: 6,
+                                      offset: const Offset(0, 2),
+                                    ),
+                                  ],
+                                ),
+                                child: UserAvatar(
+                                  avatar: ProfileAvatar.preset(i),
+                                  name: '',
+                                  radius: 26,
+                                ),
+                              ),
                             ),
                           ),
                         ),
@@ -473,28 +524,28 @@ class _PhotoSourceCard extends StatelessWidget {
     final theme = Theme.of(context);
     return Card(
       elevation: 0,
-      color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
+      color: theme.colorScheme.surfaceContainerLow,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(20),
         side: BorderSide(
-          color: theme.colorScheme.outlineVariant.withValues(alpha: 0.5),
+          color: theme.colorScheme.outlineVariant.withValues(alpha: 0.6),
         ),
       ),
+      clipBehavior: Clip.antiAlias,
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(16),
         child: Padding(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
           child: Row(
             children: [
               Container(
-                width: 48,
-                height: 48,
+                width: 52,
+                height: 52,
                 decoration: BoxDecoration(
                   color: color.withValues(alpha: 0.14),
                   shape: BoxShape.circle,
                 ),
-                child: Icon(icon, color: color, size: 24),
+                child: Icon(icon, color: color, size: 26),
               ),
               const SizedBox(width: 16),
               Expanded(
@@ -503,11 +554,11 @@ class _PhotoSourceCard extends StatelessWidget {
                   children: [
                     Text(
                       title,
-                      style: theme.textTheme.titleSmall?.copyWith(
+                      style: theme.textTheme.titleMedium?.copyWith(
                         fontWeight: FontWeight.w600,
                       ),
                     ),
-                    const SizedBox(height: 2),
+                    const SizedBox(height: 3),
                     Text(
                       subtitle,
                       style: theme.textTheme.bodySmall?.copyWith(
@@ -520,7 +571,7 @@ class _PhotoSourceCard extends StatelessWidget {
               Icon(
                 Icons.arrow_forward_ios_rounded,
                 size: 16,
-                color: theme.colorScheme.onSurfaceVariant,
+                color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.7),
               ),
             ],
           ),

@@ -629,9 +629,17 @@ class _ThreadScreenState extends State<ThreadScreen> {
         title: TextField(
           controller: _searchCtrl,
           autofocus: true,
-          decoration: const InputDecoration(
+          style: Theme.of(context).textTheme.bodyLarge,
+          decoration: InputDecoration(
             hintText: 'Search this chat',
+            hintStyle: Theme.of(context).textTheme.bodyLarge?.copyWith(
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
             border: InputBorder.none,
+            enabledBorder: InputBorder.none,
+            focusedBorder: InputBorder.none,
+            contentPadding: EdgeInsets.zero,
+            filled: false,
           ),
           onChanged: (v) => context.read<ActiveThreadCubit>().setSearchQuery(v),
         ),

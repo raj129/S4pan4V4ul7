@@ -167,19 +167,35 @@ class _PinKeyState extends State<PinKey> {
     final colors = theme.colorScheme;
     final key = SizedBox.square(
       dimension: widget.size,
-      child: FilledButton.tonal(
-        onPressed: enabled ? _handleTap : null,
-        style: FilledButton.styleFrom(
-          backgroundColor: colors.surfaceContainerHigh,
-          foregroundColor: enabled
-              ? colors.onSurface
-              : colors.onSurface.withValues(alpha: 0.38),
-          padding: EdgeInsets.zero,
-          minimumSize: Size.zero,
-          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-          shape: const CircleBorder(),
+      child: Material(
+        color: colors.surfaceContainerHigh,
+        shape: const CircleBorder(),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: enabled ? _handleTap : null,
+          customBorder: const CircleBorder(),
+          splashColor: colors.primary.withValues(alpha: 0.16),
+          highlightColor: colors.primary.withValues(alpha: 0.08),
+          child: Center(
+            child: IconTheme(
+              data: IconThemeData(
+                color: enabled
+                    ? colors.onSurface
+                    : colors.onSurface.withValues(alpha: 0.38),
+                size: 24,
+              ),
+              child: DefaultTextStyle(
+                style: theme.textTheme.headlineMedium!.copyWith(
+                  color: enabled
+                      ? colors.onSurface
+                      : colors.onSurface.withValues(alpha: 0.38),
+                  fontWeight: FontWeight.w500,
+                ),
+                child: widget.child,
+              ),
+            ),
+          ),
         ),
-        child: Center(child: widget.child),
       ),
     );
 
@@ -262,18 +278,32 @@ class _PinDotRowState extends State<PinDotRow>
         children: List.generate(widget.total, (index) {
           final filled = index < clampedFilled;
           final size = filled ? widget.dotSize : widget.dotSize - AppSpacing.xs;
-          return AnimatedContainer(
+          return AnimatedScale(
             duration: AppDuration.fast,
-            curve: Curves.easeOut,
-            margin: const EdgeInsets.symmetric(horizontal: AppSpacing.sm),
-            width: size,
-            height: size,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: filled ? activeColor : Colors.transparent,
-              border: Border.all(
-                color: filled ? activeColor : emptyColor,
-                width: 2,
+            scale: filled ? 1.05 : 0.95,
+            curve: Curves.easeOutCubic,
+            child: AnimatedContainer(
+              duration: AppDuration.fast,
+              curve: Curves.easeOut,
+              margin: const EdgeInsets.symmetric(horizontal: AppSpacing.sm),
+              width: size,
+              height: size,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: filled ? activeColor : Colors.transparent,
+                border: Border.all(
+                  color: filled ? activeColor : emptyColor,
+                  width: filled ? 2.5 : 2,
+                ),
+                boxShadow: filled && !widget.hasError
+                    ? [
+                        BoxShadow(
+                          color: activeColor.withValues(alpha: 0.28),
+                          blurRadius: 6,
+                          spreadRadius: 1,
+                        ),
+                      ]
+                    : null,
               ),
             ),
           );
