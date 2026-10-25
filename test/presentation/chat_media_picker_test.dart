@@ -100,6 +100,37 @@ void main() {
       closeTo(tester.getRect(find.byType(ChatMediaPickerPanel)).center.dx, 3),
     );
 
+    await tester.tap(find.byKey(const ValueKey('picker-tab-gifs')));
+    await tester.pumpAndSettle();
+    expect(find.text('Powered by GIPHY'), findsOneWidget);
+    expect(
+      find.textContaining('GIPHY_API_KEY is not configured'),
+      findsOneWidget,
+    );
+
+    await tester.tap(find.byKey(const ValueKey('picker-tab-emoji')));
+    await tester.pumpAndSettle();
+    expect(find.text('Emoji grid'), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('picker-tab-stickers')));
+    await tester.pumpAndSettle();
+    expect(find.text('Explore'), findsOneWidget);
+    expect(find.text('My stickers'), findsOneWidget);
+    expect(tester.getRect(find.text('Explore')).height, lessThan(20));
+    expect(tester.getRect(find.text('My stickers')).height, lessThan(20));
+    expect(
+      find.textContaining('GIPHY_API_KEY is not configured'),
+      findsOneWidget,
+    );
+
+    await tester.tap(find.byKey(const ValueKey('picker-tab-gifs')));
+    await tester.pumpAndSettle();
+    expect(find.text('Powered by GIPHY'), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('picker-tab-emoji')));
+    await tester.pumpAndSettle();
+    expect(find.text('Emoji grid'), findsOneWidget);
+
     final initialHeight = tester
         .getSize(find.byType(ChatMediaPickerPanel))
         .height;

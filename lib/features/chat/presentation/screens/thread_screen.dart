@@ -33,6 +33,7 @@ import '../../domain/entities/message_metadata.dart';
 import '../../domain/entities/chat_thread.dart';
 import '../../domain/entities/chat_user.dart';
 import '../../domain/entities/live_location.dart';
+import '../../domain/repositories/chat_draft_repository.dart';
 import '../../domain/repositories/live_location_repository.dart';
 import '../../domain/repositories/notes_repository.dart';
 import '../../domain/entities/app_note.dart';
@@ -121,6 +122,7 @@ class ThreadScreen extends StatefulWidget {
     this.liveLocationRepository,
     this.liveLocationService,
     this.notesRepository,
+    this.chatDraftRepository,
   });
 
   final ChatThread thread;
@@ -145,12 +147,14 @@ class ThreadScreen extends StatefulWidget {
   final LiveLocationRepository? liveLocationRepository;
   final LiveLocationService? liveLocationService;
   final NotesRepository? notesRepository;
+  final ChatDraftRepository? chatDraftRepository;
 
   @override
   State<ThreadScreen> createState() => _ThreadScreenState();
 }
 
-class _ThreadScreenState extends State<ThreadScreen> {
+class _ThreadScreenState extends State<ThreadScreen>
+    with WidgetsBindingObserver {
   final _textCtrl = TextEditingController();
   final _itemScrollCtrl = ItemScrollController();
   final _itemPositions = ItemPositionsListener.create();
@@ -158,11 +162,22 @@ class _ThreadScreenState extends State<ThreadScreen> {
   final _secureMedia = const AndroidChatSecureMediaService();
   final _uuid = const Uuid();
   final _inputFocus = FocusNode();
+  final _pickerInputFocus = FocusNode();
+  final _emojiPickerController = ChatMediaPickerSheetController();
 
   bool _showEmojiPicker = false;
+  Future<void>? _emojiPickerRoute;
   bool _searching = false;
   final _searchCtrl = TextEditingController();
   ChatMessage? _editingMessage;
+  String? _draftBeforeEdit;
+  ActiveThreadCubit? _draftCubit;
+  Timer? _draftSaveTimer;
+  Future<void> _draftWriteQueue = Future<void>.value();
+  int _draftGeneration = 0;
+  bool _restoringDraft = false;
+  bool _suppressDraftChanges = false;
+  bool _sendingText = false;
   bool _privacyReady = false;
   Object? _privacyError;
   final Set<String> _receiveScheduled = {};
@@ -200,6 +215,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _inputFocus.addListener(_onInputFocusChanged);
     widget.profileService?.addListener(_onProfileChanged);
     widget.vaultBridge.vaultSessionChanges.addListener(_recoverOnVaultUnlock);
@@ -221,10 +237,15 @@ class _ThreadScreenState extends State<ThreadScreen> {
     try {
       await ChatPrivacyMaintenance.ensureClean();
       if (!mounted) return;
-      context.read<ActiveThreadCubit>().openThread(
+      final cubit = context.read<ActiveThreadCubit>();
+      _draftCubit = cubit;
+      await cubit.openThread(
         thread: widget.thread,
         otherUser: widget.otherUser,
       );
+      if (!mounted) return;
+      await _restoreDraft(cubit);
+      if (!mounted) return;
       setState(() {
         _privacyReady = true;
         _privacyError = null;
@@ -238,6 +259,34 @@ class _ThreadScreenState extends State<ThreadScreen> {
       if (mounted) setState(() => _privacyError = error);
     } on PlatformException catch (error) {
       if (mounted) setState(() => _privacyError = error);
+    } catch (error) {
+      if (mounted) setState(() => _privacyError = error);
+    }
+  }
+
+  Future<void> _restoreDraft(ActiveThreadCubit cubit) async {
+    final repository = widget.chatDraftRepository;
+    if (repository == null) return;
+    try {
+      final encrypted = await repository.load(widget.thread.threadId);
+      if (encrypted == null || encrypted.isEmpty) return;
+      final text = await cubit.cryptoService.decryptMessage(
+        threadId: widget.thread.threadId,
+        encryptedB64: encrypted,
+      );
+      if (!mounted || _textCtrl.text.isNotEmpty) return;
+      _restoringDraft = true;
+      _textCtrl.value = TextEditingValue(
+        text: text,
+        selection: TextSelection.collapsed(offset: text.length),
+      );
+      _restoringDraft = false;
+      _hasText.value = text.trim().isNotEmpty;
+    } catch (error) {
+      _restoringDraft = false;
+      if (mounted) {
+        _showDraftError('Could not restore this chat draft: $error');
+      }
     }
   }
 
@@ -380,19 +429,84 @@ class _ThreadScreenState extends State<ThreadScreen> {
     }
   }
 
-  void _dismissEmojiSheet() {
+  Future<void> _dismissEmojiSheet({bool focusComposer = false}) async {
     if (!_showEmojiPicker) return;
     setState(() => _showEmojiPicker = false);
-    if (Navigator.of(context).canPop()) {
-      Navigator.of(context).maybePop();
+    final pickerRoute = _emojiPickerRoute;
+    _emojiPickerController.close();
+    if (pickerRoute != null) await pickerRoute;
+    if (focusComposer && mounted) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          _inputFocus.requestFocus();
+        }
+      });
     }
   }
 
   void _onTextControllerChanged() {
     _hasText.value = _textCtrl.text.trim().isNotEmpty;
     if (_showEmojiPicker && _inputFocus.hasFocus) {
-      _dismissEmojiSheet();
+      unawaited(_dismissEmojiSheet(focusComposer: true));
     }
+    if (!_isEditing && !_restoringDraft && !_suppressDraftChanges) {
+      _scheduleDraftSave();
+    }
+  }
+
+  void _scheduleDraftSave() {
+    if (widget.chatDraftRepository == null || _draftCubit == null) return;
+    final generation = ++_draftGeneration;
+    final text = _textCtrl.text;
+    _draftSaveTimer?.cancel();
+    _draftSaveTimer = Timer(const Duration(milliseconds: 350), () {
+      unawaited(_writeDraft(text, generation).catchError((Object _) {}));
+    });
+  }
+
+  Future<void> _flushDraft({String? text}) {
+    _draftSaveTimer?.cancel();
+    final generation = ++_draftGeneration;
+    final draftText =
+        text ?? (_isEditing ? (_draftBeforeEdit ?? '') : _textCtrl.text);
+    return _writeDraft(draftText, generation);
+  }
+
+  Future<void> _writeDraft(String text, int generation) {
+    final repository = widget.chatDraftRepository;
+    final cubit = _draftCubit;
+    if (repository == null || cubit == null) return Future<void>.value();
+
+    final operation = _draftWriteQueue.then((_) async {
+      if (generation != _draftGeneration) return;
+      if (text.isEmpty) {
+        await repository.delete(widget.thread.threadId);
+        return;
+      }
+      final encrypted = await cubit.cryptoService.encryptMessage(
+        threadId: widget.thread.threadId,
+        plaintext: text,
+      );
+      if (generation != _draftGeneration) return;
+      await repository.save(widget.thread.threadId, encrypted);
+    });
+    _draftWriteQueue = operation.then<void>(
+      (_) {},
+      onError: (Object error, StackTrace stackTrace) {
+        _showDraftError('Could not save this chat draft: $error');
+      },
+    );
+    return operation;
+  }
+
+  void _showDraftError(String message) {
+    if (!mounted) {
+      debugPrint('Chat draft storage failed.');
+      return;
+    }
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(message)));
   }
 
   void _onScroll() {
@@ -448,12 +562,40 @@ class _ThreadScreenState extends State<ThreadScreen> {
 
   void _onInputFocusChanged() {
     if (_inputFocus.hasFocus && _showEmojiPicker && mounted) {
-      _dismissEmojiSheet();
+      unawaited(_dismissEmojiSheet(focusComposer: true));
     }
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden) {
+      if (!_sendingText || _textCtrl.text.isNotEmpty) {
+        unawaited(_flushDraft().catchError((Object _) {}));
+      }
+    }
+  }
+
+  Future<void> _lockVault() async {
+    if (!_sendingText || _textCtrl.text.isNotEmpty) {
+      try {
+        await _flushDraft();
+      } catch (_) {
+        return;
+      }
+    }
+    if (mounted) widget.onLock();
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _draftSaveTimer?.cancel();
+    if (!_sendingText || _textCtrl.text.isNotEmpty) {
+      final draftText = _isEditing ? (_draftBeforeEdit ?? '') : _textCtrl.text;
+      unawaited(_flushDraft(text: draftText).catchError((Object _) {}));
+    }
     _inputFocus.removeListener(_onInputFocusChanged);
     widget.profileService?.removeListener(_onProfileChanged);
     widget.vaultBridge.vaultSessionChanges.removeListener(
@@ -472,6 +614,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
     _textCtrl.dispose();
     _searchCtrl.dispose();
     _inputFocus.dispose();
+    _pickerInputFocus.dispose();
     super.dispose();
   }
 
@@ -486,7 +629,12 @@ class _ThreadScreenState extends State<ThreadScreen> {
               : Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    const Text('Could not remove old unencrypted chat copies.'),
+                    Text(
+                      _privacyError is FileSystemException ||
+                              _privacyError is PlatformException
+                          ? 'Could not remove old unencrypted chat copies.'
+                          : 'Could not open this conversation: $_privacyError',
+                    ),
                     TextButton(
                       onPressed: _prepareChat,
                       child: const Text('Retry'),
@@ -754,7 +902,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
         IconButton(
           icon: const Icon(Icons.lock_outline_rounded),
           tooltip: 'Lock vault',
-          onPressed: widget.onLock,
+          onPressed: () => unawaited(_lockVault()),
         ),
       ],
       title: BlocBuilder<ActiveThreadCubit, ActiveThreadState>(
@@ -825,10 +973,17 @@ class _ThreadScreenState extends State<ThreadScreen> {
 
   void _cancelEdit() {
     if (!_isEditing) return;
+    final draft = _draftBeforeEdit ?? '';
+    _draftBeforeEdit = null;
     setState(() {
       _editingMessage = null;
-      _textCtrl.clear();
-      _hasText.value = false;
+      _restoringDraft = true;
+      _textCtrl.value = TextEditingValue(
+        text: draft,
+        selection: TextSelection.collapsed(offset: draft.length),
+      );
+      _restoringDraft = false;
+      _hasText.value = draft.trim().isNotEmpty;
       _showEmojiPicker = false;
       _inputFocus.unfocus();
     });
@@ -1303,6 +1458,14 @@ class _ThreadScreenState extends State<ThreadScreen> {
       return;
     }
     final text = msg.localDecryptedText ?? '';
+    final draft = _textCtrl.text;
+    try {
+      await _flushDraft(text: draft);
+    } catch (_) {
+      // The storage error is surfaced, but keep the in-memory draft available.
+    }
+    if (!mounted) return;
+    _draftBeforeEdit = draft;
     context.read<ActiveThreadCubit>().clearReplyTarget();
     setState(() {
       _editingMessage = msg;
@@ -1603,6 +1766,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
   Widget _buildComposerSurface(
     BuildContext context, {
     bool applyBottomSafeArea = true,
+    FocusNode? inputFocusNode,
   }) {
     final cs = Theme.of(context).colorScheme;
     return DecoratedBox(
@@ -1617,7 +1781,11 @@ class _ThreadScreenState extends State<ThreadScreen> {
         children: [
           if (_isEditing) _buildEditHeader(),
           if (!_isEditing) _buildReplyPreview(),
-          _buildInputBar(context, applyBottomSafeArea: applyBottomSafeArea),
+          _buildInputBar(
+            context,
+            applyBottomSafeArea: applyBottomSafeArea,
+            inputFocusNode: inputFocusNode,
+          ),
         ],
       ),
     );
@@ -1626,8 +1794,10 @@ class _ThreadScreenState extends State<ThreadScreen> {
   Widget _buildInputBar(
     BuildContext context, {
     bool applyBottomSafeArea = true,
+    FocusNode? inputFocusNode,
   }) {
     final cs = Theme.of(context).colorScheme;
+    final composerFocusNode = inputFocusNode ?? _inputFocus;
     return SafeArea(
       top: false,
       bottom: applyBottomSafeArea,
@@ -1645,9 +1815,10 @@ class _ThreadScreenState extends State<ThreadScreen> {
             // as a single control rather than three loose widgets.
             Expanded(
               child: Container(
+                key: const ValueKey('chat-composer-surface'),
                 decoration: BoxDecoration(
                   color: cs.surfaceContainerHighest.withValues(alpha: 0.6),
-                  borderRadius: AppRadius.all(AppRadius.pill),
+                  borderRadius: BorderRadius.circular(18),
                   border: Border.all(
                     color: cs.outlineVariant.withValues(alpha: 0.4),
                     width: 1,
@@ -1669,14 +1840,14 @@ class _ThreadScreenState extends State<ThreadScreen> {
                     Expanded(
                       child: TextField(
                         controller: _textCtrl,
-                        focusNode: _inputFocus,
+                        focusNode: composerFocusNode,
                         maxLines: 5,
                         minLines: 1,
                         textCapitalization: TextCapitalization.sentences,
                         style: Theme.of(context).textTheme.bodyLarge,
                         onTap: () {
                           if (_showEmojiPicker) {
-                            _dismissEmojiSheet();
+                            unawaited(_dismissEmojiSheet(focusComposer: true));
                           }
                         },
                         decoration: InputDecoration(
@@ -1986,51 +2157,108 @@ class _ThreadScreenState extends State<ThreadScreen> {
 
   void _send() {
     final text = _textCtrl.text;
-    if (text.trim().isEmpty) return;
-    _textCtrl.clear();
-    context.read<ActiveThreadCubit>().sendText(text);
+    if (text.trim().isEmpty || _sendingText) return;
+    _sendingText = true;
+    unawaited(_sendText(text));
+  }
+
+  Future<void> _sendText(String text) async {
+    try {
+      try {
+        await _flushDraft();
+      } catch (_) {
+        // The send still proceeds; the storage failure has already been shown.
+      }
+      if (!mounted) return;
+      final shouldClearComposer = _textCtrl.text == text;
+      final generation = _draftGeneration;
+      if (shouldClearComposer) {
+        _suppressDraftChanges = true;
+        _textCtrl.clear();
+        _suppressDraftChanges = false;
+      }
+
+      final queued = await context.read<ActiveThreadCubit>().sendText(
+        text,
+        waitForDelivery: false,
+      );
+      if (queued && shouldClearComposer && _draftGeneration == generation) {
+        await _writeDraft('', generation).catchError((Object _) {});
+      }
+      if (!mounted) return;
+      if (!queued &&
+          shouldClearComposer &&
+          _draftGeneration == generation &&
+          _textCtrl.text.isEmpty) {
+        _restoringDraft = true;
+        _textCtrl.value = TextEditingValue(
+          text: text,
+          selection: TextSelection.collapsed(offset: text.length),
+        );
+        _restoringDraft = false;
+        _hasText.value = text.trim().isNotEmpty;
+        _scheduleDraftSave();
+      }
+    } finally {
+      _sendingText = false;
+    }
   }
 
   Future<void> _toggleEmojiPicker() async {
     if (_showEmojiPicker) {
-      Navigator.of(context).maybePop();
+      await _dismissEmojiSheet(focusComposer: true);
       return;
     }
     _inputFocus.unfocus();
     setState(() => _showEmojiPicker = true);
     final cubit = context.read<ActiveThreadCubit>();
+    final pickerRoute = showChatMediaPickerSheet(
+      context,
+      stickerPack: _stickerPackFor(cubit.myUid),
+      controller: _emojiPickerController,
+      composer: BlocProvider.value(
+        value: cubit,
+        child: _buildComposerSurface(
+          context,
+          applyBottomSafeArea: false,
+          inputFocusNode: _pickerInputFocus,
+        ),
+      ),
+      buildEmojiPicker: (height) => ThemedEmojiPicker(
+        textEditingController: _textCtrl,
+        height: height,
+        searchHeight: height * 0.7,
+        showSearchButton: false,
+        showBackspace: false,
+        columns: 9,
+        onEmojiSelected: (category, emoji) {
+          context.read<ActiveThreadCubit>().onTextChanged(_textCtrl.text);
+        },
+      ),
+      onSend: (bytes, type, fileName) => cubit.sendMedia(
+        messageId: _uuid.v4(),
+        rawBytes: bytes,
+        type: type,
+        filename: fileName,
+        propagateFailure: true,
+      ),
+      onInsertEmoji: _insertEmoji,
+      onBackspace: _backspaceComposerText,
+    );
+    _emojiPickerRoute = pickerRoute;
     try {
-      await showChatMediaPickerSheet(
-        context,
-        stickerPack: _stickerPackFor(cubit.myUid),
-        composer: BlocProvider.value(
-          value: cubit,
-          child: _buildComposerSurface(context, applyBottomSafeArea: false),
-        ),
-        buildEmojiPicker: (height) => ThemedEmojiPicker(
-          textEditingController: _textCtrl,
-          height: height,
-          searchHeight: height * 0.7,
-          showSearchButton: false,
-          showBackspace: false,
-          columns: 9,
-          onEmojiSelected: (category, emoji) {
-            context.read<ActiveThreadCubit>().onTextChanged(_textCtrl.text);
-          },
-        ),
-        onSend: (bytes, type, fileName) => cubit.sendMedia(
-          messageId: _uuid.v4(),
-          rawBytes: bytes,
-          type: type,
-          filename: fileName,
-          propagateFailure: true,
-        ),
-        onInsertEmoji: _insertEmoji,
-        onBackspace: _backspaceComposerText,
-      );
+      await pickerRoute;
     } finally {
+      if (identical(_emojiPickerRoute, pickerRoute)) {
+        _emojiPickerRoute = null;
+      }
       if (mounted) {
         setState(() => _showEmojiPicker = false);
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted && !_isEditing) {
+            _inputFocus.requestFocus();
+          }
+        });
       }
     }
   }

@@ -7229,6 +7229,285 @@ class OutboxMessagesCompanion extends UpdateCompanion<OutboxEntry> {
   }
 }
 
+class $ChatDraftsTable extends ChatDrafts
+    with TableInfo<$ChatDraftsTable, ChatDraftEntry> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $ChatDraftsTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _threadIdMeta = const VerificationMeta(
+    'threadId',
+  );
+  @override
+  late final GeneratedColumn<String> threadId = GeneratedColumn<String>(
+    'thread_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _encryptedTextMeta = const VerificationMeta(
+    'encryptedText',
+  );
+  @override
+  late final GeneratedColumn<String> encryptedText = GeneratedColumn<String>(
+    'encrypted_text',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _updatedAtMsMeta = const VerificationMeta(
+    'updatedAtMs',
+  );
+  @override
+  late final GeneratedColumn<int> updatedAtMs = GeneratedColumn<int>(
+    'updated_at_ms',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: true,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [threadId, encryptedText, updatedAtMs];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'chat_drafts';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<ChatDraftEntry> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('thread_id')) {
+      context.handle(
+        _threadIdMeta,
+        threadId.isAcceptableOrUnknown(data['thread_id']!, _threadIdMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_threadIdMeta);
+    }
+    if (data.containsKey('encrypted_text')) {
+      context.handle(
+        _encryptedTextMeta,
+        encryptedText.isAcceptableOrUnknown(
+          data['encrypted_text']!,
+          _encryptedTextMeta,
+        ),
+      );
+    } else if (isInserting) {
+      context.missing(_encryptedTextMeta);
+    }
+    if (data.containsKey('updated_at_ms')) {
+      context.handle(
+        _updatedAtMsMeta,
+        updatedAtMs.isAcceptableOrUnknown(
+          data['updated_at_ms']!,
+          _updatedAtMsMeta,
+        ),
+      );
+    } else if (isInserting) {
+      context.missing(_updatedAtMsMeta);
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {threadId};
+  @override
+  ChatDraftEntry map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return ChatDraftEntry(
+      threadId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}thread_id'],
+      )!,
+      encryptedText: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}encrypted_text'],
+      )!,
+      updatedAtMs: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}updated_at_ms'],
+      )!,
+    );
+  }
+
+  @override
+  $ChatDraftsTable createAlias(String alias) {
+    return $ChatDraftsTable(attachedDatabase, alias);
+  }
+}
+
+class ChatDraftEntry extends DataClass implements Insertable<ChatDraftEntry> {
+  final String threadId;
+  final String encryptedText;
+  final int updatedAtMs;
+  const ChatDraftEntry({
+    required this.threadId,
+    required this.encryptedText,
+    required this.updatedAtMs,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['thread_id'] = Variable<String>(threadId);
+    map['encrypted_text'] = Variable<String>(encryptedText);
+    map['updated_at_ms'] = Variable<int>(updatedAtMs);
+    return map;
+  }
+
+  ChatDraftsCompanion toCompanion(bool nullToAbsent) {
+    return ChatDraftsCompanion(
+      threadId: Value(threadId),
+      encryptedText: Value(encryptedText),
+      updatedAtMs: Value(updatedAtMs),
+    );
+  }
+
+  factory ChatDraftEntry.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return ChatDraftEntry(
+      threadId: serializer.fromJson<String>(json['threadId']),
+      encryptedText: serializer.fromJson<String>(json['encryptedText']),
+      updatedAtMs: serializer.fromJson<int>(json['updatedAtMs']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'threadId': serializer.toJson<String>(threadId),
+      'encryptedText': serializer.toJson<String>(encryptedText),
+      'updatedAtMs': serializer.toJson<int>(updatedAtMs),
+    };
+  }
+
+  ChatDraftEntry copyWith({
+    String? threadId,
+    String? encryptedText,
+    int? updatedAtMs,
+  }) => ChatDraftEntry(
+    threadId: threadId ?? this.threadId,
+    encryptedText: encryptedText ?? this.encryptedText,
+    updatedAtMs: updatedAtMs ?? this.updatedAtMs,
+  );
+  ChatDraftEntry copyWithCompanion(ChatDraftsCompanion data) {
+    return ChatDraftEntry(
+      threadId: data.threadId.present ? data.threadId.value : this.threadId,
+      encryptedText: data.encryptedText.present
+          ? data.encryptedText.value
+          : this.encryptedText,
+      updatedAtMs: data.updatedAtMs.present
+          ? data.updatedAtMs.value
+          : this.updatedAtMs,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('ChatDraftEntry(')
+          ..write('threadId: $threadId, ')
+          ..write('encryptedText: $encryptedText, ')
+          ..write('updatedAtMs: $updatedAtMs')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(threadId, encryptedText, updatedAtMs);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is ChatDraftEntry &&
+          other.threadId == this.threadId &&
+          other.encryptedText == this.encryptedText &&
+          other.updatedAtMs == this.updatedAtMs);
+}
+
+class ChatDraftsCompanion extends UpdateCompanion<ChatDraftEntry> {
+  final Value<String> threadId;
+  final Value<String> encryptedText;
+  final Value<int> updatedAtMs;
+  final Value<int> rowid;
+  const ChatDraftsCompanion({
+    this.threadId = const Value.absent(),
+    this.encryptedText = const Value.absent(),
+    this.updatedAtMs = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  ChatDraftsCompanion.insert({
+    required String threadId,
+    required String encryptedText,
+    required int updatedAtMs,
+    this.rowid = const Value.absent(),
+  }) : threadId = Value(threadId),
+       encryptedText = Value(encryptedText),
+       updatedAtMs = Value(updatedAtMs);
+  static Insertable<ChatDraftEntry> custom({
+    Expression<String>? threadId,
+    Expression<String>? encryptedText,
+    Expression<int>? updatedAtMs,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (threadId != null) 'thread_id': threadId,
+      if (encryptedText != null) 'encrypted_text': encryptedText,
+      if (updatedAtMs != null) 'updated_at_ms': updatedAtMs,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  ChatDraftsCompanion copyWith({
+    Value<String>? threadId,
+    Value<String>? encryptedText,
+    Value<int>? updatedAtMs,
+    Value<int>? rowid,
+  }) {
+    return ChatDraftsCompanion(
+      threadId: threadId ?? this.threadId,
+      encryptedText: encryptedText ?? this.encryptedText,
+      updatedAtMs: updatedAtMs ?? this.updatedAtMs,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (threadId.present) {
+      map['thread_id'] = Variable<String>(threadId.value);
+    }
+    if (encryptedText.present) {
+      map['encrypted_text'] = Variable<String>(encryptedText.value);
+    }
+    if (updatedAtMs.present) {
+      map['updated_at_ms'] = Variable<int>(updatedAtMs.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('ChatDraftsCompanion(')
+          ..write('threadId: $threadId, ')
+          ..write('encryptedText: $encryptedText, ')
+          ..write('updatedAtMs: $updatedAtMs, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
 abstract class _$VaultDatabase extends GeneratedDatabase {
   _$VaultDatabase(QueryExecutor e) : super(e);
   $VaultDatabaseManager get managers => $VaultDatabaseManager(this);
@@ -7249,6 +7528,7 @@ abstract class _$VaultDatabase extends GeneratedDatabase {
   late final $SecurityEventsTable securityEvents = $SecurityEventsTable(this);
   late final $ChatMessagesTable chatMessages = $ChatMessagesTable(this);
   late final $OutboxMessagesTable outboxMessages = $OutboxMessagesTable(this);
+  late final $ChatDraftsTable chatDrafts = $ChatDraftsTable(this);
   @override
   Iterable<TableInfo<Table, Object?>> get allTables =>
       allSchemaEntities.whereType<TableInfo<Table, Object?>>();
@@ -7270,6 +7550,7 @@ abstract class _$VaultDatabase extends GeneratedDatabase {
     securityEvents,
     chatMessages,
     outboxMessages,
+    chatDrafts,
   ];
 }
 
@@ -11042,6 +11323,172 @@ typedef $$OutboxMessagesTableProcessedTableManager =
       OutboxEntry,
       PrefetchHooks Function()
     >;
+typedef $$ChatDraftsTableCreateCompanionBuilder =
+    ChatDraftsCompanion Function({
+      required String threadId,
+      required String encryptedText,
+      required int updatedAtMs,
+      Value<int> rowid,
+    });
+typedef $$ChatDraftsTableUpdateCompanionBuilder =
+    ChatDraftsCompanion Function({
+      Value<String> threadId,
+      Value<String> encryptedText,
+      Value<int> updatedAtMs,
+      Value<int> rowid,
+    });
+
+class $$ChatDraftsTableFilterComposer
+    extends Composer<_$VaultDatabase, $ChatDraftsTable> {
+  $$ChatDraftsTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get threadId => $composableBuilder(
+    column: $table.threadId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get encryptedText => $composableBuilder(
+    column: $table.encryptedText,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get updatedAtMs => $composableBuilder(
+    column: $table.updatedAtMs,
+    builder: (column) => ColumnFilters(column),
+  );
+}
+
+class $$ChatDraftsTableOrderingComposer
+    extends Composer<_$VaultDatabase, $ChatDraftsTable> {
+  $$ChatDraftsTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get threadId => $composableBuilder(
+    column: $table.threadId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get encryptedText => $composableBuilder(
+    column: $table.encryptedText,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get updatedAtMs => $composableBuilder(
+    column: $table.updatedAtMs,
+    builder: (column) => ColumnOrderings(column),
+  );
+}
+
+class $$ChatDraftsTableAnnotationComposer
+    extends Composer<_$VaultDatabase, $ChatDraftsTable> {
+  $$ChatDraftsTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get threadId =>
+      $composableBuilder(column: $table.threadId, builder: (column) => column);
+
+  GeneratedColumn<String> get encryptedText => $composableBuilder(
+    column: $table.encryptedText,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get updatedAtMs => $composableBuilder(
+    column: $table.updatedAtMs,
+    builder: (column) => column,
+  );
+}
+
+class $$ChatDraftsTableTableManager
+    extends
+        RootTableManager<
+          _$VaultDatabase,
+          $ChatDraftsTable,
+          ChatDraftEntry,
+          $$ChatDraftsTableFilterComposer,
+          $$ChatDraftsTableOrderingComposer,
+          $$ChatDraftsTableAnnotationComposer,
+          $$ChatDraftsTableCreateCompanionBuilder,
+          $$ChatDraftsTableUpdateCompanionBuilder,
+          (
+            ChatDraftEntry,
+            BaseReferences<_$VaultDatabase, $ChatDraftsTable, ChatDraftEntry>,
+          ),
+          ChatDraftEntry,
+          PrefetchHooks Function()
+        > {
+  $$ChatDraftsTableTableManager(_$VaultDatabase db, $ChatDraftsTable table)
+    : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$ChatDraftsTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$ChatDraftsTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$ChatDraftsTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback:
+              ({
+                Value<String> threadId = const Value.absent(),
+                Value<String> encryptedText = const Value.absent(),
+                Value<int> updatedAtMs = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => ChatDraftsCompanion(
+                threadId: threadId,
+                encryptedText: encryptedText,
+                updatedAtMs: updatedAtMs,
+                rowid: rowid,
+              ),
+          createCompanionCallback:
+              ({
+                required String threadId,
+                required String encryptedText,
+                required int updatedAtMs,
+                Value<int> rowid = const Value.absent(),
+              }) => ChatDraftsCompanion.insert(
+                threadId: threadId,
+                encryptedText: encryptedText,
+                updatedAtMs: updatedAtMs,
+                rowid: rowid,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ),
+      );
+}
+
+typedef $$ChatDraftsTableProcessedTableManager =
+    ProcessedTableManager<
+      _$VaultDatabase,
+      $ChatDraftsTable,
+      ChatDraftEntry,
+      $$ChatDraftsTableFilterComposer,
+      $$ChatDraftsTableOrderingComposer,
+      $$ChatDraftsTableAnnotationComposer,
+      $$ChatDraftsTableCreateCompanionBuilder,
+      $$ChatDraftsTableUpdateCompanionBuilder,
+      (
+        ChatDraftEntry,
+        BaseReferences<_$VaultDatabase, $ChatDraftsTable, ChatDraftEntry>,
+      ),
+      ChatDraftEntry,
+      PrefetchHooks Function()
+    >;
 
 class $VaultDatabaseManager {
   final _$VaultDatabase _db;
@@ -11077,4 +11524,6 @@ class $VaultDatabaseManager {
       $$ChatMessagesTableTableManager(_db, _db.chatMessages);
   $$OutboxMessagesTableTableManager get outboxMessages =>
       $$OutboxMessagesTableTableManager(_db, _db.outboxMessages);
+  $$ChatDraftsTableTableManager get chatDrafts =>
+      $$ChatDraftsTableTableManager(_db, _db.chatDrafts);
 }

@@ -105,7 +105,8 @@ GoRouter buildAppRouter({
                 path: '/notes',
                 builder: (_, _) => NotesScreen(
                   notesRepository: deps.chatDependencies.notesRepository,
-                  currentUserId: deps.chatDependencies.authService.currentUid ?? '',
+                  currentUserId:
+                      deps.chatDependencies.authService.currentUid ?? '',
                 ),
               ),
             ],
@@ -357,6 +358,7 @@ GoRoute _chatRoute(AppDependencies deps, AppSessionState session) {
                 ? deps.chatDependencies.liveLocationService
                 : null,
             notesRepository: deps.chatDependencies.notesRepository,
+            chatDraftRepository: deps.chatDependencies.draftRepository,
           );
           final providedCubit = args.activeThreadCubit;
           Widget withThreadList(Widget child) {

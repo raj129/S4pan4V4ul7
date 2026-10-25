@@ -15,9 +15,30 @@ enum ChatMediaPickerTab { emoji, stickers, gifs }
 
 enum _StickerSource { giphy, personal }
 
+class ChatMediaPickerSheetController {
+  VoidCallback? _close;
+
+  void close() {
+    _close?.call();
+  }
+
+  void _attach(BuildContext context) {
+    _close = () {
+      final navigator = Navigator.of(context);
+      final route = ModalRoute.of(context);
+      if (!context.mounted || route == null) return;
+      // Close the exact picker route, rather than whichever route called us.
+      navigator.removeRoute(route);
+    };
+  }
+
+  void _clear() => _close = null;
+}
+
 Future<void> showChatMediaPickerSheet(
   BuildContext context, {
   required LocalStickerPackRepository stickerPack,
+  ChatMediaPickerSheetController? controller,
   required Widget Function(double height) buildEmojiPicker,
   required Widget composer,
   required Future<void> Function(
@@ -28,23 +49,38 @@ Future<void> showChatMediaPickerSheet(
   onSend,
   required ValueChanged<String> onInsertEmoji,
   required VoidCallback onBackspace,
-}) {
-  return showModalBottomSheet<void>(
+}) async {
+  final sheetController = controller ?? ChatMediaPickerSheetController();
+  final route = showModalBottomSheet<void>(
     context: context,
     isScrollControlled: true,
     useSafeArea: true,
     enableDrag: false,
     showDragHandle: false,
     backgroundColor: Colors.transparent,
-    builder: (_) => _DraggableChatMediaPickerSheet(
-      stickerPack: stickerPack,
-      buildEmojiPicker: buildEmojiPicker,
-      composer: composer,
-      onSend: onSend,
-      onInsertEmoji: onInsertEmoji,
-      onBackspace: onBackspace,
-    ),
+    builder: (sheetContext) {
+      sheetController._attach(sheetContext);
+      return PopScope<void>(
+        canPop: false,
+        onPopInvokedWithResult: (didPop, _) {
+          if (!didPop) sheetController.close();
+        },
+        child: _DraggableChatMediaPickerSheet(
+          stickerPack: stickerPack,
+          buildEmojiPicker: buildEmojiPicker,
+          composer: composer,
+          onSend: onSend,
+          onInsertEmoji: onInsertEmoji,
+          onBackspace: onBackspace,
+        ),
+      );
+    },
   );
+  try {
+    await route;
+  } finally {
+    sheetController._clear();
+  }
 }
 
 class _DraggableChatMediaPickerSheet extends StatefulWidget {
@@ -297,17 +333,11 @@ class _ChatMediaPickerPanelState extends State<ChatMediaPickerPanel> {
 
   void _selectTab(ChatMediaPickerTab tab) {
     if (_tab == tab) return;
-    if (_pageController.hasClients) {
-      unawaited(
-        _pageController.animateToPage(
-          tab.index,
-          duration: const Duration(milliseconds: 180),
-          curve: Curves.easeOut,
-        ),
-      );
-      return;
-    }
     _activateTab(tab);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _tab != tab || !_pageController.hasClients) return;
+      _pageController.jumpToPage(tab.index);
+    });
   }
 
   void _onPageChanged(int index) {
@@ -528,7 +558,7 @@ class _ChatMediaPickerPanelState extends State<ChatMediaPickerPanel> {
                   Padding(
                     padding: const EdgeInsets.fromLTRB(8, 2, 8, 4),
                     child: SizedBox(
-                      height: 40,
+                      height: 48,
                       child: Stack(
                         children: [
                           Row(
@@ -668,7 +698,21 @@ class _ChatMediaPickerPanelState extends State<ChatMediaPickerPanel> {
                               child: SegmentedButton<_StickerSource>(
                                 showSelectedIcon: false,
                                 style: const ButtonStyle(
-                                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                  tapTargetSize:
+                                      MaterialTapTargetSize.shrinkWrap,
+                                  visualDensity: VisualDensity.compact,
+                                  minimumSize: WidgetStatePropertyAll(
+                                    Size(0, 32),
+                                  ),
+                                  padding: WidgetStatePropertyAll(
+                                    EdgeInsets.symmetric(
+                                      horizontal: 8,
+                                      vertical: 4,
+                                    ),
+                                  ),
+                                  textStyle: WidgetStatePropertyAll(
+                                    TextStyle(fontSize: 12),
+                                  ),
                                 ),
                                 segments: const [
                                   ButtonSegment(
@@ -711,10 +755,13 @@ class _ChatMediaPickerPanelState extends State<ChatMediaPickerPanel> {
                         controller: _pageController,
                         itemCount: ChatMediaPickerTab.values.length,
                         onPageChanged: _onPageChanged,
-                        itemBuilder: (context, index) => _buildPage(
-                          ChatMediaPickerTab.values[index],
-                          constraints.maxHeight,
-                        ),
+                        itemBuilder: (context, index) {
+                          final tab = ChatMediaPickerTab.values[index];
+                          return KeyedSubtree(
+                            key: ValueKey('${tab.name}-${tab == _tab}'),
+                            child: _buildPage(tab, constraints.maxHeight),
+                          );
+                        },
                       ),
                     ),
                   ),
@@ -758,11 +805,11 @@ class _ChatMediaPickerPanelState extends State<ChatMediaPickerPanel> {
             onTap: () => _selectTab(tab),
             borderRadius: BorderRadius.circular(10),
             child: SizedBox(
-              width: 30,
-              height: 30,
+              width: 40,
+              height: 40,
               child: Icon(
                 icon,
-                size: 17,
+                size: 19,
                 color: selected ? colors.primary : colors.onSurfaceVariant,
               ),
             ),

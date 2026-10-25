@@ -18,6 +18,7 @@ import 'package:photo_vault/core/data/firebase_current_user.dart';
 import 'package:photo_vault/core/session/vault_session.dart';
 import '../application/crypto/chat_crypto_service.dart';
 import '../data/repositories/drift_chat_search_index_repository.dart';
+import '../data/repositories/drift_chat_draft_repository.dart';
 import '../data/repositories/drift_message_cache_repository.dart';
 import '../data/repositories/drift_outbox_repository.dart';
 import '../data/repositories/firebase_avatar_storage.dart';
@@ -32,6 +33,7 @@ import '../data/repositories/firestore_typing_repository.dart';
 import '../data/repositories/firestore_user_repository.dart';
 import 'package:photo_vault/core/domain/repositories/auth_repository.dart';
 import '../domain/repositories/chat_search_index_repository.dart';
+import '../domain/repositories/chat_draft_repository.dart';
 import '../domain/repositories/message_cache_repository.dart';
 import '../domain/repositories/outbox_repository.dart';
 import '../domain/repositories/message_repository.dart';
@@ -71,6 +73,7 @@ class ChatDependencies {
     LiveLocationRepository? liveLocationRepository,
     LiveLocationService? liveLocationService,
     ChatCryptoService? cryptoService,
+    ChatDraftRepository? draftRepository,
     PushTokenRepository? pushTokenRepository,
   }) : _authRepository = authRepository,
        _vaultSession = vaultSession,
@@ -113,6 +116,12 @@ class ChatDependencies {
     if (cryptoService != null) {
       this.cryptoService = cryptoService;
     }
+    this.draftRepository =
+        draftRepository ??
+        switch (database) {
+          final VaultDatabase db => DriftChatDraftRepository(db),
+          _ => const NoopChatDraftRepository(),
+        };
     _vaultSession.addListener(_onVaultSessionChanged);
   }
 
@@ -177,6 +186,9 @@ class ChatDependencies {
     final VaultDatabase db => DriftMessageCacheRepository(db),
     _ => const NoopMessageCacheRepository(),
   };
+
+  /// Ciphertext-only composer drafts, stored alongside the local chat cache.
+  late final ChatDraftRepository draftRepository;
 
   /// Keyed local search index over the message cache.
   late final ChatSearchIndexRepository searchIndex = switch (_database) {
