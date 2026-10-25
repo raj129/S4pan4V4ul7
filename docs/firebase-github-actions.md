@@ -26,6 +26,7 @@ The Android release job also needs these **Actions secrets**:
 - `ANDROID_KEY_ALIAS`
 - `ANDROID_KEY_PASSWORD`
 - `GOOGLE_MAPS_ANDROID_API_KEY`
+- `GIPHY_API_KEY` (optional for GIF/sticker features, but recommended when the signed release includes the chat media picker)
 
 Do not put the JSON key in the repository or workflow YAML. Rotate the key if it is exposed, and grant its service account only the permissions required by the Firebase resources being deployed.
 
