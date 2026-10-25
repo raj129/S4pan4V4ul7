@@ -15,6 +15,7 @@ void main() {
       );
       expect(theme.appBarTheme.foregroundColor, theme.colorScheme.onSurface);
       expect(theme.appBarTheme.surfaceTintColor, Colors.transparent);
+      expect(theme.appBarTheme.shape, isNull);
     }
   });
 

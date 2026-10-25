@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -102,15 +103,24 @@ class _GalleryBody extends StatefulWidget {
 }
 
 class _GalleryBodyState extends State<_GalleryBody> {
+  static const _pageSize = 100;
+  static const _loadMoreThreshold = 600.0;
+
   List<VaultPhoto> _photos = const [];
   final Set<String> _selectedIds = {};
+  final _gridScrollController = ScrollController();
   bool _isSelectionMode = false;
   bool _loading = true;
+  bool _loadingMore = false;
+  bool _hasMore = true;
+  bool _loadMoreFailed = false;
+  int _loadGeneration = 0;
   int _lastSeenGalleryRevision = 0;
 
   @override
   void initState() {
     super.initState();
+    _gridScrollController.addListener(_onGridScroll);
     widget.importManager.addListener(_onImportChanged);
     widget.vaultSession?.addListener(_load);
     _load();
@@ -118,6 +128,9 @@ class _GalleryBodyState extends State<_GalleryBody> {
 
   @override
   void dispose() {
+    _gridScrollController
+      ..removeListener(_onGridScroll)
+      ..dispose();
     widget.importManager.removeListener(_onImportChanged);
     widget.vaultSession?.removeListener(_load);
     super.dispose();
@@ -141,15 +154,78 @@ class _GalleryBodyState extends State<_GalleryBody> {
   }
 
   Future<void> _load() async {
-    final page = await widget.photoRepository.listGalleryPage(
-      page: 0,
-      pageSize: 1000,
-    );
-    if (!mounted) return;
+    final generation = ++_loadGeneration;
+    if (mounted && !_loading) setState(() => _loading = true);
+    try {
+      final page = await widget.photoRepository.listGalleryPage(
+        page: 0,
+        pageSize: _pageSize,
+      );
+      if (!mounted || generation != _loadGeneration) return;
+      setState(() {
+        _photos = page;
+        _loading = false;
+        _loadingMore = false;
+        _hasMore = page.length == _pageSize;
+        _loadMoreFailed = false;
+      });
+    } catch (error) {
+      if (!mounted || generation != _loadGeneration) return;
+      setState(() {
+        _loading = false;
+        _loadingMore = false;
+      });
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Could not load photos: $error')));
+    }
+  }
+
+  void _onGridScroll() {
+    if (!_gridScrollController.hasClients ||
+        _loading ||
+        _loadingMore ||
+        !_hasMore ||
+        _gridScrollController.position.extentAfter > _loadMoreThreshold) {
+      return;
+    }
+    unawaited(_loadMore());
+  }
+
+  Future<void> _loadMore() async {
+    if (_loading || _loadingMore || !_hasMore) return;
+    final generation = _loadGeneration;
+    final offset = _photos.length;
     setState(() {
-      _photos = page;
-      _loading = false;
+      _loadingMore = true;
+      _loadMoreFailed = false;
     });
+    try {
+      final page = await widget.photoRepository.listGalleryPage(
+        page: 0,
+        pageSize: _pageSize,
+        offset: offset,
+      );
+      if (!mounted || generation != _loadGeneration) return;
+      final existingIds = _photos.map((photo) => photo.id).toSet();
+      final additions = page
+          .where((photo) => !existingIds.contains(photo.id))
+          .toList(growable: false);
+      setState(() {
+        _photos = [..._photos, ...additions];
+        _loadingMore = false;
+        _hasMore = page.length == _pageSize;
+      });
+    } catch (error) {
+      if (!mounted || generation != _loadGeneration) return;
+      setState(() {
+        _loadingMore = false;
+        _loadMoreFailed = true;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not load more photos: $error')),
+      );
+    }
   }
 
   Future<void> _insertOrRefreshPhoto(String photoId) async {
@@ -345,8 +421,21 @@ class _GalleryBodyState extends State<_GalleryBody> {
           ),
         Expanded(
           child: MediaGrid(
-            itemCount: _photos.length,
+            controller: _gridScrollController,
+            itemCount:
+                _photos.length + (_loadingMore || _loadMoreFailed ? 1 : 0),
             itemBuilder: (context, index) {
+              if (index >= _photos.length) {
+                if (_loadMoreFailed) {
+                  return Center(
+                    child: TextButton(
+                      onPressed: _loadMore,
+                      child: const Text('Retry'),
+                    ),
+                  );
+                }
+                return const Center(child: CircularProgressIndicator());
+              }
               final photo = _photos[index];
               final isSelected = _selectedIds.contains(photo.id);
               return _GalleryTile(
@@ -402,30 +491,29 @@ class _GalleryThumbnailState extends State<_GalleryThumbnail> {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final dpr = MediaQuery.devicePixelRatioOf(context);
+    Widget placeholder() => ColoredBox(
+      color: scheme.surfaceContainerHighest,
+      child: Center(
+        child: Icon(
+          Icons.photo_outlined,
+          color: scheme.onSurfaceVariant,
+          size: AppSpacing.xl,
+        ),
+      ),
+    );
     return FutureBuilder<Uint8List?>(
       future: _future,
       builder: (context, snapshot) {
         final bytes = snapshot.data;
         if (snapshot.connectionState != ConnectionState.done || bytes == null) {
-          return ColoredBox(
-            color: scheme.surfaceContainerHighest,
-            child: const Center(
-              child: SizedBox.square(
-                dimension: AppSpacing.xl,
-                child: CircularProgressIndicator(strokeWidth: 2),
-              ),
-            ),
-          );
+          return placeholder();
         }
         return Image.memory(
           bytes,
           fit: BoxFit.cover,
           cacheWidth: (160 * dpr).round(),
           gaplessPlayback: true,
-          errorBuilder: (_, _, _) => ColoredBox(
-            color: scheme.surfaceContainerHighest,
-            child: const Icon(Icons.image_outlined),
-          ),
+          errorBuilder: (_, _, _) => placeholder(),
         );
       },
     );

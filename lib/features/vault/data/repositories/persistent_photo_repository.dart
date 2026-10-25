@@ -180,6 +180,7 @@ class PersistentPhotoRepositoryImpl
   Future<List<VaultPhoto>> listGalleryPage({
     required int page,
     required int pageSize,
+    int? offset,
     String? albumId,
     bool favoritesOnly = false,
   }) async {
@@ -195,7 +196,7 @@ class PersistentPhotoRepositoryImpl
         if (favoritesOnly) {
           filtered = filtered.where((p) => p.favorite).toList();
         }
-        final start = page * pageSize;
+        final start = offset ?? page * pageSize;
         if (start >= filtered.length) return const [];
         final end = (start + pageSize).clamp(0, filtered.length);
         return filtered.sublist(start, end);
@@ -203,7 +204,7 @@ class PersistentPhotoRepositoryImpl
 
       final driftPhotos = await _db.getGalleryPhotos(
         limit: pageSize,
-        offset: page * pageSize,
+        offset: offset ?? page * pageSize,
       );
       return driftPhotos.map(_todomainPhoto).toList();
     } catch (e) {

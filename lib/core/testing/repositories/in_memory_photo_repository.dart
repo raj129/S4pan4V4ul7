@@ -33,10 +33,11 @@ class InMemoryPhotoRepository
   Future<List<VaultPhoto>> listGalleryPage({
     required int page,
     required int pageSize,
+    int? offset,
     String? albumId,
     bool favoritesOnly = false,
   }) async {
-    final start = page * pageSize;
+    final start = offset ?? page * pageSize;
     final filtered = _photos.values.where((p) {
       if (p.isTrashed) return false;
       if (!p.mimeType.startsWith('image/')) return false;

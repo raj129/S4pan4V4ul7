@@ -40,11 +40,6 @@ abstract final class AppTheme {
         systemOverlayStyle: isDark
             ? SystemUiOverlayStyle.light
             : SystemUiOverlayStyle.dark,
-        shape: Border(
-          bottom: BorderSide(
-            color: scheme.outlineVariant.withValues(alpha: 0.5),
-          ),
-        ),
       ),
 
       cardTheme: CardThemeData(
