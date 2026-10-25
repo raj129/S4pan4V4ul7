@@ -2,6 +2,16 @@ import 'package:flutter/material.dart';
 
 import '../presentation/theme/app_spacing.dart';
 
+String? navigationPathForDestination(int index) => switch (index) {
+  0 => '/chat',
+  1 => '/gallery',
+  2 => '/trash',
+  3 => '/files',
+  4 => '/notes',
+  5 => '/settings',
+  _ => null,
+};
+
 /// The app's single navigation drawer UI.
 ///
 /// Extracted out of `MainScaffold` so the drawer's destinations are defined
@@ -101,6 +111,11 @@ class AppNavigationDrawer extends StatelessWidget {
           icon: Icon(Icons.folder_open_outlined),
           selectedIcon: Icon(Icons.folder_open),
           label: Text('Files'),
+        ),
+        const NavigationDrawerDestination(
+          icon: Icon(Icons.checklist_rtl_rounded),
+          selectedIcon: Icon(Icons.checklist_rounded),
+          label: Text('Notes & Lists'),
         ),
         const NavigationDrawerDestination(
           icon: Icon(Icons.settings_outlined),

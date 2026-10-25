@@ -186,7 +186,18 @@ class _ChatMediaPickerPanelState extends State<ChatMediaPickerPanel> {
   void initState() {
     super.initState();
     _scrollController.addListener(_loadNextWhenNearEnd);
-    unawaited(_loadStickers());
+    _refreshActiveContent();
+  }
+
+  void _refreshActiveContent() {
+    if (_tab == ChatMediaPickerTab.stickers &&
+        _stickerSource == _StickerSource.personal) {
+      unawaited(_loadStickers());
+      return;
+    }
+    if (_showGiphy) {
+      unawaited(_search(reset: true));
+    }
   }
 
   @override
@@ -312,12 +323,7 @@ class _ChatMediaPickerPanelState extends State<ChatMediaPickerPanel> {
     setState(() {
       _tab = tab;
     });
-    if (tab == ChatMediaPickerTab.stickers) {
-      unawaited(_loadStickers());
-    }
-    if (_showGiphy) {
-      unawaited(_search(reset: true));
-    }
+    _refreshActiveContent();
   }
 
   void _expandSearch() {
@@ -344,11 +350,7 @@ class _ChatMediaPickerPanelState extends State<ChatMediaPickerPanel> {
       _stickerSource = source;
       _error = null;
     });
-    if (source == _StickerSource.personal) {
-      unawaited(_loadStickers());
-    } else {
-      unawaited(_search(reset: true));
-    }
+    _refreshActiveContent();
   }
 
   Future<void> _loadStickers() async {
@@ -536,14 +538,14 @@ class _ChatMediaPickerPanelState extends State<ChatMediaPickerPanel> {
                                 tooltip: 'Search ${_tab.name}',
                                 visualDensity: VisualDensity.compact,
                                 constraints: const BoxConstraints.tightFor(
-                                  width: 40,
-                                  height: 40,
+                                  width: 34,
+                                  height: 34,
                                 ),
                                 padding: EdgeInsets.zero,
                                 onPressed: _expandSearch,
                                 icon: const Icon(
                                   Icons.search_rounded,
-                                  size: 20,
+                                  size: 18,
                                 ),
                               ),
                               Expanded(
@@ -581,8 +583,8 @@ class _ChatMediaPickerPanelState extends State<ChatMediaPickerPanel> {
                                 tooltip: 'Backspace',
                                 visualDensity: VisualDensity.compact,
                                 constraints: const BoxConstraints.tightFor(
-                                  width: 40,
-                                  height: 40,
+                                  width: 34,
+                                  height: 34,
                                 ),
                                 padding: EdgeInsets.zero,
                                 onPressed:
@@ -592,7 +594,7 @@ class _ChatMediaPickerPanelState extends State<ChatMediaPickerPanel> {
                                     : null,
                                 icon: const Icon(
                                   Icons.backspace_outlined,
-                                  size: 19,
+                                  size: 18,
                                 ),
                               ),
                             ],
@@ -661,30 +663,42 @@ class _ChatMediaPickerPanelState extends State<ChatMediaPickerPanel> {
                       child: Row(
                         children: [
                           Expanded(
-                            child: SegmentedButton<_StickerSource>(
-                              showSelectedIcon: false,
-                              segments: const [
-                                ButtonSegment(
-                                  value: _StickerSource.giphy,
-                                  label: Text('Explore'),
+                            child: ConstrainedBox(
+                              constraints: const BoxConstraints(maxWidth: 340),
+                              child: SegmentedButton<_StickerSource>(
+                                showSelectedIcon: false,
+                                style: const ButtonStyle(
+                                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                                 ),
-                                ButtonSegment(
-                                  value: _StickerSource.personal,
-                                  label: Text('My stickers'),
-                                ),
-                              ],
-                              selected: {_stickerSource},
-                              onSelectionChanged: (selection) =>
-                                  _selectStickerSource(selection.first),
+                                segments: const [
+                                  ButtonSegment(
+                                    value: _StickerSource.giphy,
+                                    label: Text('Explore'),
+                                  ),
+                                  ButtonSegment(
+                                    value: _StickerSource.personal,
+                                    label: Text('My stickers'),
+                                  ),
+                                ],
+                                selected: {_stickerSource},
+                                onSelectionChanged: (selection) =>
+                                    _selectStickerSource(selection.first),
+                              ),
                             ),
                           ),
                           if (showPersonalStickers)
                             IconButton(
                               tooltip: 'Add sticker from device',
                               visualDensity: VisualDensity.compact,
+                              constraints: const BoxConstraints.tightFor(
+                                width: 32,
+                                height: 32,
+                              ),
+                              padding: EdgeInsets.zero,
                               onPressed: _importSticker,
                               icon: const Icon(
                                 Icons.add_photo_alternate_outlined,
+                                size: 18,
                               ),
                             ),
                         ],
@@ -744,11 +758,11 @@ class _ChatMediaPickerPanelState extends State<ChatMediaPickerPanel> {
             onTap: () => _selectTab(tab),
             borderRadius: BorderRadius.circular(10),
             child: SizedBox(
-              width: 34,
-              height: 34,
+              width: 30,
+              height: 30,
               child: Icon(
                 icon,
-                size: 19,
+                size: 17,
                 color: selected ? colors.primary : colors.onSurfaceVariant,
               ),
             ),

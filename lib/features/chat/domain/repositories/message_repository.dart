@@ -18,6 +18,7 @@ abstract class MessageRepository {
     String? mediaRef,
     MessageType? mediaType,
     String? liveLocationSessionId,
+    String? sharedNoteId,
     MediaMeta? mediaMeta,
     MessageReply? replyTo,
     bool isForwarded = false,

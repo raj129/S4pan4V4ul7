@@ -41,6 +41,10 @@ import '../domain/repositories/push_token_repository.dart';
 import '../domain/repositories/thread_repository.dart';
 import '../domain/repositories/typing_repository.dart';
 import '../domain/repositories/user_repository.dart';
+import '../domain/repositories/notes_repository.dart';
+import '../data/repositories/app_notes_repository.dart';
+import 'package:photo_vault/features/vault/data/repositories/flutter_secure_string_kv.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import '../presentation/widgets/chat_media_preview.dart';
 import 'package:photo_vault/core/storage/local_db/vault_database.dart';
 
@@ -161,6 +165,11 @@ class ChatDependencies {
   late LiveLocationService? liveLocationService = Platform.isAndroid
       ? LiveLocationService(repository: liveLocationRepository)
       : null;
+
+  late final NotesRepository notesRepository = AppNotesRepository(
+    cryptoService: cryptoService,
+    secureKv: FlutterSecureStringKv(const FlutterSecureStorage()),
+  );
 
   /// Offline message cache. Falls back to a no-op when no local database is
   /// available, so the chat still works (online-only) in tests.

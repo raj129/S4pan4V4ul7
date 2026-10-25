@@ -24,6 +24,8 @@ import 'chat_media_preview.dart';
 import 'chat_audio_player.dart';
 import 'attachment_download_progress.dart';
 import 'live_location_bubble.dart';
+import 'shared_note_bubble.dart';
+import '../../domain/repositories/notes_repository.dart';
 import '../../application/media/media_send_status.dart';
 
 /// Emoji offered in the quick reaction bar, matching WhatsApp's default set.
@@ -70,6 +72,7 @@ class MessageBubble extends StatelessWidget {
     this.onResumeUpload,
     this.liveLocationRepository,
     this.onStopLiveLocation,
+    this.notesRepository,
   });
 
   final ChatMessage message;
@@ -136,6 +139,7 @@ class MessageBubble extends StatelessWidget {
     String sessionId,
   )?
   onStopLiveLocation;
+  final NotesRepository? notesRepository;
 
   @override
   Widget build(BuildContext context) {
@@ -149,6 +153,27 @@ class MessageBubble extends StatelessWidget {
         isMine: isMine,
         isLastInGroup: isLastInGroup,
         onReply: onReply,
+      );
+    }
+    if (message.mediaType == MessageType.sharedNote &&
+        notesRepository != null &&
+        message.sharedNoteId != null) {
+      return Align(
+        alignment: isMine ? Alignment.centerRight : Alignment.centerLeft,
+        child: Padding(
+          padding: EdgeInsets.only(
+            top: AppSpacing.xxs,
+            bottom: isLastInGroup ? AppSpacing.sm : AppSpacing.xxs,
+            left: isMine ? AppSpacing.xxl : AppSpacing.sm,
+            right: isMine ? AppSpacing.sm : AppSpacing.xxl,
+          ),
+          child: SharedNoteBubble(
+            message: message,
+            isMine: isMine,
+            currentUserId: myUid,
+            notesRepository: notesRepository!,
+          ),
+        ),
       );
     }
     if (message.mediaType == MessageType.liveLocation) {

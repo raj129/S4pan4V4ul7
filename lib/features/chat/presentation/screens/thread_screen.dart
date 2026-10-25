@@ -34,6 +34,10 @@ import '../../domain/entities/chat_thread.dart';
 import '../../domain/entities/chat_user.dart';
 import '../../domain/entities/live_location.dart';
 import '../../domain/repositories/live_location_repository.dart';
+import '../../domain/repositories/notes_repository.dart';
+import '../../domain/entities/app_note.dart';
+import '../screens/note_editor_screen.dart';
+import '../screens/notes_screen.dart';
 import 'package:photo_vault/features/vault/domain/repositories/settings_repository.dart';
 import 'package:photo_vault/core/widgets/app_state_views.dart';
 import '../state/active_thread_cubit.dart';
@@ -116,6 +120,7 @@ class ThreadScreen extends StatefulWidget {
     this.profileService,
     this.liveLocationRepository,
     this.liveLocationService,
+    this.notesRepository,
   });
 
   final ChatThread thread;
@@ -139,6 +144,7 @@ class ThreadScreen extends StatefulWidget {
   final SettingsRepository? settingsRepository;
   final LiveLocationRepository? liveLocationRepository;
   final LiveLocationService? liveLocationService;
+  final NotesRepository? notesRepository;
 
   @override
   State<ThreadScreen> createState() => _ThreadScreenState();
@@ -374,8 +380,19 @@ class _ThreadScreenState extends State<ThreadScreen> {
     }
   }
 
+  void _dismissEmojiSheet() {
+    if (!_showEmojiPicker) return;
+    setState(() => _showEmojiPicker = false);
+    if (Navigator.of(context).canPop()) {
+      Navigator.of(context).maybePop();
+    }
+  }
+
   void _onTextControllerChanged() {
     _hasText.value = _textCtrl.text.trim().isNotEmpty;
+    if (_showEmojiPicker && _inputFocus.hasFocus) {
+      _dismissEmojiSheet();
+    }
   }
 
   void _onScroll() {
@@ -431,7 +448,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
 
   void _onInputFocusChanged() {
     if (_inputFocus.hasFocus && _showEmojiPicker && mounted) {
-      Navigator.of(context).maybePop();
+      _dismissEmojiSheet();
     }
   }
 
@@ -917,6 +934,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
               isOffline: state.isOffline,
               mediaLoader: widget.mediaLoader,
               liveLocationRepository: widget.liveLocationRepository,
+              notesRepository: widget.notesRepository,
               onStopLiveLocation: _stopLiveLocation,
               sendStatus: state.uploadProgress[msg.messageId],
               onPauseUpload: () => cubit.pauseUpload(msg.messageId),
@@ -1658,7 +1676,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
                         style: Theme.of(context).textTheme.bodyLarge,
                         onTap: () {
                           if (_showEmojiPicker) {
-                            setState(() => _showEmojiPicker = false);
+                            _dismissEmojiSheet();
                           }
                         },
                         decoration: InputDecoration(
@@ -2132,6 +2150,24 @@ class _ThreadScreenState extends State<ThreadScreen> {
                 color: const Color(0xFF673AB7),
                 onTap: () => Navigator.pop(sheetContext, 'saved'),
               ),
+              _AttachmentOption(
+                icon: Icons.library_books_outlined,
+                label: 'Notes & Lists',
+                color: const Color(0xFF607D8B),
+                onTap: () => Navigator.pop(sheetContext, 'notes'),
+              ),
+              _AttachmentOption(
+                icon: Icons.checklist_rounded,
+                label: 'Checklist',
+                color: const Color(0xFF00ACC1),
+                onTap: () => Navigator.pop(sheetContext, 'checklist'),
+              ),
+              _AttachmentOption(
+                icon: Icons.note_alt_rounded,
+                label: 'Note',
+                color: const Color(0xFFFFB300),
+                onTap: () => Navigator.pop(sheetContext, 'note'),
+              ),
               if (Platform.isAndroid)
                 _AttachmentOption(
                   icon: Icons.location_on_rounded,
@@ -2145,6 +2181,62 @@ class _ThreadScreenState extends State<ThreadScreen> {
       ),
     );
     if (choice == null || !mounted || !context.mounted) return;
+    if (choice == 'notes') {
+      final repository = widget.notesRepository;
+      if (repository == null) {
+        messenger.showSnackBar(
+          const SnackBar(content: Text('Notes unavailable at this moment.')),
+        );
+        return;
+      }
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => NotesScreen(
+            notesRepository: repository,
+            currentUserId: cubit.myUid,
+            threadId: widget.thread.threadId,
+          ),
+        ),
+      );
+      return;
+    }
+    if (choice == 'checklist' || choice == 'note') {
+      final repository = widget.notesRepository;
+      if (repository == null) {
+        messenger.showSnackBar(
+          const SnackBar(content: Text('Notes unavailable at this moment.')),
+        );
+        return;
+      }
+      final noteId = _uuid.v4();
+      final myUid = cubit.myUid;
+      final newNote = AppNote(
+        id: noteId,
+        threadId: widget.thread.threadId,
+        creatorId: myUid,
+        type: choice == 'checklist' ? NoteType.checklist : NoteType.textNote,
+        title: '',
+        content: '',
+        items: const [],
+        createdAt: DateTime.now().toUtc(),
+        updatedAt: DateTime.now().toUtc(),
+      );
+
+      await repository.saveThreadNote(newNote);
+      await cubit.sendSharedNoteMessage(noteId: noteId);
+
+      if (!context.mounted) return;
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => NoteEditorScreen(
+            note: newNote,
+            notesRepository: repository,
+            currentUserId: myUid,
+          ),
+        ),
+      );
+      return;
+    }
     if (choice == 'liveLocation') {
       await _shareLiveLocation(cubit);
       return;

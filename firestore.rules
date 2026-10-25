@@ -220,6 +220,19 @@ service cloud.firestore {
         allow delete: if isExistingThreadParticipant(threadId)
                       && isSelf(resource.data.userId);
       }
+
+      // ── Shared notes & checklists ──────────────────────────────────────────
+      // Notes are E2EE encrypted under the thread key. Thread participants can
+      // collaborate and co-edit notes and checklists.
+      match /notes/{noteId} {
+        allow read: if isExistingThreadParticipant(threadId);
+        allow create: if isExistingThreadParticipant(threadId)
+                      && request.resource.data.creatorId == request.auth.uid;
+        allow update: if isExistingThreadParticipant(threadId)
+                      && request.resource.data.creatorId == resource.data.creatorId;
+        allow delete: if isExistingThreadParticipant(threadId)
+                      && isSelf(resource.data.creatorId);
+      }
     }
 
     // Alert-rate-limit bookkeeping is written only by Cloud Functions.

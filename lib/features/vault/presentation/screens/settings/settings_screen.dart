@@ -184,7 +184,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     return BaseScreenShell(
       title: 'Settings',
-      drawerSelectedIndex: 4,
+      drawerSelectedIndex: 5,
       body: ListView(
         padding: const EdgeInsets.only(bottom: AppSpacing.xl),
         children: [

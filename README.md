@@ -117,6 +117,16 @@ email and can install the build using the Firebase App Tester app on Android.
 
 ## Docs
 
+### Notes and checklists
+
+In a chat, use the attachment sheet's **Note** or **Checklist** action to
+create a shared item. **Notes & Lists** in the same sheet shows that chat's
+existing shared items, newest edit first, with local edit dates and times.
+The navigation drawer's **Notes & Lists** shows separate private notes stored
+on this device. The editor saves as you work; the checkmark saves and returns
+to the list or chat. Press Enter while editing a checklist item to move to an
+empty item field.
+
 ### Android chat attachments
 
 Android queues encrypted attachments in an app-private durable journal protected

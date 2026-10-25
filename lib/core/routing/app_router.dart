@@ -31,6 +31,7 @@ import '../../features/vault/presentation/screens/restore/restore_flow_screen.da
 import '../../features/vault/presentation/screens/settings/change_pin_screen.dart';
 import '../../features/vault/presentation/screens/settings/settings_screen.dart';
 import '../../features/vault/presentation/screens/trash/trash_screen.dart';
+import '../../features/chat/presentation/screens/notes_screen.dart';
 import '../../features/chat/presentation/state/active_thread_cubit.dart';
 import '../../features/chat/presentation/state/thread_list_cubit.dart';
 import '../../features/chat/presentation/state/user_lookup_cubit.dart';
@@ -96,6 +97,17 @@ GoRouter buildAppRouter({
           StatefulShellBranch(
             routes: [
               GoRoute(path: '/files', builder: (_, _) => const FilesScreen()),
+            ],
+          ),
+          StatefulShellBranch(
+            routes: [
+              GoRoute(
+                path: '/notes',
+                builder: (_, _) => NotesScreen(
+                  notesRepository: deps.chatDependencies.notesRepository,
+                  currentUserId: deps.chatDependencies.authService.currentUid ?? '',
+                ),
+              ),
             ],
           ),
         ],
@@ -344,6 +356,7 @@ GoRoute _chatRoute(AppDependencies deps, AppSessionState session) {
             liveLocationService: Platform.isAndroid
                 ? deps.chatDependencies.liveLocationService
                 : null,
+            notesRepository: deps.chatDependencies.notesRepository,
           );
           final providedCubit = args.activeThreadCubit;
           Widget withThreadList(Widget child) {
