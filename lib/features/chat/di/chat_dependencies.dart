@@ -3,6 +3,7 @@ import '../application/media/android_chat_uploads.dart';
 import '../application/media/android_chat_downloads.dart';
 import '../application/media/android_chat_local_media.dart';
 import '../application/media/android_chat_secure_media_service.dart';
+import '../application/media/chat_media_manager_service.dart';
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
@@ -18,6 +19,7 @@ import 'package:photo_vault/core/data/firebase_current_user.dart';
 import 'package:photo_vault/core/session/vault_session.dart';
 import '../application/crypto/chat_crypto_service.dart';
 import '../data/repositories/drift_chat_search_index_repository.dart';
+import '../data/repositories/drift_chat_draft_repository.dart';
 import '../data/repositories/drift_message_cache_repository.dart';
 import '../data/repositories/drift_outbox_repository.dart';
 import '../data/repositories/firebase_avatar_storage.dart';
@@ -32,6 +34,7 @@ import '../data/repositories/firestore_typing_repository.dart';
 import '../data/repositories/firestore_user_repository.dart';
 import 'package:photo_vault/core/domain/repositories/auth_repository.dart';
 import '../domain/repositories/chat_search_index_repository.dart';
+import '../domain/repositories/chat_draft_repository.dart';
 import '../domain/repositories/message_cache_repository.dart';
 import '../domain/repositories/outbox_repository.dart';
 import '../domain/repositories/message_repository.dart';
@@ -41,6 +44,10 @@ import '../domain/repositories/push_token_repository.dart';
 import '../domain/repositories/thread_repository.dart';
 import '../domain/repositories/typing_repository.dart';
 import '../domain/repositories/user_repository.dart';
+import '../domain/repositories/notes_repository.dart';
+import '../data/repositories/app_notes_repository.dart';
+import 'package:photo_vault/features/vault/data/repositories/flutter_secure_string_kv.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import '../presentation/widgets/chat_media_preview.dart';
 import 'package:photo_vault/core/storage/local_db/vault_database.dart';
 
@@ -67,6 +74,7 @@ class ChatDependencies {
     LiveLocationRepository? liveLocationRepository,
     LiveLocationService? liveLocationService,
     ChatCryptoService? cryptoService,
+    ChatDraftRepository? draftRepository,
     PushTokenRepository? pushTokenRepository,
   }) : _authRepository = authRepository,
        _vaultSession = vaultSession,
@@ -109,6 +117,12 @@ class ChatDependencies {
     if (cryptoService != null) {
       this.cryptoService = cryptoService;
     }
+    this.draftRepository =
+        draftRepository ??
+        switch (database) {
+          final VaultDatabase db => DriftChatDraftRepository(db),
+          _ => const NoopChatDraftRepository(),
+        };
     _vaultSession.addListener(_onVaultSessionChanged);
   }
 
@@ -162,12 +176,20 @@ class ChatDependencies {
       ? LiveLocationService(repository: liveLocationRepository)
       : null;
 
+  late final NotesRepository notesRepository = AppNotesRepository(
+    cryptoService: cryptoService,
+    secureKv: FlutterSecureStringKv(const FlutterSecureStorage()),
+  );
+
   /// Offline message cache. Falls back to a no-op when no local database is
   /// available, so the chat still works (online-only) in tests.
   late final MessageCacheRepository messageCache = switch (_database) {
     final VaultDatabase db => DriftMessageCacheRepository(db),
     _ => const NoopMessageCacheRepository(),
   };
+
+  /// Ciphertext-only composer drafts, stored alongside the local chat cache.
+  late final ChatDraftRepository draftRepository;
 
   /// Keyed local search index over the message cache.
   late final ChatSearchIndexRepository searchIndex = switch (_database) {
@@ -198,6 +220,13 @@ class ChatDependencies {
             currentUid: () => mediaLoader.accountId,
           ),
   );
+
+  late final ChatMediaManagerService mediaManagerService =
+      ChatMediaManagerService(
+        messageCache: messageCache,
+        messageRepository: messageRepository,
+        mediaLoader: mediaLoader,
+      );
 
   late final ContactDiscoveryService contactDiscoveryService =
       ContactDiscoveryService(userRepository: userRepository);

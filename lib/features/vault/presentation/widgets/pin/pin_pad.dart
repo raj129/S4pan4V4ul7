@@ -155,8 +155,6 @@ class PinKey extends StatefulWidget {
 }
 
 class _PinKeyState extends State<PinKey> {
-  bool _pressed = false;
-
   void _handleTap() {
     HapticFeedback.lightImpact();
     widget.onTap();
@@ -166,31 +164,34 @@ class _PinKeyState extends State<PinKey> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final enabled = widget.enabled;
-    final foreground = enabled
-        ? theme.colorScheme.onSurface
-        : theme.colorScheme.onSurface.withValues(alpha: 0.38);
-
-    final key = AnimatedScale(
-      scale: _pressed ? 0.96 : 1,
-      duration: AppDuration.fast,
+    final colors = theme.colorScheme;
+    final key = SizedBox.square(
+      dimension: widget.size,
       child: Material(
-        color: _pressed
-            ? theme.colorScheme.primaryContainer.withValues(alpha: 0.55)
-            : theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.45),
+        color: colors.surfaceContainerHigh,
         shape: const CircleBorder(),
-        child: InkResponse(
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
           onTap: enabled ? _handleTap : null,
-          onHighlightChanged: (value) => setState(() => _pressed = value),
-          containedInkWell: true,
           customBorder: const CircleBorder(),
-          radius: widget.size / 2,
-          child: IconTheme.merge(
-            data: IconThemeData(color: foreground),
-            child: DefaultTextStyle.merge(
-              style: TextStyle(color: foreground),
-              child: SizedBox.square(
-                dimension: widget.size,
-                child: Center(child: widget.child),
+          splashColor: colors.primary.withValues(alpha: 0.16),
+          highlightColor: colors.primary.withValues(alpha: 0.08),
+          child: Center(
+            child: IconTheme(
+              data: IconThemeData(
+                color: enabled
+                    ? colors.onSurface
+                    : colors.onSurface.withValues(alpha: 0.38),
+                size: 24,
+              ),
+              child: DefaultTextStyle(
+                style: theme.textTheme.headlineMedium!.copyWith(
+                  color: enabled
+                      ? colors.onSurface
+                      : colors.onSurface.withValues(alpha: 0.38),
+                  fontWeight: FontWeight.w500,
+                ),
+                child: widget.child,
               ),
             ),
           ),
@@ -277,18 +278,32 @@ class _PinDotRowState extends State<PinDotRow>
         children: List.generate(widget.total, (index) {
           final filled = index < clampedFilled;
           final size = filled ? widget.dotSize : widget.dotSize - AppSpacing.xs;
-          return AnimatedContainer(
+          return AnimatedScale(
             duration: AppDuration.fast,
-            curve: Curves.easeOut,
-            margin: const EdgeInsets.symmetric(horizontal: AppSpacing.sm),
-            width: size,
-            height: size,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: filled ? activeColor : Colors.transparent,
-              border: Border.all(
-                color: filled ? activeColor : emptyColor,
-                width: 2,
+            scale: filled ? 1.05 : 0.95,
+            curve: Curves.easeOutCubic,
+            child: AnimatedContainer(
+              duration: AppDuration.fast,
+              curve: Curves.easeOut,
+              margin: const EdgeInsets.symmetric(horizontal: AppSpacing.sm),
+              width: size,
+              height: size,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: filled ? activeColor : Colors.transparent,
+                border: Border.all(
+                  color: filled ? activeColor : emptyColor,
+                  width: filled ? 2.5 : 2,
+                ),
+                boxShadow: filled && !widget.hasError
+                    ? [
+                        BoxShadow(
+                          color: activeColor.withValues(alpha: 0.28),
+                          blurRadius: 6,
+                          spreadRadius: 1,
+                        ),
+                      ]
+                    : null,
               ),
             ),
           );

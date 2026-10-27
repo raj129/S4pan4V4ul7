@@ -666,14 +666,14 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
   // Send text message
   // ---------------------------------------------------------------------------
 
-  Future<void> sendText(String plaintext) async {
-    if (plaintext.trim().isEmpty) return;
+  Future<bool> sendText(String plaintext, {bool waitForDelivery = true}) async {
+    if (plaintext.trim().isEmpty) return false;
     final threadId = _currentThreadId;
-    if (threadId == null) return;
-    // Captured before the await chain so a reply cannot attach itself to the
-    // wrong message if the user clears the composer mid-send.
-    final reply = await _buildReplyPayload(threadId);
+    if (threadId == null) return false;
     try {
+      // Captured before the await chain so a reply cannot attach itself to the
+      // wrong message if the user clears the composer mid-send.
+      final reply = await _buildReplyPayload(threadId);
       final encrypted = await cryptoService.encryptMessage(
         threadId: threadId,
         plaintext: plaintext.trim(),
@@ -691,14 +691,66 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
           queuedAt: DateTime.now().toUtc(),
         ),
         decryptedPreview: plaintext.trim(),
+        waitForDelivery: waitForDelivery,
       );
       await setTyping(false);
+      return true;
     } catch (e) {
       // Encryption failed, so there is nothing worth queueing. Keep the
       // conversation on screen; re-opening the thread here used to blank the
       // list and lose the user's scroll position.
       _reportActionError('Send failed: $e');
+      return false;
     }
+  }
+
+  /// Sends a chat marker linking to a note stored for this thread.
+  Future<bool> sendSharedNoteMessage({required String noteId}) async {
+    final threadId = _currentThreadId;
+    final recipientUid = _otherUser?.uid;
+    if (threadId == null || recipientUid == null) {
+      _reportActionError('Open a chat before sharing a note.');
+      return false;
+    }
+
+    const preview = 'Shared a note';
+    late final ChatMessage sent;
+    try {
+      final encrypted = await cryptoService.encryptMessage(
+        threadId: threadId,
+        plaintext: preview,
+      );
+      sent = await messageRepository
+          .sendMessage(
+            threadId: threadId,
+            senderId: myUid,
+            encryptedText: encrypted,
+            messageId: _uuid.v4(),
+            mediaType: MessageType.sharedNote,
+            sharedNoteId: noteId,
+          )
+          .timeout(const Duration(seconds: 20));
+    } catch (error) {
+      _reportActionError('Could not share note: $error');
+      return false;
+    }
+
+    try {
+      await threadRepository.updateLastMessage(
+        threadId: threadId,
+        preview: preview,
+        sentAt: sent.sentAt,
+      );
+      await threadRepository.incrementUnread(
+        threadId: threadId,
+        recipientUid: recipientUid,
+      );
+    } catch (error) {
+      _reportActionError(
+        'Note was shared, but the chat preview could not be updated: $error',
+      );
+    }
+    return true;
   }
 
   /// Sends one encrypted chat marker for a live-location session. Coordinate
@@ -763,11 +815,16 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
   Future<void> _enqueueAndDeliver(
     OutboxItem item, {
     String? decryptedPreview,
+    bool waitForDelivery = true,
   }) async {
     if (_detached) await jumpToLatest();
     await outbox.enqueue(item);
     _showPending(item, decryptedPreview);
-    await _deliver(item, decryptedPreview: decryptedPreview);
+    if (waitForDelivery) {
+      await _deliver(item, decryptedPreview: decryptedPreview);
+    } else {
+      unawaited(_deliver(item, decryptedPreview: decryptedPreview));
+    }
   }
 
   Future<void> _deliver(OutboxItem item, {String? decryptedPreview}) async {

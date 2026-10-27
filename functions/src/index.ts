@@ -1,9 +1,10 @@
 /**
- * Push notifications for the end-to-end encrypted chat.
+ * Cloud Functions for the end-to-end encrypted chat.
  *
  * Message bodies are ciphertext the server cannot read, so the push carries
  * only thread and message IDs. The client displays a generic alert and records
- * device delivery without exposing message content.
+ * device delivery without exposing message content. GIPHY search stays in the
+ * client, as required by GIPHY's API guidelines.
  */
 import { initializeApp } from "firebase-admin/app";
 import { FieldPath, getFirestore } from "firebase-admin/firestore";

@@ -12,6 +12,7 @@ import '../../domain/entities/chat_message.dart';
 import '../../application/media/media_send_status.dart';
 import '../screens/chat_image_viewer_screen.dart';
 import 'attachment_download_progress.dart';
+import 'attachment_upload_progress.dart';
 
 export '../../application/media/chat_media_loader.dart';
 
@@ -218,7 +219,9 @@ class _ChatMediaPreviewState extends State<ChatMediaPreview> {
     // Reserve the final size up front using the clear-text dimensions, so the
     // bubble does not jump when the decrypted image arrives.
     const width = 220.0;
-    final height = (width / (meta?.aspectRatio ?? 4 / 3)).clamp(80.0, 320.0);
+    final height = widget.message.mediaType == MessageType.sticker
+        ? width
+        : (width / (meta?.aspectRatio ?? 4 / 3)).clamp(80.0, 320.0);
 
     return GestureDetector(
       onTap: widget.onTap,
@@ -233,23 +236,87 @@ class _ChatMediaPreviewState extends State<ChatMediaPreview> {
     );
   }
 
+  Widget _buildUploadOverlay() {
+    final status = widget.sendStatus;
+    if (status == null) return const SizedBox.shrink();
+    final progress = status.isIndeterminate ? null : status.progress;
+    final percent = (status.progress * 100).clamp(0, 100).toInt();
+
+    return Center(
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(
+          color: Colors.black.withValues(alpha: 0.65),
+          borderRadius: BorderRadius.circular(20),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.25),
+              blurRadius: 8,
+              offset: const Offset(0, 2),
+            ),
+          ],
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SizedBox.square(
+              dimension: 36,
+              child: Stack(
+                alignment: Alignment.center,
+                children: [
+                  CircularProgressIndicator(
+                    value: progress,
+                    strokeWidth: 3.5,
+                    color: Colors.white,
+                    backgroundColor: Colors.white24,
+                  ),
+                  if (widget.onCancel != null)
+                    GestureDetector(
+                      onTap: widget.onCancel,
+                      child: const Icon(
+                        Icons.close_rounded,
+                        color: Colors.white,
+                        size: 18,
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              status.isIndeterminate ? status.label : '$percent%',
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                letterSpacing: 0.2,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildImage(double width, double height) {
     // Still uploading: no object exists yet, so show a neutral tile that the
     // progress overlay sits on.
     if (_bytes == null && !_loading && !_failed) {
-      return ColoredBox(
-        color: Colors.black26,
-        child:
-            widget.message.mediaType == MessageType.video &&
-                widget.message.mediaRef != null &&
-                widget.sendStatus == null
-            ? const Center(
-                child: CircleAvatar(
-                  backgroundColor: Colors.black54,
-                  child: Icon(Icons.play_arrow, color: Colors.white),
-                ),
-              )
-            : const SizedBox.expand(),
+      return Stack(
+        fit: StackFit.expand,
+        children: [
+          const ColoredBox(color: Colors.black26),
+          if (widget.sendStatus != null)
+            _buildUploadOverlay()
+          else if (widget.message.mediaType == MessageType.video &&
+              widget.message.mediaRef != null)
+            const Center(
+              child: CircleAvatar(
+                backgroundColor: Colors.black54,
+                child: Icon(Icons.play_arrow, color: Colors.white),
+              ),
+            ),
+        ],
       );
     }
     if (_loading) {
@@ -319,7 +386,11 @@ class _ChatMediaPreviewState extends State<ChatMediaPreview> {
       children: [
         Image(
           image: _previewImage!,
-          fit: BoxFit.cover,
+          fit:
+              widget.message.mediaType == MessageType.gif ||
+                  widget.message.mediaType == MessageType.sticker
+              ? BoxFit.contain
+              : BoxFit.cover,
           // Videos have no decodable poster frame yet; show a
           // neutral tile under the play button instead.
           errorBuilder: (_, _, _) => const ColoredBox(
@@ -336,6 +407,7 @@ class _ChatMediaPreviewState extends State<ChatMediaPreview> {
             ),
           ),
         ),
+        if (widget.sendStatus != null) _buildUploadOverlay(),
         if (widget.message.mediaType == MessageType.video &&
             widget.sendStatus == null)
           const Center(
@@ -574,7 +646,12 @@ class _ChatDocumentTileState extends State<ChatDocumentTile> {
       mainAxisSize: MainAxisSize.min,
       children: [
         tile,
-        if (_opening && widget.message.mediaRef != null)
+        if (widget.sendStatus != null)
+          AttachmentUploadProgress(
+            status: widget.sendStatus!,
+            onCancel: widget.onCancel,
+          )
+        else if (_opening && widget.message.mediaRef != null)
           AttachmentDownloadProgress(
             loader: widget.loader,
             storagePath: widget.message.mediaRef!,

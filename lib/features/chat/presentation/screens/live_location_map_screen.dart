@@ -5,10 +5,9 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:intl/intl.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 import '../../domain/entities/live_location.dart';
-
-const _googleMapsApiKey = String.fromEnvironment('GOOGLE_MAPS_ANDROID_API_KEY');
 
 class LiveLocationMapScreen extends StatefulWidget {
   const LiveLocationMapScreen({
@@ -34,12 +33,24 @@ class LiveLocationMapScreen extends StatefulWidget {
 
 class _LiveLocationMapScreenState extends State<LiveLocationMapScreen> {
   Timer? _countdownTimer;
+  bool _locationGranted = false;
 
   @override
   void initState() {
     super.initState();
     _countdownTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted) setState(() {});
+    });
+    if (Platform.isAndroid) {
+      unawaited(_loadEnvironment());
+    }
+  }
+
+  Future<void> _loadEnvironment() async {
+    final granted = await Permission.locationWhenInUse.isGranted;
+    if (!mounted) return;
+    setState(() {
+      _locationGranted = granted;
     });
   }
 
@@ -76,20 +87,23 @@ class _LiveLocationMapScreenState extends State<LiveLocationMapScreen> {
   Widget _buildSession(BuildContext context, LiveLocationSession? session) {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
-    final point = session?.isActive == true && session?.isExpired == false
-        ? session?.currentPoint
-        : null;
+    final point = session?.currentPoint;
     final isLive = session?.isLive ?? false;
     final isStale = session?.isStale ?? false;
     final isActive = session?.isActive == true && session?.isExpired == false;
-    final mapConfigured = _googleMapsApiKey.isNotEmpty;
 
     return Scaffold(
       appBar: AppBar(
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(widget.isMine ? 'Your Live Location' : 'Live Location'),
+            Text(
+              isActive
+                  ? (widget.isMine ? 'Your Live Location' : 'Live Location')
+                  : (widget.isMine
+                      ? 'Your Last Known Location'
+                      : 'Last Known Location'),
+            ),
             Text(
               _statusLabel(session, isActive, isLive, isStale),
               style: theme.textTheme.labelSmall?.copyWith(
@@ -121,17 +135,19 @@ class _LiveLocationMapScreenState extends State<LiveLocationMapScreen> {
       body: Stack(
         children: [
           Positioned.fill(
-            child: !mapConfigured
-                ? const _MapUnavailable(
-                    message:
-                        'Google Maps is not configured. Set the Android Maps '
-                        'API key in the app build environment.',
+            child: point == null
+                ? _MapUnavailable(
+                    message: isActive
+                        ? 'Waiting for the sender’s first location…'
+                        : 'Location session ended and no coordinates were recorded.',
                   )
-                : point == null
-                ? const _MapUnavailable(
-                    message: 'Waiting for the sender’s first location…',
-                  )
-                : _LiveGoogleMap(point: point),
+                : _LiveGoogleMap(
+                    point: point,
+                    isActive: isActive,
+                    isMine: widget.isMine,
+                    lastUpdatedAt: session?.lastUpdatedAt,
+                    myLocationEnabled: _locationGranted,
+                  ),
           ),
           if (session != null)
             Positioned(
@@ -167,14 +183,27 @@ class _LiveLocationMapScreenState extends State<LiveLocationMapScreen> {
       }
       return '${remaining.inMinutes}m ${remaining.inSeconds.remainder(60)}s remaining';
     }
-    return session.isExpired ? 'Session expired' : 'Sharing stopped';
+    final timeStr = DateFormat.jm().format(session.lastUpdatedAt.toLocal());
+    return session.isExpired
+        ? 'Session expired at $timeStr'
+        : 'Sharing stopped at $timeStr';
   }
 }
 
 class _LiveGoogleMap extends StatefulWidget {
-  const _LiveGoogleMap({required this.point});
+  const _LiveGoogleMap({
+    required this.point,
+    required this.isActive,
+    required this.isMine,
+    required this.myLocationEnabled,
+    this.lastUpdatedAt,
+  });
 
   final LiveLocationPoint point;
+  final bool isActive;
+  final bool isMine;
+  final bool myLocationEnabled;
+  final DateTime? lastUpdatedAt;
 
   @override
   State<_LiveGoogleMap> createState() => _LiveGoogleMapState();
@@ -206,6 +235,18 @@ class _LiveGoogleMapState extends State<_LiveGoogleMap> {
   Widget build(BuildContext context) {
     final point = widget.point;
     final center = LatLng(point.latitude, point.longitude);
+    final markerTitle = widget.isActive
+        ? (widget.isMine ? 'Your live location' : 'Shared live location')
+        : (widget.isMine ? 'Your last known location' : 'Last known location');
+    final updatedAt = widget.lastUpdatedAt ?? point.timestamp;
+    final markerSnippet = [
+      if (!widget.isActive)
+        'Last seen ${DateFormat.jm().format(updatedAt.toLocal())}',
+      'Accuracy ±${point.accuracy.toStringAsFixed(0)} m',
+      if (point.heading != null)
+        'Heading ${point.heading!.toStringAsFixed(0)}°',
+    ].join(' · ');
+
     return GoogleMap(
       initialCameraPosition: CameraPosition(target: center, zoom: 16),
       onMapCreated: (controller) => _controller = controller,
@@ -213,8 +254,15 @@ class _LiveGoogleMapState extends State<_LiveGoogleMap> {
         Marker(
           markerId: const MarkerId('shared-location'),
           position: center,
-          rotation: point.heading ?? 0,
-          infoWindow: const InfoWindow(title: 'Shared location'),
+          icon: BitmapDescriptor.defaultMarkerWithHue(
+            widget.isActive
+                ? BitmapDescriptor.hueAzure
+                : BitmapDescriptor.hueOrange,
+          ),
+          infoWindow: InfoWindow(
+            title: markerTitle,
+            snippet: markerSnippet,
+          ),
         ),
       },
       circles: {
@@ -222,12 +270,15 @@ class _LiveGoogleMapState extends State<_LiveGoogleMap> {
           circleId: const CircleId('location-accuracy'),
           center: center,
           radius: math.max(point.accuracy, 5.0),
-          fillColor: Colors.blue.withValues(alpha: 0.12),
-          strokeColor: Colors.blue.withValues(alpha: 0.5),
+          fillColor: (widget.isActive ? Colors.blue : Colors.orange)
+              .withValues(alpha: 0.12),
+          strokeColor: (widget.isActive ? Colors.blue : Colors.orange)
+              .withValues(alpha: 0.5),
           strokeWidth: 1,
         ),
       },
-      myLocationButtonEnabled: false,
+      myLocationEnabled: widget.myLocationEnabled,
+      myLocationButtonEnabled: widget.myLocationEnabled,
       zoomControlsEnabled: false,
       mapToolbarEnabled: false,
     );
@@ -297,7 +348,9 @@ class _LocationDetailsCard extends StatelessWidget {
                         ? 'Signal paused'
                         : isLive
                         ? 'Live tracking active'
-                        : 'Location session ended',
+                        : session.isExpired
+                        ? 'Live location expired'
+                        : 'Sharing stopped',
                     style: theme.textTheme.titleSmall?.copyWith(
                       fontWeight: FontWeight.bold,
                     ),

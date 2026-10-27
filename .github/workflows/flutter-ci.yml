@@ -106,18 +106,41 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "build_number=$BUILD_NUMBER" >> "$GITHUB_OUTPUT"
 
+      - name: Create local API keys file
+        shell: bash
+        env:
+          GOOGLE_MAPS_ANDROID_API_KEY: ${{ secrets.GOOGLE_MAPS_ANDROID_API_KEY }}
+          GIPHY_API_KEY: ${{ secrets.GIPHY_API_KEY }}
+        run: |
+          set -euo pipefail
+          cat > .api_keys.json <<JSON
+          {
+            "GOOGLE_MAPS_ANDROID_API_KEY": "${GOOGLE_MAPS_ANDROID_API_KEY}",
+            "GIPHY_API_KEY": "${GIPHY_API_KEY}"
+          }
+          JSON
+
       - name: Build release APK
         env:
           ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/tester-signing-key.jks
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-          GOOGLE_MAPS_ANDROID_API_KEY: ${{ secrets.GOOGLE_MAPS_ANDROID_API_KEY }}
         run: |
           flutter build apk --release \
             --build-name="${{ steps.version.outputs.version }}" \
             --build-number="${{ steps.version.outputs.build_number }}" \
-            --dart-define="GOOGLE_MAPS_ANDROID_API_KEY=$GOOGLE_MAPS_ANDROID_API_KEY"
+            --dart-define-from-file=.api_keys.json
+
+      - name: Verify Firebase service account secret
+        shell: bash
+        env:
+          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+        run: |
+          if [[ -z "$FIREBASE_SERVICE_ACCOUNT_JSON" ]]; then
+            echo "::error::Set the Actions secret FIREBASE_SERVICE_ACCOUNT_JSON."
+            exit 1
+          fi
 
       - name: Verify Firebase service account secret
         shell: bash

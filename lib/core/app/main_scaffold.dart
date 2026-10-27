@@ -33,9 +33,11 @@ class _MainScaffoldState extends State<MainScaffold> {
   void _openDrawer() => _scaffoldKey.currentState?.openDrawer();
 
   void _onDestinationSelected(int index) {
-    if (index == 4) {
+    final path = navigationPathForDestination(index);
+    if (path == null) return;
+    if (index == 5) {
       Navigator.of(context).pop();
-      context.go('/settings');
+      context.go(path);
       return;
     }
 

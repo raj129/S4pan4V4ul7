@@ -6,8 +6,8 @@ Live-location sharing is Android-only. It requires location and notification per
 
 1. In Google Cloud, enable **Maps SDK for Android** and configure billing for the Firebase/Google Cloud project. Maps Platform pricing is subject to current Google terms and usage.
 2. Create an Android-restricted Maps API key. Restrict it to this app's package (`com.system.calculator`) and the signing certificate fingerprints for each build channel.
-3. Add the key as the GitHub Actions secret `GOOGLE_MAPS_ANDROID_API_KEY` so release builds display maps. The key is injected through the Android manifest placeholder and a Dart define; it is not stored in source control.
-4. For local Android builds, set `GOOGLE_MAPS_ANDROID_API_KEY` in the environment and pass `--dart-define=GOOGLE_MAPS_ANDROID_API_KEY=$GOOGLE_MAPS_ANDROID_API_KEY` to Flutter.
+3. Put the key in `GOOGLE_MAPS_ANDROID_API_KEY` in the shared local `.api_keys.json` file. The file is Git-ignored and also holds the GIPHY API key; see [Chat GIFs and stickers](chat-gif-stickers.md) for setup.
+4. The IntelliJ `main.dart` run configuration and local CLI builds use `.api_keys.json` with `--dart-define-from-file`; Android Gradle reads the same file for the Maps manifest placeholder. CI should create that file from protected secrets during the build, without logging it.
 
 Without a key, the feature remains buildable but the map screen explains that Google Maps is not configured.
 

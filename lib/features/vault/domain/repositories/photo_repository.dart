@@ -13,6 +13,7 @@ abstract class PhotoRepository {
   Future<List<VaultPhoto>> listGalleryPage({
     required int page,
     required int pageSize,
+    int? offset,
     String? albumId,
     bool favoritesOnly = false,
   });

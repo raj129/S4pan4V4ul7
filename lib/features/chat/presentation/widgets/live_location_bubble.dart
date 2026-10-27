@@ -105,6 +105,7 @@ class _LiveLocationBubbleState extends State<LiveLocationBubble> {
         final isWaiting =
             sessionUnavailable &&
             snapshot.connectionState == ConnectionState.waiting;
+        final hasPoint = session?.currentPoint != null;
         final statusText = sessionUnavailable
             ? isWaiting
                   ? 'Connecting to location…'
@@ -119,7 +120,7 @@ class _LiveLocationBubbleState extends State<LiveLocationBubble> {
 
         return InkWell(
           borderRadius: BorderRadius.circular(12),
-          onTap: sessionUnavailable || session.isExpired
+          onTap: sessionUnavailable || (!isActive && !hasPoint)
               ? null
               : () => Navigator.of(context).push(
                   MaterialPageRoute<void>(
@@ -169,7 +170,11 @@ class _LiveLocationBubbleState extends State<LiveLocationBubble> {
                           ),
                           const SizedBox(height: 4),
                           Text(
-                            isLive ? 'Tap to view live map' : 'View location',
+                            isLive
+                                ? 'Tap to view live map'
+                                : hasPoint
+                                ? 'View last known location'
+                                : 'View location',
                             style: Theme.of(context).textTheme.labelSmall,
                           ),
                         ],

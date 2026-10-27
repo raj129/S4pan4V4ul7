@@ -3,7 +3,17 @@ import 'package:equatable/equatable.dart';
 import 'message_metadata.dart';
 import 'message_reply.dart';
 
-enum MessageType { text, image, video, audio, file, liveLocation }
+enum MessageType {
+  text,
+  image,
+  gif,
+  sticker,
+  video,
+  audio,
+  file,
+  liveLocation,
+  sharedNote,
+}
 
 enum DeleteScope { forMe, forEveryone }
 
@@ -18,6 +28,7 @@ class ChatMessage extends Equatable {
     this.mediaRef,
     this.mediaType,
     this.liveLocationSessionId,
+    this.sharedNoteId,
     this.mediaMeta,
     this.encryptedMediaKey,
     this.localDecryptedText,
@@ -44,6 +55,9 @@ class ChatMessage extends Equatable {
 
   /// Firestore session document for a live-location message.
   final String? liveLocationSessionId;
+
+  /// Firestore note document ID for a shared note / checklist message.
+  final String? sharedNoteId;
 
   /// Clear-text layout hints (dimensions, size, duration) for the attachment.
   final MediaMeta? mediaMeta;
@@ -110,6 +124,8 @@ class ChatMessage extends Equatable {
   static String mediaPreviewFor(MessageType? type, {String? filename}) =>
       switch (type) {
         MessageType.liveLocation => 'Live location',
+        MessageType.gif => 'GIF',
+        MessageType.sticker => 'Sticker',
         MessageType.file || MessageType.audio =>
           filename == null || filename.isEmpty ? 'Document' : filename,
         _ => '',
@@ -160,6 +176,7 @@ class ChatMessage extends Equatable {
     String? mediaRef,
     MessageType? mediaType,
     String? liveLocationSessionId,
+    String? sharedNoteId,
     MediaMeta? mediaMeta,
   }) {
     return ChatMessage(
@@ -173,6 +190,7 @@ class ChatMessage extends Equatable {
       mediaType: mediaType ?? this.mediaType,
       liveLocationSessionId:
           liveLocationSessionId ?? this.liveLocationSessionId,
+      sharedNoteId: sharedNoteId ?? this.sharedNoteId,
       mediaMeta: mediaMeta ?? this.mediaMeta,
       encryptedMediaKey: encryptedMediaKey,
       localDecryptedText: localDecryptedText ?? this.localDecryptedText,
@@ -205,6 +223,7 @@ class ChatMessage extends Equatable {
     if (mediaType != null) 'mediaType': mediaType!.name,
     if (liveLocationSessionId != null)
       'liveLocationSessionId': liveLocationSessionId,
+    if (sharedNoteId != null) 'sharedNoteId': sharedNoteId,
     if (mediaMeta != null) 'mediaMeta': mediaMeta!.toFirestore(),
     if (encryptedMediaKey != null) 'encryptedMediaKey': encryptedMediaKey,
     if (replyTo != null) 'replyTo': replyTo!.toFirestore(),
@@ -235,6 +254,7 @@ class ChatMessage extends Equatable {
     mediaRef: data['mediaRef'] as String?,
     mediaType: _parseMediaType(data['mediaType'] as String?),
     liveLocationSessionId: data['liveLocationSessionId'] as String?,
+    sharedNoteId: data['sharedNoteId'] as String?,
     mediaMeta: MediaMeta.fromFirestore(
       (data['mediaMeta'] as Map?)?.cast<String, dynamic>(),
     ),
@@ -277,6 +297,7 @@ class ChatMessage extends Equatable {
     mediaRef,
     mediaType,
     liveLocationSessionId,
+    sharedNoteId,
     mediaMeta,
     replyTo,
     reactions,

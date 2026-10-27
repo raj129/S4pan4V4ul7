@@ -14,6 +14,7 @@ import 'package:photo_vault/features/chat/domain/entities/message_reply.dart';
 import 'package:photo_vault/features/chat/domain/entities/user_presence.dart';
 import 'package:photo_vault/features/chat/domain/repositories/message_cache_repository.dart';
 import 'package:photo_vault/features/chat/domain/repositories/message_repository.dart';
+import 'package:photo_vault/features/chat/domain/repositories/chat_draft_repository.dart';
 import 'package:photo_vault/features/chat/domain/repositories/outbox_repository.dart';
 import 'package:photo_vault/features/chat/domain/repositories/presence_repository.dart';
 import 'package:photo_vault/features/chat/domain/repositories/thread_repository.dart';
@@ -22,6 +23,7 @@ import 'package:photo_vault/features/chat/domain/repositories/user_repository.da
 import 'package:photo_vault/features/chat/presentation/screens/thread_screen.dart';
 import 'package:photo_vault/features/chat/presentation/state/active_thread_cubit.dart';
 import 'package:photo_vault/features/chat/presentation/widgets/chat_bubble_shape.dart';
+import 'package:photo_vault/features/chat/presentation/widgets/chat_media_picker.dart';
 import 'package:photo_vault/features/chat/presentation/widgets/chat_media_preview.dart';
 import 'package:photo_vault/features/chat/presentation/widgets/message_bubble.dart';
 
@@ -30,13 +32,15 @@ class _Crypto implements ChatCryptoService {
   Future<String> encryptMessage({
     required String threadId,
     required String plaintext,
-  }) async => plaintext;
+  }) async => 'cipher:$plaintext';
 
   @override
   Future<String> decryptMessage({
     required String threadId,
     required String encryptedB64,
-  }) async => encryptedB64;
+  }) async => encryptedB64.startsWith('cipher:')
+      ? encryptedB64.substring('cipher:'.length)
+      : encryptedB64;
 
   @override
   Future<Uint8List> searchKey(String threadId) async => Uint8List(32);
@@ -78,6 +82,7 @@ class _Messages implements MessageRepository {
     String? mediaRef,
     MessageType? mediaType,
     String? liveLocationSessionId,
+    String? sharedNoteId,
     MediaMeta? mediaMeta,
     MessageReply? replyTo,
     bool isForwarded = false,
@@ -162,6 +167,23 @@ class _Outbox implements OutboxRepository {
   Future<void> markFailed(String messageId, String error) async {}
 }
 
+class _Drafts implements ChatDraftRepository {
+  final Map<String, String> values = {};
+
+  @override
+  Future<String?> load(String threadId) async => values[threadId];
+
+  @override
+  Future<void> save(String threadId, String encryptedText) async {
+    values[threadId] = encryptedText;
+  }
+
+  @override
+  Future<void> delete(String threadId) async {
+    values.remove(threadId);
+  }
+}
+
 class _Unused implements UserRepository, MediaRepository, ChatVaultBridge {
   @override
   final Listenable vaultSessionChanges = ValueNotifier(0);
@@ -206,6 +228,7 @@ void main() {
 
     final messages = _Messages();
     final unused = _Unused();
+    final drafts = _Drafts();
     var locked = false;
     final cubit = ActiveThreadCubit(
       messageRepository: messages,
@@ -248,6 +271,7 @@ void main() {
             ),
             vaultBridge: unused,
             onLock: () => locked = true,
+            chatDraftRepository: drafts,
           ),
         ),
       ),
@@ -266,7 +290,7 @@ void main() {
     );
 
     // Not awaited: delivery never completes, so the message stays pending.
-    unawaited(cubit.sendText('my reply'));
+    unawaited(cubit.sendText('my reply').then<void>((_) {}));
     await tester.pump(const Duration(milliseconds: 50));
     await tester.pump(const Duration(milliseconds: 50));
 
@@ -274,12 +298,103 @@ void main() {
     expect(find.textContaining('my reply', findRichText: true), findsOneWidget);
     expect(tester.takeException(), isNull);
 
+    final longText = List.filled(20, 'a long message line').join('\n');
+    await tester.enterText(find.byType(TextField).last, longText);
+    await tester.pump();
+    final composerSurface = find.byKey(const ValueKey('chat-composer-surface'));
+    expect(
+      (tester.widget<Container>(composerSurface).decoration! as BoxDecoration)
+          .borderRadius,
+      BorderRadius.circular(18),
+    );
+    expect(tester.getSize(composerSurface).height, lessThan(200));
+    expect(tester.takeException(), isNull);
+
+    await tester.enterText(find.byType(TextField).last, 'draft in composer');
+    await tester.tap(find.byTooltip('Emoji, stickers, and GIFs'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.byType(ChatMediaPickerPanel), findsOneWidget);
+    final pickerComposer = find.byType(TextField).last;
+    expect(
+      tester.widget<TextField>(pickerComposer).controller!.text,
+      'draft in composer',
+    );
+    expect(
+      tester.getRect(pickerComposer).bottom,
+      lessThanOrEqualTo(tester.getRect(find.byType(ChatMediaPickerPanel)).top),
+    );
+    expect(tester.takeException(), isNull);
+
+    await tester.binding.handlePopRoute();
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pump();
+    expect(find.byType(ChatMediaPickerPanel), findsNothing);
+    final composer = find.byType(TextField).last;
+    expect(tester.widget<TextField>(composer).focusNode!.hasFocus, isTrue);
+    await tester.enterText(composer, 'typed after picker');
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(
+      tester.widget<TextField>(composer).controller!.text,
+      'typed after picker',
+    );
+    expect(drafts.values['t'], 'cipher:typed after picker');
+    expect(find.byType(ChatMediaPickerPanel), findsNothing);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    await tester.pump();
+    expect(drafts.values['t'], 'cipher:typed after picker');
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pump();
+
     await tester.tap(find.byTooltip('Lock vault'));
     expect(locked, isTrue);
+    expect(drafts.values['t'], 'cipher:typed after picker');
 
     await tester.tap(find.byType(PopupMenuButton<String>));
     await tester.pump();
     expect(find.text('Search this chat'), findsOneWidget);
+    expect(find.text('Jump to date'), findsOneWidget);
+    expect(find.text('Clear messages'), findsOneWidget);
+    expect(find.text('Delete thread'), findsOneWidget);
+    expect(find.text('Manage media'), findsNothing);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+    expect(drafts.values['t'], 'cipher:typed after picker');
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: BlocProvider.value(
+          value: cubit,
+          child: ThreadScreen(
+            thread: thread,
+            otherUser: other,
+            mediaLoader: ChatMediaLoader(
+              mediaRepository: unused,
+              cryptoService: _Crypto(),
+            ),
+            vaultBridge: unused,
+            onLock: () => locked = true,
+            chatDraftRepository: drafts,
+          ),
+        ),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(
+      tester.widget<TextField>(find.byType(TextField).last).controller!.text,
+      'typed after picker',
+    );
+    await tester.tap(find.byIcon(Icons.send_rounded).last);
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(drafts.values.containsKey('t'), isFalse);
+    await tester.enterText(find.byType(TextField).last, 'manual draft');
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(drafts.values['t'], 'cipher:manual draft');
+    await tester.enterText(find.byType(TextField).last, '');
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(drafts.values.containsKey('t'), isFalse);
 
     await cubit.close();
     await tester.pumpWidget(const SizedBox.shrink());

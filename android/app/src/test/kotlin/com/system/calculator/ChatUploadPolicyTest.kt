@@ -18,6 +18,16 @@ class ChatUploadPolicyTest {
         assertFalse(ChatUploadPolicy.restartExpiredSession(true, 403))
         assertFalse(ChatUploadPolicy.restartExpiredSession(true, 503))
     }
+
+    @Test fun gifsAndStickersAreValidEncryptedUploadMediaTypes() {
+        for (type in listOf("image", "gif", "sticker", "video", "audio", "file")) {
+            assertTrue(ChatUploadPolicy.supportsMediaType(type))
+        }
+        for (type in listOf("text", "liveLocation", "unknown")) {
+            assertFalse(ChatUploadPolicy.supportsMediaType(type))
+        }
+        assertFalse(ChatUploadPolicy.supportsMediaType(null))
+    }
     @Test fun allActiveStatesCanPauseAndCancel() {
         for (state in listOf("queued", "uploading", "resumed", "retrying")) {
             assertTrue(ChatUploadPolicy.runnable(state))

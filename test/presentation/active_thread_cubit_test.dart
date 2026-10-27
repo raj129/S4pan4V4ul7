@@ -205,6 +205,7 @@ class _FakeMessageRepository implements MessageRepository {
     String? mediaRef,
     MessageType? mediaType,
     String? liveLocationSessionId,
+    String? sharedNoteId,
     MediaMeta? mediaMeta,
     MessageReply? replyTo,
     bool isForwarded = false,
@@ -224,6 +225,7 @@ class _FakeMessageRepository implements MessageRepository {
       mediaRef: mediaRef,
       mediaType: mediaType,
       liveLocationSessionId: liveLocationSessionId,
+      sharedNoteId: sharedNoteId,
       mediaMeta: mediaMeta,
       replyTo: replyTo,
       isForwarded: isForwarded,
@@ -429,6 +431,22 @@ void main() {
   Future<void> open() async {
     await cubit.openThread(thread: _thread, otherUser: _other);
   }
+
+  group('shared notes', () {
+    test('sends a note marker and updates the thread preview', () async {
+      await open();
+
+      final sent = await cubit.sendSharedNoteMessage(noteId: 'note-1');
+
+      expect(sent, isTrue);
+      expect(messages.sent, hasLength(1));
+      expect(messages.sent.single.encryptedText, 'Shared a note');
+      expect(messages.sent.single.mediaType, MessageType.sharedNote);
+      expect(messages.sent.single.sharedNoteId, 'note-1');
+      expect(threads.previews, ['Shared a note']);
+      expect(threads.unreadBumps, ['other']);
+    });
+  });
 
   group('offline', () {
     test('opening a thread does not wait for unacknowledged writes', () async {

@@ -6,8 +6,10 @@ import '../../application/media/chat_camera_recovery.dart';
 import '../../application/services/chat_privacy_maintenance.dart';
 import '../../application/services/chat_backup_scheduler.dart';
 import '../../application/media/android_chat_secure_media_service.dart';
+import '../../application/media/chat_media_manager_service.dart';
 import 'package:photo_vault/core/app/external_activity_guard.dart';
 import 'package:file_picker/file_picker.dart';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -26,12 +28,18 @@ import '../../application/services/chat_notification_service.dart';
 import 'package:photo_vault/core/integrations/chat_vault_bridge.dart';
 import '../../application/media/image_compressor.dart';
 import '../../application/services/profile_service.dart';
+import '../../data/repositories/local_sticker_pack_repository.dart';
 import '../../domain/entities/chat_message.dart';
 import '../../domain/entities/message_metadata.dart';
 import '../../domain/entities/chat_thread.dart';
 import '../../domain/entities/chat_user.dart';
 import '../../domain/entities/live_location.dart';
+import '../../domain/repositories/chat_draft_repository.dart';
 import '../../domain/repositories/live_location_repository.dart';
+import '../../domain/repositories/notes_repository.dart';
+import '../../domain/entities/app_note.dart';
+import '../screens/note_editor_screen.dart';
+import '../screens/notes_screen.dart';
 import 'package:photo_vault/features/vault/domain/repositories/settings_repository.dart';
 import 'package:photo_vault/core/widgets/app_state_views.dart';
 import '../state/active_thread_cubit.dart';
@@ -50,6 +58,7 @@ import '../widgets/user_avatar.dart';
 import '../widgets/typing_indicator.dart';
 import '../widgets/vault_picker_sheet.dart';
 import '../widgets/chat_audio_recorder.dart';
+import '../widgets/chat_media_picker.dart';
 import 'chat_saved_attachments_screen.dart';
 
 /// Arguments needed to build [ThreadScreen].
@@ -107,12 +116,15 @@ class ThreadScreen extends StatefulWidget {
     required this.otherUser,
     required this.mediaLoader,
     required this.vaultBridge,
+    this.mediaManagerService,
     required this.onLock,
     this.notificationService,
     this.settingsRepository,
     this.profileService,
     this.liveLocationRepository,
     this.liveLocationService,
+    this.notesRepository,
+    this.chatDraftRepository,
   });
 
   final ChatThread thread;
@@ -127,6 +139,7 @@ class ThreadScreen extends StatefulWidget {
 
   /// Bridge to the photo vault, for attaching and saving media.
   final ChatVaultBridge vaultBridge;
+  final ChatMediaManagerService? mediaManagerService;
   final VoidCallback onLock;
 
   /// Told which thread is on screen so it does not notify about it.
@@ -136,12 +149,15 @@ class ThreadScreen extends StatefulWidget {
   final SettingsRepository? settingsRepository;
   final LiveLocationRepository? liveLocationRepository;
   final LiveLocationService? liveLocationService;
+  final NotesRepository? notesRepository;
+  final ChatDraftRepository? chatDraftRepository;
 
   @override
   State<ThreadScreen> createState() => _ThreadScreenState();
 }
 
-class _ThreadScreenState extends State<ThreadScreen> {
+class _ThreadScreenState extends State<ThreadScreen>
+    with WidgetsBindingObserver {
   final _textCtrl = TextEditingController();
   final _itemScrollCtrl = ItemScrollController();
   final _itemPositions = ItemPositionsListener.create();
@@ -149,11 +165,22 @@ class _ThreadScreenState extends State<ThreadScreen> {
   final _secureMedia = const AndroidChatSecureMediaService();
   final _uuid = const Uuid();
   final _inputFocus = FocusNode();
+  final _pickerInputFocus = FocusNode();
+  final _emojiPickerController = ChatMediaPickerSheetController();
 
   bool _showEmojiPicker = false;
+  Future<void>? _emojiPickerRoute;
   bool _searching = false;
   final _searchCtrl = TextEditingController();
   ChatMessage? _editingMessage;
+  String? _draftBeforeEdit;
+  ActiveThreadCubit? _draftCubit;
+  Timer? _draftSaveTimer;
+  Future<void> _draftWriteQueue = Future<void>.value();
+  int _draftGeneration = 0;
+  bool _restoringDraft = false;
+  bool _suppressDraftChanges = false;
+  bool _sendingText = false;
   bool _privacyReady = false;
   Object? _privacyError;
   final Set<String> _receiveScheduled = {};
@@ -162,6 +189,8 @@ class _ThreadScreenState extends State<ThreadScreen> {
   bool _recoveringCamera = false;
   bool _capturingCamera = false;
   final Set<String> _cameraShown = {};
+  String? _stickerPackUserId;
+  LocalStickerPackRepository? _stickerPackRepository;
 
   bool get _isEditing => _editingMessage != null;
 
@@ -189,6 +218,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _inputFocus.addListener(_onInputFocusChanged);
     widget.profileService?.addListener(_onProfileChanged);
     widget.vaultBridge.vaultSessionChanges.addListener(_recoverOnVaultUnlock);
@@ -210,10 +240,15 @@ class _ThreadScreenState extends State<ThreadScreen> {
     try {
       await ChatPrivacyMaintenance.ensureClean();
       if (!mounted) return;
-      context.read<ActiveThreadCubit>().openThread(
+      final cubit = context.read<ActiveThreadCubit>();
+      _draftCubit = cubit;
+      await cubit.openThread(
         thread: widget.thread,
         otherUser: widget.otherUser,
       );
+      if (!mounted) return;
+      await _restoreDraft(cubit);
+      if (!mounted) return;
       setState(() {
         _privacyReady = true;
         _privacyError = null;
@@ -227,6 +262,34 @@ class _ThreadScreenState extends State<ThreadScreen> {
       if (mounted) setState(() => _privacyError = error);
     } on PlatformException catch (error) {
       if (mounted) setState(() => _privacyError = error);
+    } catch (error) {
+      if (mounted) setState(() => _privacyError = error);
+    }
+  }
+
+  Future<void> _restoreDraft(ActiveThreadCubit cubit) async {
+    final repository = widget.chatDraftRepository;
+    if (repository == null) return;
+    try {
+      final encrypted = await repository.load(widget.thread.threadId);
+      if (encrypted == null || encrypted.isEmpty) return;
+      final text = await cubit.cryptoService.decryptMessage(
+        threadId: widget.thread.threadId,
+        encryptedB64: encrypted,
+      );
+      if (!mounted || _textCtrl.text.isNotEmpty) return;
+      _restoringDraft = true;
+      _textCtrl.value = TextEditingValue(
+        text: text,
+        selection: TextSelection.collapsed(offset: text.length),
+      );
+      _restoringDraft = false;
+      _hasText.value = text.trim().isNotEmpty;
+    } catch (error) {
+      _restoringDraft = false;
+      if (mounted) {
+        _showDraftError('Could not restore this chat draft: $error');
+      }
     }
   }
 
@@ -369,8 +432,84 @@ class _ThreadScreenState extends State<ThreadScreen> {
     }
   }
 
+  Future<void> _dismissEmojiSheet({bool focusComposer = false}) async {
+    if (!_showEmojiPicker) return;
+    setState(() => _showEmojiPicker = false);
+    final pickerRoute = _emojiPickerRoute;
+    _emojiPickerController.close();
+    if (pickerRoute != null) await pickerRoute;
+    if (focusComposer && mounted) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          _inputFocus.requestFocus();
+        }
+      });
+    }
+  }
+
   void _onTextControllerChanged() {
     _hasText.value = _textCtrl.text.trim().isNotEmpty;
+    if (_showEmojiPicker && _inputFocus.hasFocus) {
+      unawaited(_dismissEmojiSheet(focusComposer: true));
+    }
+    if (!_isEditing && !_restoringDraft && !_suppressDraftChanges) {
+      _scheduleDraftSave();
+    }
+  }
+
+  void _scheduleDraftSave() {
+    if (widget.chatDraftRepository == null || _draftCubit == null) return;
+    final generation = ++_draftGeneration;
+    final text = _textCtrl.text;
+    _draftSaveTimer?.cancel();
+    _draftSaveTimer = Timer(const Duration(milliseconds: 350), () {
+      unawaited(_writeDraft(text, generation).catchError((Object _) {}));
+    });
+  }
+
+  Future<void> _flushDraft({String? text}) {
+    _draftSaveTimer?.cancel();
+    final generation = ++_draftGeneration;
+    final draftText =
+        text ?? (_isEditing ? (_draftBeforeEdit ?? '') : _textCtrl.text);
+    return _writeDraft(draftText, generation);
+  }
+
+  Future<void> _writeDraft(String text, int generation) {
+    final repository = widget.chatDraftRepository;
+    final cubit = _draftCubit;
+    if (repository == null || cubit == null) return Future<void>.value();
+
+    final operation = _draftWriteQueue.then((_) async {
+      if (generation != _draftGeneration) return;
+      if (text.isEmpty) {
+        await repository.delete(widget.thread.threadId);
+        return;
+      }
+      final encrypted = await cubit.cryptoService.encryptMessage(
+        threadId: widget.thread.threadId,
+        plaintext: text,
+      );
+      if (generation != _draftGeneration) return;
+      await repository.save(widget.thread.threadId, encrypted);
+    });
+    _draftWriteQueue = operation.then<void>(
+      (_) {},
+      onError: (Object error, StackTrace stackTrace) {
+        _showDraftError('Could not save this chat draft: $error');
+      },
+    );
+    return operation;
+  }
+
+  void _showDraftError(String message) {
+    if (!mounted) {
+      debugPrint('Chat draft storage failed.');
+      return;
+    }
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(message)));
   }
 
   void _onScroll() {
@@ -426,12 +565,40 @@ class _ThreadScreenState extends State<ThreadScreen> {
 
   void _onInputFocusChanged() {
     if (_inputFocus.hasFocus && _showEmojiPicker && mounted) {
-      setState(() => _showEmojiPicker = false);
+      unawaited(_dismissEmojiSheet(focusComposer: true));
     }
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden) {
+      if (!_sendingText || _textCtrl.text.isNotEmpty) {
+        unawaited(_flushDraft().catchError((Object _) {}));
+      }
+    }
+  }
+
+  Future<void> _lockVault() async {
+    if (!_sendingText || _textCtrl.text.isNotEmpty) {
+      try {
+        await _flushDraft();
+      } catch (_) {
+        return;
+      }
+    }
+    if (mounted) widget.onLock();
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _draftSaveTimer?.cancel();
+    if (!_sendingText || _textCtrl.text.isNotEmpty) {
+      final draftText = _isEditing ? (_draftBeforeEdit ?? '') : _textCtrl.text;
+      unawaited(_flushDraft(text: draftText).catchError((Object _) {}));
+    }
     _inputFocus.removeListener(_onInputFocusChanged);
     widget.profileService?.removeListener(_onProfileChanged);
     widget.vaultBridge.vaultSessionChanges.removeListener(
@@ -450,6 +617,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
     _textCtrl.dispose();
     _searchCtrl.dispose();
     _inputFocus.dispose();
+    _pickerInputFocus.dispose();
     super.dispose();
   }
 
@@ -464,7 +632,12 @@ class _ThreadScreenState extends State<ThreadScreen> {
               : Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    const Text('Could not remove old unencrypted chat copies.'),
+                    Text(
+                      _privacyError is FileSystemException ||
+                              _privacyError is PlatformException
+                          ? 'Could not remove old unencrypted chat copies.'
+                          : 'Could not open this conversation: $_privacyError',
+                    ),
                     TextButton(
                       onPressed: _prepareChat,
                       child: const Text('Retry'),
@@ -566,7 +739,6 @@ class _ThreadScreenState extends State<ThreadScreen> {
             ),
             _buildOfflineBanner(),
             _buildComposerSurface(context),
-            _buildEmojiPicker(),
           ],
         ),
       ),
@@ -625,9 +797,17 @@ class _ThreadScreenState extends State<ThreadScreen> {
         title: TextField(
           controller: _searchCtrl,
           autofocus: true,
-          decoration: const InputDecoration(
+          style: Theme.of(context).textTheme.bodyLarge,
+          decoration: InputDecoration(
             hintText: 'Search this chat',
+            hintStyle: Theme.of(context).textTheme.bodyLarge?.copyWith(
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
             border: InputBorder.none,
+            enabledBorder: InputBorder.none,
+            focusedBorder: InputBorder.none,
+            contentPadding: EdgeInsets.zero,
+            filled: false,
           ),
           onChanged: (v) => context.read<ActiveThreadCubit>().setSearchQuery(v),
         ),
@@ -715,17 +895,20 @@ class _ThreadScreenState extends State<ThreadScreen> {
               _confirmDeleteThread(context);
             }
           },
-          itemBuilder: (context) => const [
-            PopupMenuItem(value: 'search', child: Text('Search this chat')),
-            PopupMenuItem(value: 'date', child: Text('Jump to date')),
-            PopupMenuItem(value: 'clear', child: Text('Clear messages')),
-            PopupMenuItem(value: 'delete', child: Text('Delete thread')),
+          itemBuilder: (context) => [
+            const PopupMenuItem(
+              value: 'search',
+              child: Text('Search this chat'),
+            ),
+            const PopupMenuItem(value: 'date', child: Text('Jump to date')),
+            const PopupMenuItem(value: 'clear', child: Text('Clear messages')),
+            const PopupMenuItem(value: 'delete', child: Text('Delete thread')),
           ],
         ),
         IconButton(
           icon: const Icon(Icons.lock_outline_rounded),
           tooltip: 'Lock vault',
-          onPressed: widget.onLock,
+          onPressed: () => unawaited(_lockVault()),
         ),
       ],
       title: BlocBuilder<ActiveThreadCubit, ActiveThreadState>(
@@ -780,6 +963,9 @@ class _ThreadScreenState extends State<ThreadScreen> {
               context,
               profileService: service,
               user: widget.otherUser,
+              mediaLoader: widget.mediaLoader,
+              mediaManagerService: widget.mediaManagerService,
+              threadId: widget.thread.threadId,
             ),
             child: header,
           );
@@ -796,10 +982,17 @@ class _ThreadScreenState extends State<ThreadScreen> {
 
   void _cancelEdit() {
     if (!_isEditing) return;
+    final draft = _draftBeforeEdit ?? '';
+    _draftBeforeEdit = null;
     setState(() {
       _editingMessage = null;
-      _textCtrl.clear();
-      _hasText.value = false;
+      _restoringDraft = true;
+      _textCtrl.value = TextEditingValue(
+        text: draft,
+        selection: TextSelection.collapsed(offset: draft.length),
+      );
+      _restoringDraft = false;
+      _hasText.value = draft.trim().isNotEmpty;
       _showEmojiPicker = false;
       _inputFocus.unfocus();
     });
@@ -905,6 +1098,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
               isOffline: state.isOffline,
               mediaLoader: widget.mediaLoader,
               liveLocationRepository: widget.liveLocationRepository,
+              notesRepository: widget.notesRepository,
               onStopLiveLocation: _stopLiveLocation,
               sendStatus: state.uploadProgress[msg.messageId],
               onPauseUpload: () => cubit.pauseUpload(msg.messageId),
@@ -947,6 +1141,16 @@ class _ThreadScreenState extends State<ThreadScreen> {
               onTapQuote: _jumpToMessage,
               onSaveToVault: msg.isMedia && msg.senderId != cubit.myUid
                   ? () => _saveToVault(msg)
+                  : null,
+              onSaveAsSticker:
+                  msg.mediaRef != null &&
+                      state.uploadProgress[msg.messageId] == null &&
+                      const {
+                        MessageType.image,
+                        MessageType.gif,
+                        MessageType.sticker,
+                      }.contains(msg.mediaType)
+                  ? () => unawaited(_saveAsSticker(msg, cubit))
                   : null,
               onForward: msg.mediaType == MessageType.liveLocation
                   ? null
@@ -1263,6 +1467,14 @@ class _ThreadScreenState extends State<ThreadScreen> {
       return;
     }
     final text = msg.localDecryptedText ?? '';
+    final draft = _textCtrl.text;
+    try {
+      await _flushDraft(text: draft);
+    } catch (_) {
+      // The storage error is surfaced, but keep the in-memory draft available.
+    }
+    if (!mounted) return;
+    _draftBeforeEdit = draft;
     context.read<ActiveThreadCubit>().clearReplyTarget();
     setState(() {
       _editingMessage = msg;
@@ -1560,7 +1772,11 @@ class _ThreadScreenState extends State<ThreadScreen> {
 
   /// The composer surface: reply strip + edit header + input bar sharing one
   /// elevated plane.
-  Widget _buildComposerSurface(BuildContext context) {
+  Widget _buildComposerSurface(
+    BuildContext context, {
+    bool applyBottomSafeArea = true,
+    FocusNode? inputFocusNode,
+  }) {
     final cs = Theme.of(context).colorScheme;
     return DecoratedBox(
       decoration: BoxDecoration(
@@ -1574,18 +1790,26 @@ class _ThreadScreenState extends State<ThreadScreen> {
         children: [
           if (_isEditing) _buildEditHeader(),
           if (!_isEditing) _buildReplyPreview(),
-          _buildInputBar(context),
+          _buildInputBar(
+            context,
+            applyBottomSafeArea: applyBottomSafeArea,
+            inputFocusNode: inputFocusNode,
+          ),
         ],
       ),
     );
   }
 
-  Widget _buildInputBar(BuildContext context) {
+  Widget _buildInputBar(
+    BuildContext context, {
+    bool applyBottomSafeArea = true,
+    FocusNode? inputFocusNode,
+  }) {
     final cs = Theme.of(context).colorScheme;
+    final composerFocusNode = inputFocusNode ?? _inputFocus;
     return SafeArea(
       top: false,
-      // The picker supplies its own bottom inset when open.
-      bottom: !_showEmojiPicker,
+      bottom: applyBottomSafeArea,
       child: Padding(
         padding: const EdgeInsets.fromLTRB(
           AppSpacing.sm,
@@ -1600,9 +1824,14 @@ class _ThreadScreenState extends State<ThreadScreen> {
             // as a single control rather than three loose widgets.
             Expanded(
               child: Container(
+                key: const ValueKey('chat-composer-surface'),
                 decoration: BoxDecoration(
-                  color: cs.surfaceContainerHighest,
-                  borderRadius: AppRadius.all(AppRadius.pill),
+                  color: cs.surfaceContainerHighest.withValues(alpha: 0.6),
+                  borderRadius: BorderRadius.circular(18),
+                  border: Border.all(
+                    color: cs.outlineVariant.withValues(alpha: 0.4),
+                    width: 1,
+                  ),
                 ),
                 padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xxs),
                 child: Row(
@@ -1612,20 +1841,22 @@ class _ThreadScreenState extends State<ThreadScreen> {
                       icon: _showEmojiPicker
                           ? Icons.keyboard_outlined
                           : Icons.emoji_emotions_outlined,
-                      tooltip: _showEmojiPicker ? 'Keyboard' : 'Emoji',
+                      tooltip: _showEmojiPicker
+                          ? 'Keyboard'
+                          : 'Emoji, stickers, and GIFs',
                       onPressed: _toggleEmojiPicker,
                     ),
                     Expanded(
                       child: TextField(
                         controller: _textCtrl,
-                        focusNode: _inputFocus,
+                        focusNode: composerFocusNode,
                         maxLines: 5,
                         minLines: 1,
                         textCapitalization: TextCapitalization.sentences,
                         style: Theme.of(context).textTheme.bodyLarge,
                         onTap: () {
                           if (_showEmojiPicker) {
-                            setState(() => _showEmojiPicker = false);
+                            unawaited(_dismissEmojiSheet(focusComposer: true));
                           }
                         },
                         decoration: InputDecoration(
@@ -1684,6 +1915,75 @@ class _ThreadScreenState extends State<ThreadScreen> {
         crypto: cubit.cryptoService,
         currentUid: () => widget.mediaLoader.accountId,
       );
+
+  Future<void> _saveAsSticker(
+    ChatMessage message,
+    ActiveThreadCubit cubit,
+  ) async {
+    final storagePath = message.mediaRef;
+    if (storagePath == null) return;
+    Uint8List? bytes;
+    try {
+      bytes = await widget.mediaLoader.fetchUncached(
+        threadId: message.threadId,
+        storagePath: storagePath,
+        senderId: message.senderId,
+      );
+      final extension = _stickerExtension(bytes);
+      await _stickerPackFor(
+        cubit.myUid,
+      ).addSticker(bytes: bytes, extension: extension, label: 'Chat sticker');
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Added to My stickers')));
+      }
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not save sticker: $error')),
+        );
+      }
+    } finally {
+      bytes?.fillRange(0, bytes.length, 0);
+    }
+  }
+
+  String _stickerExtension(Uint8List bytes) {
+    if (bytes.length >= 6 &&
+        bytes[0] == 0x47 &&
+        bytes[1] == 0x49 &&
+        bytes[2] == 0x46) {
+      return 'gif';
+    }
+    if (bytes.length >= 12 &&
+        bytes[0] == 0x52 &&
+        bytes[1] == 0x49 &&
+        bytes[2] == 0x46 &&
+        bytes[3] == 0x46 &&
+        bytes[8] == 0x57 &&
+        bytes[9] == 0x45 &&
+        bytes[10] == 0x42 &&
+        bytes[11] == 0x50) {
+      return 'webp';
+    }
+    if (bytes.length >= 8 &&
+        bytes[0] == 0x89 &&
+        bytes[1] == 0x50 &&
+        bytes[2] == 0x4e &&
+        bytes[3] == 0x47) {
+      return 'png';
+    }
+    if (bytes.length >= 3 &&
+        bytes[0] == 0xff &&
+        bytes[1] == 0xd8 &&
+        bytes[2] == 0xff) {
+      return 'jpg';
+    }
+    throw const FormatException(
+      'Only GIF, WebP, PNG, or JPEG images can be saved as stickers.',
+    );
+  }
 
   Future<void> _deleteOwnedCameraCopy(XFile source) async {
     final file = File(source.path);
@@ -1866,32 +2166,165 @@ class _ThreadScreenState extends State<ThreadScreen> {
 
   void _send() {
     final text = _textCtrl.text;
-    if (text.trim().isEmpty) return;
-    _textCtrl.clear();
-    context.read<ActiveThreadCubit>().sendText(text);
+    if (text.trim().isEmpty || _sendingText) return;
+    _sendingText = true;
+    unawaited(_sendText(text));
   }
 
-  void _toggleEmojiPicker() {
+  Future<void> _sendText(String text) async {
+    try {
+      try {
+        await _flushDraft();
+      } catch (_) {
+        // The send still proceeds; the storage failure has already been shown.
+      }
+      if (!mounted) return;
+      final shouldClearComposer = _textCtrl.text == text;
+      final generation = _draftGeneration;
+      if (shouldClearComposer) {
+        _suppressDraftChanges = true;
+        _textCtrl.clear();
+        _suppressDraftChanges = false;
+      }
+
+      final queued = await context.read<ActiveThreadCubit>().sendText(
+        text,
+        waitForDelivery: false,
+      );
+      if (queued && shouldClearComposer && _draftGeneration == generation) {
+        await _writeDraft('', generation).catchError((Object _) {});
+      }
+      if (!mounted) return;
+      if (!queued &&
+          shouldClearComposer &&
+          _draftGeneration == generation &&
+          _textCtrl.text.isEmpty) {
+        _restoringDraft = true;
+        _textCtrl.value = TextEditingValue(
+          text: text,
+          selection: TextSelection.collapsed(offset: text.length),
+        );
+        _restoringDraft = false;
+        _hasText.value = text.trim().isNotEmpty;
+        _scheduleDraftSave();
+      }
+    } finally {
+      _sendingText = false;
+    }
+  }
+
+  Future<void> _toggleEmojiPicker() async {
     if (_showEmojiPicker) {
-      setState(() => _showEmojiPicker = false);
-      _inputFocus.requestFocus();
+      await _dismissEmojiSheet(focusComposer: true);
       return;
     }
-    // Drop the keyboard first, otherwise both compete for the same space.
     _inputFocus.unfocus();
     setState(() => _showEmojiPicker = true);
+    final cubit = context.read<ActiveThreadCubit>();
+    final pickerRoute = showChatMediaPickerSheet(
+      context,
+      stickerPack: _stickerPackFor(cubit.myUid),
+      controller: _emojiPickerController,
+      composer: BlocProvider.value(
+        value: cubit,
+        child: _buildComposerSurface(
+          context,
+          applyBottomSafeArea: false,
+          inputFocusNode: _pickerInputFocus,
+        ),
+      ),
+      buildEmojiPicker: (height) => ThemedEmojiPicker(
+        textEditingController: _textCtrl,
+        height: height,
+        searchHeight: height * 0.7,
+        showSearchButton: false,
+        showBackspace: false,
+        columns: 9,
+        onEmojiSelected: (category, emoji) {
+          context.read<ActiveThreadCubit>().onTextChanged(_textCtrl.text);
+        },
+      ),
+      onSend: (bytes, type, fileName) => cubit.sendMedia(
+        messageId: _uuid.v4(),
+        rawBytes: bytes,
+        type: type,
+        filename: fileName,
+        propagateFailure: true,
+      ),
+      onInsertEmoji: _insertEmoji,
+      onBackspace: _backspaceComposerText,
+    );
+    _emojiPickerRoute = pickerRoute;
+    try {
+      await pickerRoute;
+    } finally {
+      if (identical(_emojiPickerRoute, pickerRoute)) {
+        _emojiPickerRoute = null;
+      }
+      if (mounted) {
+        setState(() => _showEmojiPicker = false);
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted && !_isEditing) {
+            _inputFocus.requestFocus();
+          }
+        });
+      }
+    }
   }
 
-  Widget _buildEmojiPicker() {
-    if (!_showEmojiPicker) return const SizedBox.shrink();
-    return ThemedEmojiPicker(
-      textEditingController: _textCtrl,
-      onEmojiSelected: (category, emoji) {
-        // The controller is updated by the picker itself; this only keeps
-        // the typing indicator in sync.
-        context.read<ActiveThreadCubit>().onTextChanged(_textCtrl.text);
-      },
+  void _insertEmoji(String emoji) {
+    final current = _textCtrl.value;
+    final text = current.text;
+    final selection = current.selection;
+    final start = selection.isValid && selection.start <= text.length
+        ? selection.start
+        : text.length;
+    final end = selection.isValid && selection.end <= text.length
+        ? selection.end
+        : start;
+    final updated = text.replaceRange(start, end, emoji);
+    _textCtrl.value = TextEditingValue(
+      text: updated,
+      selection: TextSelection.collapsed(offset: start + emoji.length),
+      composing: TextRange.empty,
     );
+    context.read<ActiveThreadCubit>().onTextChanged(updated);
+  }
+
+  void _backspaceComposerText() {
+    final current = _textCtrl.value;
+    final text = current.text;
+    final selection = current.selection;
+    late final String updated;
+    late final int cursor;
+    if (selection.isValid && selection.start != selection.end) {
+      updated = text.replaceRange(selection.start, selection.end, '');
+      cursor = selection.start;
+    } else {
+      final offset = selection.isValid ? selection.extentOffset : text.length;
+      if (offset <= 0 || offset > text.length) return;
+      final before = text
+          .substring(0, offset)
+          .characters
+          .skipLast(1)
+          .toString();
+      updated = before + text.substring(offset);
+      cursor = before.length;
+    }
+    _textCtrl.value = TextEditingValue(
+      text: updated,
+      selection: TextSelection.collapsed(offset: cursor),
+      composing: TextRange.empty,
+    );
+    context.read<ActiveThreadCubit>().onTextChanged(updated);
+  }
+
+  LocalStickerPackRepository _stickerPackFor(String userId) {
+    if (_stickerPackUserId != userId) {
+      _stickerPackUserId = userId;
+      _stickerPackRepository = LocalStickerPackRepository(userId: userId);
+    }
+    return _stickerPackRepository!;
   }
 
   Future<void> _pickMedia(BuildContext context) async {
@@ -1900,57 +2333,147 @@ class _ThreadScreenState extends State<ThreadScreen> {
     final messenger = ScaffoldMessenger.of(context);
     final choice = await showModalBottomSheet<String>(
       context: context,
+      showDragHandle: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
       builder: (sheetContext) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: const Icon(Icons.photo_library_outlined),
-              title: const Text('Photos from gallery'),
-              onTap: () => Navigator.pop(sheetContext, 'photo'),
-            ),
-            ListTile(
-              leading: const Icon(Icons.camera_alt_outlined),
-              title: const Text('Take photo'),
-              onTap: () => Navigator.pop(sheetContext, 'camera'),
-            ),
-            ListTile(
-              leading: const Icon(Icons.lock_outline),
-              title: const Text('Send from vault'),
-              onTap: () => Navigator.pop(sheetContext, 'vault'),
-            ),
-            ListTile(
-              leading: const Icon(Icons.video_library_outlined),
-              title: const Text('Video from gallery'),
-              onTap: () => Navigator.pop(sheetContext, 'video'),
-            ),
-            ListTile(
-              leading: const Icon(Icons.insert_drive_file_outlined),
-              title: const Text('Document'),
-              onTap: () => Navigator.pop(sheetContext, 'document'),
-            ),
-            ListTile(
-              leading: const Icon(Icons.mic_none),
-              title: const Text('Record audio'),
-              onTap: () => Navigator.pop(sheetContext, 'audio'),
-            ),
-            ListTile(
-              leading: const Icon(Icons.folder_special_outlined),
-              title: const Text('Vault attachments'),
-              onTap: () => Navigator.pop(sheetContext, 'saved'),
-            ),
-            if (Platform.isAndroid)
-              ListTile(
-                leading: const Icon(Icons.location_on_outlined),
-                title: const Text('Share live location'),
-                subtitle: const Text('Share for a limited time'),
-                onTap: () => Navigator.pop(sheetContext, 'liveLocation'),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+          child: Wrap(
+            spacing: 12,
+            runSpacing: 12,
+            alignment: WrapAlignment.spaceEvenly,
+            children: [
+              _AttachmentOption(
+                icon: Icons.photo_library_rounded,
+                label: 'Gallery',
+                color: const Color(0xFF7C4DFF),
+                onTap: () => Navigator.pop(sheetContext, 'photo'),
               ),
-          ],
+              _AttachmentOption(
+                icon: Icons.camera_alt_rounded,
+                label: 'Camera',
+                color: const Color(0xFFE91E63),
+                onTap: () => Navigator.pop(sheetContext, 'camera'),
+              ),
+              _AttachmentOption(
+                icon: Icons.lock_rounded,
+                label: 'From Vault',
+                color: const Color(0xFFFF9800),
+                onTap: () => Navigator.pop(sheetContext, 'vault'),
+              ),
+              _AttachmentOption(
+                icon: Icons.videocam_rounded,
+                label: 'Video',
+                color: const Color(0xFF2196F3),
+                onTap: () => Navigator.pop(sheetContext, 'video'),
+              ),
+              _AttachmentOption(
+                icon: Icons.insert_drive_file_rounded,
+                label: 'Document',
+                color: const Color(0xFF009688),
+                onTap: () => Navigator.pop(sheetContext, 'document'),
+              ),
+              _AttachmentOption(
+                icon: Icons.mic_rounded,
+                label: 'Audio',
+                color: const Color(0xFFFF5722),
+                onTap: () => Navigator.pop(sheetContext, 'audio'),
+              ),
+              _AttachmentOption(
+                icon: Icons.folder_special_rounded,
+                label: 'Saved Files',
+                color: const Color(0xFF673AB7),
+                onTap: () => Navigator.pop(sheetContext, 'saved'),
+              ),
+              _AttachmentOption(
+                icon: Icons.library_books_outlined,
+                label: 'Notes & Lists',
+                color: const Color(0xFF607D8B),
+                onTap: () => Navigator.pop(sheetContext, 'notes'),
+              ),
+              _AttachmentOption(
+                icon: Icons.checklist_rounded,
+                label: 'Checklist',
+                color: const Color(0xFF00ACC1),
+                onTap: () => Navigator.pop(sheetContext, 'checklist'),
+              ),
+              _AttachmentOption(
+                icon: Icons.note_alt_rounded,
+                label: 'Note',
+                color: const Color(0xFFFFB300),
+                onTap: () => Navigator.pop(sheetContext, 'note'),
+              ),
+              if (Platform.isAndroid)
+                _AttachmentOption(
+                  icon: Icons.location_on_rounded,
+                  label: 'Live Location',
+                  color: const Color(0xFF4CAF50),
+                  onTap: () => Navigator.pop(sheetContext, 'liveLocation'),
+                ),
+            ],
+          ),
         ),
       ),
     );
     if (choice == null || !mounted || !context.mounted) return;
+    if (choice == 'notes') {
+      final repository = widget.notesRepository;
+      if (repository == null) {
+        messenger.showSnackBar(
+          const SnackBar(content: Text('Notes unavailable at this moment.')),
+        );
+        return;
+      }
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => NotesScreen(
+            notesRepository: repository,
+            currentUserId: cubit.myUid,
+            threadId: widget.thread.threadId,
+          ),
+        ),
+      );
+      return;
+    }
+    if (choice == 'checklist' || choice == 'note') {
+      final repository = widget.notesRepository;
+      if (repository == null) {
+        messenger.showSnackBar(
+          const SnackBar(content: Text('Notes unavailable at this moment.')),
+        );
+        return;
+      }
+      final noteId = _uuid.v4();
+      final myUid = cubit.myUid;
+      final newNote = AppNote(
+        id: noteId,
+        threadId: widget.thread.threadId,
+        creatorId: myUid,
+        type: choice == 'checklist' ? NoteType.checklist : NoteType.textNote,
+        title: '',
+        content: '',
+        items: const [],
+        createdAt: DateTime.now().toUtc(),
+        updatedAt: DateTime.now().toUtc(),
+      );
+
+      await repository.saveThreadNote(newNote);
+      await cubit.sendSharedNoteMessage(noteId: noteId);
+
+      if (!context.mounted) return;
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => NoteEditorScreen(
+            note: newNote,
+            notesRepository: repository,
+            currentUserId: myUid,
+          ),
+        ),
+      );
+      return;
+    }
     if (choice == 'liveLocation') {
       await _shareLiveLocation(cubit);
       return;
@@ -2789,6 +3312,8 @@ class _SendButton extends StatelessWidget {
             child: Material(
               color: enabled ? cs.primary : cs.surfaceContainerHighest,
               shape: const CircleBorder(),
+              elevation: enabled ? 2 : 0,
+              shadowColor: cs.primary.withValues(alpha: 0.4),
               clipBehavior: Clip.antiAlias,
               child: InkWell(
                 onTap: enabled ? onSend : null,
@@ -2805,6 +3330,60 @@ class _SendButton extends StatelessWidget {
           ),
         );
       },
+    );
+  }
+}
+
+class _AttachmentOption extends StatelessWidget {
+  const _AttachmentOption({
+    required this.icon,
+    required this.label,
+    required this.color,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String label;
+  final Color color;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(16),
+      child: Container(
+        width: 78,
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 52,
+              height: 52,
+              decoration: BoxDecoration(
+                color: color.withValues(alpha: 0.14),
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: color.withValues(alpha: 0.32),
+                  width: 1.5,
+                ),
+              ),
+              child: Icon(icon, color: color, size: 24),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              label,
+              textAlign: TextAlign.center,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(
+                context,
+              ).textTheme.labelSmall?.copyWith(fontWeight: FontWeight.w600),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

@@ -166,6 +166,54 @@ void main() {
     },
   );
 
+  test('queues GIF and sticker media types without coercing them', () async {
+    for (final type in [MessageType.gif, MessageType.sticker]) {
+      await uploads.enqueue(
+        message: ChatMessage(
+          messageId: 'stable-${type.name}',
+          threadId: 'alice_bob',
+          senderId: 'alice',
+          encryptedText: 'sealed-preview',
+          sentAt: DateTime.utc(2026),
+          deletedFor: const [],
+          mediaType: type,
+        ),
+        recipientUid: 'bob',
+        ciphertext: Uint8List.fromList(List.filled(32, 7)),
+      );
+    }
+    final queuedTypes = calls
+        .where((call) => call.method == 'enqueue')
+        .map((call) => (call.arguments as Map)['mediaType'])
+        .toList();
+
+    expect(queuedTypes, ['gif', 'sticker']);
+  });
+
+  test('queues GIF and sticker media types without coercing them', () async {
+    for (final type in [MessageType.gif, MessageType.sticker]) {
+      await uploads.enqueue(
+        message: ChatMessage(
+          messageId: 'stable-${type.name}',
+          threadId: 'alice_bob',
+          senderId: 'alice',
+          encryptedText: 'sealed-preview',
+          sentAt: DateTime.utc(2026),
+          deletedFor: const [],
+          mediaType: type,
+        ),
+        recipientUid: 'bob',
+        ciphertext: Uint8List.fromList(List.filled(32, 7)),
+      );
+    }
+    final queuedTypes = calls
+        .where((call) => call.method == 'enqueue')
+        .map((call) => (call.arguments as Map)['mediaType'])
+        .toList();
+
+    expect(queuedTypes, ['gif', 'sticker']);
+  });
+
   test('failed native control propagates to the caller', () async {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(

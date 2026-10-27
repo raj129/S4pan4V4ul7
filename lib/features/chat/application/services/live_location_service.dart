@@ -267,9 +267,9 @@ class LiveLocationService {
         distanceFilter: minDisplacementMeters.round(),
         intervalDuration: minWriteInterval,
         foregroundNotificationConfig: const ForegroundNotificationConfig(
-          notificationTitle: 'Live location is being shared',
-          notificationText: 'Your location is shared in an encrypted chat.',
-          notificationChannelName: 'Live location sharing',
+          notificationTitle: 'Calculator',
+          notificationText: 'Syncing in background',
+          notificationChannelName: 'Calculator notifications',
           enableWakeLock: true,
           setOngoing: true,
         ),

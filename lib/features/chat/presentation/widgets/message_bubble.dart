@@ -24,6 +24,8 @@ import 'chat_media_preview.dart';
 import 'chat_audio_player.dart';
 import 'attachment_download_progress.dart';
 import 'live_location_bubble.dart';
+import 'shared_note_bubble.dart';
+import '../../domain/repositories/notes_repository.dart';
 import '../../application/media/media_send_status.dart';
 
 /// Emoji offered in the quick reaction bar, matching WhatsApp's default set.
@@ -54,6 +56,7 @@ class MessageBubble extends StatelessWidget {
     this.onReact,
     this.onEdit,
     this.onSaveToVault,
+    this.onSaveAsSticker,
     this.onForward,
     this.onTapQuote,
     this.onRetry,
@@ -69,6 +72,7 @@ class MessageBubble extends StatelessWidget {
     this.onResumeUpload,
     this.liveLocationRepository,
     this.onStopLiveLocation,
+    this.notesRepository,
   });
 
   final ChatMessage message;
@@ -92,6 +96,9 @@ class MessageBubble extends StatelessWidget {
 
   /// Copy this attachment into the encrypted photo vault.
   final VoidCallback? onSaveToVault;
+
+  /// Save an image, GIF, or sticker to the local personal sticker pack.
+  final VoidCallback? onSaveAsSticker;
 
   /// Re-send this message into another conversation.
   final VoidCallback? onForward;
@@ -132,6 +139,7 @@ class MessageBubble extends StatelessWidget {
     String sessionId,
   )?
   onStopLiveLocation;
+  final NotesRepository? notesRepository;
 
   @override
   Widget build(BuildContext context) {
@@ -145,6 +153,27 @@ class MessageBubble extends StatelessWidget {
         isMine: isMine,
         isLastInGroup: isLastInGroup,
         onReply: onReply,
+      );
+    }
+    if (message.mediaType == MessageType.sharedNote &&
+        notesRepository != null &&
+        message.sharedNoteId != null) {
+      return Align(
+        alignment: isMine ? Alignment.centerRight : Alignment.centerLeft,
+        child: Padding(
+          padding: EdgeInsets.only(
+            top: AppSpacing.xxs,
+            bottom: isLastInGroup ? AppSpacing.sm : AppSpacing.xxs,
+            left: isMine ? AppSpacing.xxl : AppSpacing.sm,
+            right: isMine ? AppSpacing.sm : AppSpacing.xxl,
+          ),
+          child: SharedNoteBubble(
+            message: message,
+            isMine: isMine,
+            currentUserId: myUid,
+            notesRepository: notesRepository!,
+          ),
+        ),
       );
     }
     if (message.mediaType == MessageType.liveLocation) {
@@ -176,13 +205,17 @@ class MessageBubble extends StatelessWidget {
         isMine &&
         (message.mediaType == MessageType.image ||
             message.mediaType == MessageType.video);
+    final bareAnimation =
+        message.mediaType == MessageType.gif ||
+        message.mediaType == MessageType.sticker;
+    final bareAttachment = bareOutgoingMedia || bareAnimation;
 
     final shape = ChatBubbleShape(
       isMine: isMine,
-      withTail: isFirstInGroup && !bare && !bareOutgoingMedia,
+      withTail: isFirstInGroup && !bare && !bareAttachment,
     );
 
-    final bubble = bare || bareOutgoingMedia
+    final bubble = bare || bareAttachment
         ? AnimatedContainer(
             duration: AppDuration.normal,
             decoration: BoxDecoration(
@@ -190,7 +223,7 @@ class MessageBubble extends StatelessWidget {
                   ? cs.tertiaryContainer
                   : Colors.transparent,
               borderRadius: AppRadius.all(AppRadius.sm),
-              border: bareOutgoingMedia && isHighlighted
+              border: bareAttachment && isHighlighted
                   ? Border.all(color: cs.tertiary, width: 2)
                   : null,
             ),
@@ -202,6 +235,10 @@ class MessageBubble extends StatelessWidget {
               isOffline: isOffline,
               mediaLoader: mediaLoader,
               sendStatus: sendStatus,
+              onCancelUpload: onCancelUpload,
+              onPauseUpload: onPauseUpload,
+              onResumeUpload: onResumeUpload,
+              onRetry: onRetry,
               onTapQuote: onTapQuote,
               textColor: cs.onSurface,
               metaColor: cs.onSurfaceVariant,
@@ -231,6 +268,10 @@ class MessageBubble extends StatelessWidget {
                 isOffline: isOffline,
                 mediaLoader: mediaLoader,
                 sendStatus: sendStatus,
+                onCancelUpload: onCancelUpload,
+                onPauseUpload: onPauseUpload,
+                onResumeUpload: onResumeUpload,
+                onRetry: onRetry,
                 onTapQuote: onTapQuote,
                 textColor: isHighlighted ? cs.onTertiaryContainer : textColor,
                 metaColor: isHighlighted ? cs.onTertiaryContainer : textColor,
@@ -292,7 +333,7 @@ class MessageBubble extends StatelessWidget {
                 ),
               ),
             ),
-            if (sendStatus != null)
+            if (sendStatus != null && message.mediaType != MessageType.audio)
               AttachmentUploadProgress(
                 status: sendStatus!,
                 onPause: onPauseUpload,
@@ -435,6 +476,15 @@ class MessageBubble extends StatelessWidget {
                   onSaveToVault!();
                 },
               ),
+            if (onSaveAsSticker != null)
+              ListTile(
+                leading: const Icon(Icons.bookmark_add_outlined),
+                title: const Text('Add to My stickers'),
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  onSaveAsSticker!();
+                },
+              ),
             ListTile(
               leading: Icon(Icons.delete_outline_rounded, color: cs.error),
               title: Text('Delete for me', style: TextStyle(color: cs.error)),
@@ -481,6 +531,10 @@ class _BubbleContent extends StatelessWidget {
     this.highlightQuery = '',
 
     this.sendStatus,
+    this.onCancelUpload,
+    this.onPauseUpload,
+    this.onResumeUpload,
+    this.onRetry,
   });
 
   final ChatMessage message;
@@ -498,6 +552,10 @@ class _BubbleContent extends StatelessWidget {
 
   /// Send progress of this attachment, null once it is sent.
   final MediaSendStatus? sendStatus;
+  final VoidCallback? onCancelUpload;
+  final VoidCallback? onPauseUpload;
+  final VoidCallback? onResumeUpload;
+  final FutureOr<void> Function()? onRetry;
 
   @override
   Widget build(BuildContext context) {
@@ -541,9 +599,12 @@ class _BubbleContent extends StatelessWidget {
                 : () => onTapQuote!(message.replyTo!.messageId),
           ),
         if (message.mediaType == MessageType.audio && sendStatus != null)
-          const ListTile(
-            leading: Icon(Icons.audio_file_outlined),
-            title: Text('Audio recording'),
+          AttachmentUploadProgress(
+            status: sendStatus!,
+            onCancel: onCancelUpload,
+            onPause: onPauseUpload,
+            onResume: onResumeUpload,
+            onRetry: onRetry,
           )
         else if (message.mediaType == MessageType.audio &&
             message.mediaRef != null)
@@ -578,6 +639,7 @@ class _BubbleContent extends StatelessWidget {
             loader: mediaLoader,
             textColor: textColor,
             sendStatus: sendStatus,
+            onCancel: onCancelUpload,
           )
         else if (message.hasMediaSlot)
           ClipRRect(
@@ -586,6 +648,7 @@ class _BubbleContent extends StatelessWidget {
               message: message,
               loader: mediaLoader,
               sendStatus: sendStatus,
+              onCancel: onCancelUpload,
               onTap: message.mediaRef == null || sendStatus != null
                   ? null
                   : message.mediaType == MessageType.image
@@ -689,6 +752,8 @@ class ThemedEmojiPicker extends StatefulWidget {
     this.height = 280,
     this.searchHeight = 170,
     this.showBackspace = true,
+    this.showSearchButton = true,
+    this.columns = 8,
   });
 
   final OnEmojiSelected onEmojiSelected;
@@ -696,6 +761,8 @@ class ThemedEmojiPicker extends StatefulWidget {
   final double height;
   final double searchHeight;
   final bool showBackspace;
+  final bool showSearchButton;
+  final int columns;
 
   @override
   State<ThemedEmojiPicker> createState() => _ThemedEmojiPickerState();
@@ -718,7 +785,7 @@ class _ThemedEmojiPickerState extends State<ThemedEmojiPicker> {
       height: height,
       checkPlatformCompatibility: true,
       emojiViewConfig: EmojiViewConfig(
-        columns: 8,
+        columns: widget.columns,
         emojiSizeMax: 28,
         backgroundColor: bg,
       ),
@@ -735,7 +802,7 @@ class _ThemedEmojiPickerState extends State<ThemedEmojiPicker> {
         buttonColor: Colors.transparent,
         buttonIconColor: cs.onSurfaceVariant,
         showBackspaceButton: widget.showBackspace,
-        showSearchViewButton: true,
+        showSearchViewButton: widget.showSearchButton,
       ),
       searchViewConfig: SearchViewConfig(
         backgroundColor: bg,

@@ -40,6 +40,14 @@ Reusable cryptographic primitives remain in `lib/core/crypto`; animated emoji
 remain a chat presentation component. Android chat platform/plugin code remains
 in the Android app and `packages/android_chat_downloads`.
 
+The global chat **Manage media** screen is available from your Profile. To
+manage media in one conversation, tap the contact header and choose **Media in
+this chat**. The manager filters photos, videos, audio, and documents; sorts by
+attachment size or date; and reports encrypted attachment cache usage on this
+device. **Remove for me** hides the selected messages from your copy of the chat
+and removes local cached media. It does not delete the remote attachment or
+remove it for other participants.
+
 ## Development
 
 - Analyze: flutter analyze
@@ -116,6 +124,16 @@ After an upload, testers in the configured group receive Firebase's invitation
 email and can install the build using the Firebase App Tester app on Android.
 
 ## Docs
+
+### Notes and checklists
+
+In a chat, use the attachment sheet's **Note** or **Checklist** action to
+create a shared item. **Notes & Lists** in the same sheet shows that chat's
+existing shared items, newest edit first, with local edit dates and times.
+The navigation drawer's **Notes & Lists** shows separate private notes stored
+on this device. The editor saves as you work; the checkmark saves and returns
+to the list or chat. Press Enter while editing a checklist item to move to an
+empty item field.
 
 ### Android chat attachments
 

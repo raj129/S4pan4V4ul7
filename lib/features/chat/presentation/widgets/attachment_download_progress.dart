@@ -32,13 +32,26 @@ class AttachmentDownloadProgress extends StatelessWidget {
                 job.state != MediaUploadLifecycle.paused &&
                 job.state != MediaUploadLifecycle.failed &&
                 job.state != MediaUploadLifecycle.cancelled)) {
-          return Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const CircularProgressIndicator(),
-              const SizedBox(height: 12),
-              Text(stage),
-            ],
+          return Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const SizedBox.square(
+                  dimension: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+                const SizedBox(width: 10),
+                Flexible(
+                  child: Text(
+                    stage,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ),
+              ],
+            ),
           );
         }
         return Column(

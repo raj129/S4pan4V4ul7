@@ -44,8 +44,12 @@ class ChatUploadPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
                                 require(id.matches(Regex("[A-Za-z0-9-]{1,128}")))
                                 val thread = args["threadId"] as String
                                 val ref = args["mediaRef"] as String
+                                val mediaType = args["mediaType"] as? String
                                 require(thread.split("_").sorted() == listOf(uid, args["recipientUid"] as String).sorted())
                                 require(ref.startsWith("chat_media/$thread/$id/") && !ref.contains(".."))
+                                require(ChatUploadPolicy.supportsMediaType(mediaType)) {
+                                    "Unsupported upload media type"
+                                }
                                 val existing = store.get(id)
                                 if (existing != null) {
                                     require(existing.getString("senderId") == uid && existing.getString("threadId") == thread)
@@ -54,7 +58,7 @@ class ChatUploadPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
                                 val job = JSONObject().apply {
                                     put("messageId", id); put("threadId", thread); put("senderId", uid)
                                     put("recipientUid", args["recipientUid"]); put("encryptedText", args["encryptedText"])
-                                    put("mediaRef", ref); put("mediaType", args["mediaType"])
+                                    put("mediaRef", ref); put("mediaType", mediaType)
                                     put("mediaMeta", JSONObject(args["mediaMeta"] as? Map<*, *> ?: emptyMap<Any, Any>()))
                                     put("sentAt", args["sentAt"]); put("legacyFinalized", true)
                                     put("digest", MessageDigest.getInstance("SHA-256").digest(ref.toByteArray())
@@ -72,7 +76,10 @@ class ChatUploadPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
                                 require(id.matches(Regex("[A-Za-z0-9-]{1,128}")))
                                 val thread = args["threadId"] as String
                                 require(thread.split("_").sorted() == listOf(uid, args["recipientUid"] as String).sorted())
-                                require(args["mediaType"] in listOf("image", "video", "audio", "file"))
+                                val mediaType = args["mediaType"] as? String
+                                require(ChatUploadPolicy.supportsMediaType(mediaType)) {
+                                    "Unsupported upload media type"
+                                }
                                 require((args["encryptedText"] as String).isNotEmpty())
                                 val bytes = args["bytes"] as ByteArray
                                 val digest = MessageDigest.getInstance("SHA-256").digest(bytes)
@@ -90,7 +97,7 @@ class ChatUploadPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
                                 val job = JSONObject().apply {
                                     put("messageId", id); put("threadId", thread); put("senderId", uid)
                                     put("recipientUid", args["recipientUid"])
-                                    put("encryptedText", args["encryptedText"]); put("mediaType", args["mediaType"])
+                                    put("encryptedText", args["encryptedText"]); put("mediaType", mediaType)
                                     put("mediaMeta", JSONObject(args["mediaMeta"] as? Map<*, *> ?: emptyMap<Any, Any>()))
                                     put("sentAt", args["sentAt"]); put("digest", digest)
                                     put("isForwarded", args["isForwarded"] == true)

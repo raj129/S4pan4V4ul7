@@ -293,6 +293,17 @@ class OutboxMessages extends Table {
   Set<Column> get primaryKey => {messageId};
 }
 
+/// Local drafts are encrypted with the chat thread key before they reach disk.
+@DataClassName('ChatDraftEntry')
+class ChatDrafts extends Table {
+  TextColumn get threadId => text()();
+  TextColumn get encryptedText => text()();
+  IntColumn get updatedAtMs => integer()();
+
+  @override
+  Set<Column> get primaryKey => {threadId};
+}
+
 // ============================================================================
 // DATABASE CLASS
 // ============================================================================
@@ -315,6 +326,7 @@ class OutboxMessages extends Table {
     SecurityEvents,
     ChatMessages,
     OutboxMessages,
+    ChatDrafts,
   ],
 )
 class VaultDatabase extends _$VaultDatabase {
@@ -324,7 +336,7 @@ class VaultDatabase extends _$VaultDatabase {
   VaultDatabase.forTesting(super.executor);
 
   @override
-  int get schemaVersion => 5;
+  int get schemaVersion => 6;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -351,6 +363,9 @@ class VaultDatabase extends _$VaultDatabase {
       // with the column already, so only add it to pre-existing tables.
       if (from >= 3 && from < 5) {
         await m.addColumn(outboxMessages, outboxMessages.mediaMetaJson);
+      }
+      if (from < 6) {
+        await m.createTable(chatDrafts);
       }
     },
   );
@@ -732,6 +747,9 @@ class VaultDatabase extends _$VaultDatabase {
         chatMessages,
       )..where((m) => m.threadId.equals(threadId))).go();
       await clearSearchIndexForThread(threadId);
+      await (delete(
+        chatDrafts,
+      )..where((draft) => draft.threadId.equals(threadId))).go();
     });
   }
 
@@ -1007,6 +1025,26 @@ class VaultDatabase extends _$VaultDatabase {
     );
   }
 
+  // =========================================================================
+  // CHAT DRAFT QUERIES
+  // =========================================================================
+
+  Future<ChatDraftEntry?> getChatDraft(String threadId) {
+    return (select(
+      chatDrafts,
+    )..where((draft) => draft.threadId.equals(threadId))).getSingleOrNull();
+  }
+
+  Future<void> saveChatDraft(ChatDraftsCompanion draft) async {
+    await into(chatDrafts).insertOnConflictUpdate(draft);
+  }
+
+  Future<void> deleteChatDraft(String threadId) async {
+    await (delete(
+      chatDrafts,
+    )..where((draft) => draft.threadId.equals(threadId))).go();
+  }
+
   /// Generic key/value settings row, reused for small per-device flags (e.g.
   /// the local "clear chat" watermark) that do not need a dedicated table.
   Future<void> upsertAppSetting(String key, String value) async {
@@ -1047,6 +1085,7 @@ class VaultDatabase extends _$VaultDatabase {
     await delete(appSettings).go();
     await delete(securityEvents).go();
     await delete(chatMessages).go();
+    await delete(chatDrafts).go();
     await customStatement('DELETE FROM chat_search_tokens');
     await customStatement('DELETE FROM chat_search_state');
   }

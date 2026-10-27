@@ -27,6 +27,14 @@ void main() {
     expect(await cache.read('chat_media/t/m/a.jpg.enc'), bytes);
   });
 
+  test('reports the size of a cached encrypted attachment', () async {
+    final cache = cacheWith();
+    await cache.write('chat_media/t/m/a.jpg.enc', Uint8List(128));
+
+    expect(await cache.sizeOf('chat_media/t/m/a.jpg.enc'), 128);
+    expect(await cache.sizeOf('missing'), 0);
+  });
+
   test('an unknown path is a miss, not an error', () async {
     expect(await cacheWith().read('chat_media/t/m/missing.enc'), isNull);
   });

@@ -6,11 +6,7 @@ import 'app_spacing.dart';
 import 'app_typography.dart';
 import 'chat_theme.dart';
 
-/// The app's light and dark themes.
-///
-/// Note this deliberately does *not* cover the calculator facade, which keeps
-/// its own isolated palette in `features/calculator/presentation/theme` so the
-/// disguise still looks like a stock calculator.
+/// The app's shared light and dark Material 3 themes.
 abstract final class AppTheme {
   static ThemeData get light => _build(Brightness.light);
 
@@ -34,7 +30,7 @@ abstract final class AppTheme {
       extensions: [AppSemanticColors.of(brightness), ChatColors.of(brightness)],
 
       appBarTheme: AppBarTheme(
-        backgroundColor: scheme.surface,
+        backgroundColor: scheme.surfaceContainerLow,
         foregroundColor: scheme.onSurface,
         surfaceTintColor: Colors.transparent,
         elevation: AppElevation.none,
@@ -44,11 +40,6 @@ abstract final class AppTheme {
         systemOverlayStyle: isDark
             ? SystemUiOverlayStyle.light
             : SystemUiOverlayStyle.dark,
-        shape: Border(
-          bottom: BorderSide(
-            color: scheme.outlineVariant.withValues(alpha: 0.5),
-          ),
-        ),
       ),
 
       cardTheme: CardThemeData(
@@ -134,6 +125,26 @@ abstract final class AppTheme {
           ),
         ),
       ),
+      iconButtonTheme: IconButtonThemeData(
+        style: IconButton.styleFrom(
+          minimumSize: const Size(48, 48),
+          shape: RoundedRectangleBorder(
+            borderRadius: AppRadius.all(AppRadius.pill),
+          ),
+        ),
+      ),
+      menuTheme: MenuThemeData(
+        style: MenuStyle(
+          backgroundColor: WidgetStatePropertyAll(scheme.surfaceContainer),
+          elevation: const WidgetStatePropertyAll(AppElevation.floating),
+          shape: WidgetStatePropertyAll(
+            RoundedRectangleBorder(
+              borderRadius: AppRadius.all(AppRadius.md),
+              side: BorderSide(color: scheme.outlineVariant),
+            ),
+          ),
+        ),
+      ),
 
       dialogTheme: DialogThemeData(
         backgroundColor: scheme.surfaceContainerHigh,
@@ -203,6 +214,51 @@ abstract final class AppTheme {
           borderRadius: AppRadius.all(AppRadius.pill),
         ),
         labelTextStyle: WidgetStatePropertyAll(text.labelLarge),
+      ),
+      navigationBarTheme: NavigationBarThemeData(
+        backgroundColor: scheme.surfaceContainerLow,
+        indicatorColor: scheme.secondaryContainer,
+        surfaceTintColor: Colors.transparent,
+        labelTextStyle: WidgetStateProperty.resolveWith(
+          (states) => states.contains(WidgetState.selected)
+              ? text.labelMedium?.copyWith(fontWeight: FontWeight.w600)
+              : text.labelMedium,
+        ),
+      ),
+
+      tabBarTheme: TabBarThemeData(
+        indicatorSize: TabBarIndicatorSize.tab,
+        labelColor: scheme.primary,
+        unselectedLabelColor: scheme.onSurfaceVariant,
+        indicatorColor: scheme.primary,
+        dividerColor: scheme.outlineVariant.withValues(alpha: 0.3),
+        labelStyle: text.titleSmall?.copyWith(fontWeight: FontWeight.w600),
+        unselectedLabelStyle: text.titleSmall?.copyWith(
+          fontWeight: FontWeight.w500,
+        ),
+      ),
+
+      segmentedButtonTheme: SegmentedButtonThemeData(
+        style: SegmentedButton.styleFrom(
+          selectedBackgroundColor: scheme.primaryContainer,
+          selectedForegroundColor: scheme.onPrimaryContainer,
+          shape: RoundedRectangleBorder(
+            borderRadius: AppRadius.all(AppRadius.pill),
+          ),
+        ),
+      ),
+
+      floatingActionButtonTheme: FloatingActionButtonThemeData(
+        elevation: AppElevation.raised,
+        backgroundColor: scheme.primaryContainer,
+        foregroundColor: scheme.onPrimaryContainer,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      ),
+
+      badgeTheme: BadgeThemeData(
+        backgroundColor: scheme.primary,
+        textColor: scheme.onPrimary,
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
       ),
 
       switchTheme: SwitchThemeData(

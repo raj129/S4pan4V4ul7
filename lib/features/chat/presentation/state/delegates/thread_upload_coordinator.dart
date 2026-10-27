@@ -181,6 +181,8 @@ class ThreadUploadCoordinator {
 
   static String storageExtension(MessageType? type) => switch (type) {
     MessageType.video => 'mp4.enc',
+    MessageType.gif => 'gif.enc',
+    MessageType.sticker => 'sticker.enc',
     MessageType.file => 'bin.enc',
     _ => 'jpg.enc',
   };

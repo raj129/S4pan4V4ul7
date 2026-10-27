@@ -148,12 +148,18 @@ class FirebaseAuthRepository implements AuthRepository {
     required bool interactive,
   }) async {
     try {
-      final account =
+      var account =
           _sessionAccount ??
           await _googleSignIn.attemptLightweightAuthentication();
       if (account == null) {
-        _failedAt = DateTime.now();
-        return null;
+        if (interactive) {
+          account = await _googleSignIn.authenticate(
+            scopeHint: [..._authScopes, ..._driveScopes],
+          );
+        } else {
+          _failedAt = DateTime.now();
+          return null;
+        }
       }
       _sessionAccount = account;
       final allScopes = [..._authScopes, ..._driveScopes];
@@ -165,14 +171,16 @@ class FirebaseAuthRepository implements AuthRepository {
         _cachedHeaders = headers;
         _cachedAt = DateTime.now();
         _failedAt = null;
-      } else {
+      } else if (!interactive) {
         _failedAt = DateTime.now();
       }
       return headers;
     } catch (_) {
       // Drive authorization failed (e.g. user did not grant drive scope).
       // Return null so callers fall back gracefully.
-      _failedAt = DateTime.now();
+      if (!interactive) {
+        _failedAt = DateTime.now();
+      }
       return null;
     }
   }

@@ -45,25 +45,8 @@ class BaseScreenShell extends StatelessWidget {
               selectedIndex: drawerSelectedIndex,
               onDestinationSelected: (index) {
                 Navigator.of(context).pop();
-                switch (index) {
-                  case 0:
-                    context.go('/chat');
-                    break;
-                  case 1:
-                    context.go('/gallery');
-                    break;
-                  case 2:
-                    context.go('/trash');
-                    break;
-                  case 3:
-                    context.go('/files');
-                    break;
-                  case 4:
-                    context.go('/settings');
-                    break;
-                  default:
-                    break;
-                }
+                final path = navigationPathForDestination(index);
+                if (path != null) context.go(path);
               },
             )
           : null,

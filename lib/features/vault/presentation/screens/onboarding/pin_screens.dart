@@ -253,22 +253,30 @@ class _PinHero extends StatelessWidget {
     return Column(
       children: [
         Container(
-          padding: const EdgeInsets.all(AppSpacing.lg),
+          width: 76,
+          height: 76,
           decoration: BoxDecoration(
             shape: BoxShape.circle,
-            color: theme.colorScheme.primaryContainer,
+            color: theme.colorScheme.primaryContainer.withValues(alpha: 0.7),
+            border: Border.all(
+              color: theme.colorScheme.primary.withValues(alpha: 0.2),
+              width: 1.5,
+            ),
           ),
           child: Icon(
             icon,
-            size: AppSpacing.xxl,
-            color: theme.colorScheme.onPrimaryContainer,
+            size: 34,
+            color: theme.colorScheme.primary,
           ),
         ),
         const SizedBox(height: AppSpacing.xl),
         Text(
           title,
           textAlign: TextAlign.center,
-          style: theme.textTheme.headlineSmall,
+          style: theme.textTheme.headlineSmall?.copyWith(
+            fontWeight: FontWeight.w700,
+            letterSpacing: -0.2,
+          ),
         ),
         const SizedBox(height: AppSpacing.sm),
         Text(

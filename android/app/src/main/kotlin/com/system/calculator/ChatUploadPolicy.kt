@@ -3,8 +3,12 @@ package com.system.calculator
 /** One transition policy for Flutter controls and notification actions. */
 object ChatUploadPolicy {
     private val runnable = setOf("queued", "uploading", "retrying", "resumed")
+    val supportedMediaTypes = setOf("image", "gif", "sticker", "video", "audio", "file")
 
     fun runnable(state: String) = state in runnable
+
+    fun supportsMediaType(mediaType: String?) =
+        mediaType != null && mediaType in supportedMediaTypes
 
     fun restartExpiredSession(hasSession: Boolean, httpCode: Int) =
         hasSession && httpCode in setOf(404, 410)
