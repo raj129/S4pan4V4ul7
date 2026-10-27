@@ -80,6 +80,12 @@ class ChatMediaCache {
     }
   }
 
+  Future<int> sizeOf(String storagePath) async {
+    final file = await _fileFor(storagePath);
+    if (!await file.exists()) return 0;
+    return file.length();
+  }
+
   Future<T> _serialize<T>(Future<T> Function() action) {
     final result = _writes.then((_) => action());
     // The caller receives the failure; a failed operation must not poison

@@ -3,6 +3,7 @@ import '../application/media/android_chat_uploads.dart';
 import '../application/media/android_chat_downloads.dart';
 import '../application/media/android_chat_local_media.dart';
 import '../application/media/android_chat_secure_media_service.dart';
+import '../application/media/chat_media_manager_service.dart';
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
@@ -219,6 +220,13 @@ class ChatDependencies {
             currentUid: () => mediaLoader.accountId,
           ),
   );
+
+  late final ChatMediaManagerService mediaManagerService =
+      ChatMediaManagerService(
+        messageCache: messageCache,
+        messageRepository: messageRepository,
+        mediaLoader: mediaLoader,
+      );
 
   late final ContactDiscoveryService contactDiscoveryService =
       ContactDiscoveryService(userRepository: userRepository);

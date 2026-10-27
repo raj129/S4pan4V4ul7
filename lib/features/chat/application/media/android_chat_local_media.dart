@@ -23,12 +23,14 @@ class ChatLocalMediaMetadata {
     this.sourceUri,
     this.sourceDigest,
     this.sourceFlags = 0,
+    this.cachedSizeBytes,
   });
   final ChatMediaDirection direction;
   final bool moved;
   final String? sourceUri;
   final String? sourceDigest;
   final int sourceFlags;
+  final int? cachedSizeBytes;
 
   factory ChatLocalMediaMetadata.fromMap(Map<Object?, Object?> map) {
     final direction = switch (map['direction']) {
@@ -39,7 +41,8 @@ class ChatLocalMediaMetadata {
     if (map['moved'] is! bool ||
         (map['sourceUri'] != null && map['sourceUri'] is! String) ||
         (map['sourceDigest'] != null && map['sourceDigest'] is! String) ||
-        (map['sourceFlags'] != null && map['sourceFlags'] is! int)) {
+        (map['sourceFlags'] != null && map['sourceFlags'] is! int) ||
+        (map['size'] != null && map['size'] is! int)) {
       throw const FormatException('Invalid local attachment metadata.');
     }
     return ChatLocalMediaMetadata(
@@ -48,6 +51,7 @@ class ChatLocalMediaMetadata {
       sourceUri: map['sourceUri'] as String?,
       sourceDigest: map['sourceDigest'] as String?,
       sourceFlags: map['sourceFlags'] as int? ?? 0,
+      cachedSizeBytes: map['size'] as int?,
     );
   }
 }
@@ -242,6 +246,16 @@ class AndroidChatMediaCache extends ChatMediaCache {
     final (uid, path) = _identity(storagePath);
     await localMedia.remove(uid, path);
     await legacy.remove(storagePath);
+  }
+
+  @override
+  Future<int> sizeOf(String storagePath) async {
+    final (uid, path) = _identity(storagePath);
+    final metadata = await localMedia.metadata(uid, path);
+    if (metadata != null && !metadata.moved) {
+      return metadata.cachedSizeBytes ?? 0;
+    }
+    return legacy.sizeOf(storagePath);
   }
 
   @override

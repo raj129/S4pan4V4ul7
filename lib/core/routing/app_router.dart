@@ -270,6 +270,8 @@ GoRoute _chatRoute(AppDependencies deps, AppSessionState session) {
           return ProfileScreen(
             me: me,
             service: deps.chatDependencies.profileService,
+            mediaLoader: deps.chatDependencies.mediaLoader,
+            mediaManagerService: deps.chatDependencies.mediaManagerService,
           );
         },
       ),
@@ -342,6 +344,7 @@ GoRoute _chatRoute(AppDependencies deps, AppSessionState session) {
             thread: args.thread,
             otherUser: args.otherUser,
             mediaLoader: deps.chatDependencies.mediaLoader,
+            mediaManagerService: deps.chatDependencies.mediaManagerService,
             vaultBridge: deps.chatVaultBridge,
             onLock: () {
               deps.vaultSession.lock();

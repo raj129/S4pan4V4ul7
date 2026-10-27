@@ -40,6 +40,14 @@ Reusable cryptographic primitives remain in `lib/core/crypto`; animated emoji
 remain a chat presentation component. Android chat platform/plugin code remains
 in the Android app and `packages/android_chat_downloads`.
 
+The global chat **Manage media** screen is available from your Profile. To
+manage media in one conversation, tap the contact header and choose **Media in
+this chat**. The manager filters photos, videos, audio, and documents; sorts by
+attachment size or date; and reports encrypted attachment cache usage on this
+device. **Remove for me** hides the selected messages from your copy of the chat
+and removes local cached media. It does not delete the remote attachment or
+remove it for other participants.
+
 ## Development
 
 - Analyze: flutter analyze

@@ -353,6 +353,10 @@ void main() {
     await tester.tap(find.byType(PopupMenuButton<String>));
     await tester.pump();
     expect(find.text('Search this chat'), findsOneWidget);
+    expect(find.text('Jump to date'), findsOneWidget);
+    expect(find.text('Clear messages'), findsOneWidget);
+    expect(find.text('Delete thread'), findsOneWidget);
+    expect(find.text('Manage media'), findsNothing);
 
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pump();

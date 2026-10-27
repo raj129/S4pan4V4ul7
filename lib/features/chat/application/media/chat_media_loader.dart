@@ -64,6 +64,9 @@ class ChatMediaLoader extends ChangeNotifier {
   String get accountId => _accountId;
   String diskKey(String storagePath) => '$_accountId:$storagePath';
 
+  Future<int> cachedSize(String storagePath) =>
+      diskCache.sizeOf(diskKey(storagePath));
+
   void setAccount(String uid) {
     if (_accountId == uid) return;
     _accountId = uid;

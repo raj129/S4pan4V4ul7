@@ -6,6 +6,7 @@ import '../../application/media/chat_camera_recovery.dart';
 import '../../application/services/chat_privacy_maintenance.dart';
 import '../../application/services/chat_backup_scheduler.dart';
 import '../../application/media/android_chat_secure_media_service.dart';
+import '../../application/media/chat_media_manager_service.dart';
 import 'package:photo_vault/core/app/external_activity_guard.dart';
 import 'package:file_picker/file_picker.dart';
 
@@ -115,6 +116,7 @@ class ThreadScreen extends StatefulWidget {
     required this.otherUser,
     required this.mediaLoader,
     required this.vaultBridge,
+    this.mediaManagerService,
     required this.onLock,
     this.notificationService,
     this.settingsRepository,
@@ -137,6 +139,7 @@ class ThreadScreen extends StatefulWidget {
 
   /// Bridge to the photo vault, for attaching and saving media.
   final ChatVaultBridge vaultBridge;
+  final ChatMediaManagerService? mediaManagerService;
   final VoidCallback onLock;
 
   /// Told which thread is on screen so it does not notify about it.
@@ -892,11 +895,14 @@ class _ThreadScreenState extends State<ThreadScreen>
               _confirmDeleteThread(context);
             }
           },
-          itemBuilder: (context) => const [
-            PopupMenuItem(value: 'search', child: Text('Search this chat')),
-            PopupMenuItem(value: 'date', child: Text('Jump to date')),
-            PopupMenuItem(value: 'clear', child: Text('Clear messages')),
-            PopupMenuItem(value: 'delete', child: Text('Delete thread')),
+          itemBuilder: (context) => [
+            const PopupMenuItem(
+              value: 'search',
+              child: Text('Search this chat'),
+            ),
+            const PopupMenuItem(value: 'date', child: Text('Jump to date')),
+            const PopupMenuItem(value: 'clear', child: Text('Clear messages')),
+            const PopupMenuItem(value: 'delete', child: Text('Delete thread')),
           ],
         ),
         IconButton(
@@ -957,6 +963,9 @@ class _ThreadScreenState extends State<ThreadScreen>
               context,
               profileService: service,
               user: widget.otherUser,
+              mediaLoader: widget.mediaLoader,
+              mediaManagerService: widget.mediaManagerService,
+              threadId: widget.thread.threadId,
             ),
             child: header,
           );
