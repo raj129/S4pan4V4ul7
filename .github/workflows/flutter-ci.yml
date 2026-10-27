@@ -142,6 +142,16 @@ jobs:
             exit 1
           fi
 
+      - name: Verify Firebase service account secret
+        shell: bash
+        env:
+          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+        run: |
+          if [[ -z "$FIREBASE_SERVICE_ACCOUNT_JSON" ]]; then
+            echo "::error::Set the Actions secret FIREBASE_SERVICE_ACCOUNT_JSON."
+            exit 1
+          fi
+
       - name: Authenticate to Firebase
         uses: google-github-actions/auth@v2
         with:
