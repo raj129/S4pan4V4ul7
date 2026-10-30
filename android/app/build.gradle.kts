@@ -31,7 +31,7 @@ android {
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         // minSdk 23: required for flutter_secure_storage (Android Keystore).
         minSdk = flutter.minSdkVersion
-        targetSdk = 35
+        targetSdk = 36
         versionCode = flutter.versionCode
         versionName = flutter.versionName
         manifestPlaceholders["GOOGLE_MAPS_ANDROID_API_KEY"] =
