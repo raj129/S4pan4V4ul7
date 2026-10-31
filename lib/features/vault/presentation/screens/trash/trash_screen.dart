@@ -259,6 +259,58 @@ class _TrashBody extends StatelessWidget {
   }
 }
 
+class _TrashThumbnail extends StatefulWidget {
+  const _TrashThumbnail({
+    required this.photoId,
+    required this.load,
+    required this.isSelected,
+  });
+
+  final String photoId;
+  final Future<Uint8List?> Function() load;
+  final bool isSelected;
+
+  @override
+  State<_TrashThumbnail> createState() => _TrashThumbnailState();
+}
+
+class _TrashThumbnailState extends State<_TrashThumbnail> {
+  late Future<Uint8List?> _future = widget.load();
+
+  @override
+  void didUpdateWidget(_TrashThumbnail oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.photoId != widget.photoId) {
+      _future = widget.load();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final dpr = MediaQuery.devicePixelRatioOf(context);
+    return FutureBuilder<Uint8List?>(
+      future: _future,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState != ConnectionState.done ||
+            snapshot.data == null) {
+          return ColoredBox(color: scheme.surfaceContainerHighest);
+        }
+        return AnimatedOpacity(
+          duration: AppDuration.fast,
+          opacity: widget.isSelected ? 0.55 : 0.78,
+          child: Image.memory(
+            snapshot.data!,
+            fit: BoxFit.cover,
+            cacheWidth: (160 * dpr).round(),
+            gaplessPlayback: true,
+          ),
+        );
+      },
+    );
+  }
+}
+
 class _TrashTile extends StatelessWidget {
   const _TrashTile({
     required this.photo,
@@ -305,19 +357,10 @@ class _TrashTile extends StatelessWidget {
             ClipRRect(
               borderRadius: AppRadius.all(AppRadius.md),
               clipBehavior: Clip.antiAlias,
-              child: FutureBuilder<Uint8List?>(
-                future: loadThumbnail(),
-                builder: (context, snapshot) {
-                  if (snapshot.connectionState != ConnectionState.done ||
-                      snapshot.data == null) {
-                    return ColoredBox(color: scheme.surfaceContainerHighest);
-                  }
-                  return AnimatedOpacity(
-                    duration: AppDuration.fast,
-                    opacity: isSelected ? 0.55 : 0.72,
-                    child: Image.memory(snapshot.data!, fit: BoxFit.cover),
-                  );
-                },
+              child: _TrashThumbnail(
+                photoId: photo.id,
+                load: loadThumbnail,
+                isSelected: isSelected,
               ),
             ),
             Positioned.fill(

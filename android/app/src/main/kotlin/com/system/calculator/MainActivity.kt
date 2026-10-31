@@ -5,7 +5,6 @@ import android.view.WindowManager
 import androidx.annotation.NonNull
 import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
-import io.flutter.plugins.GeneratedPluginRegistrant
 
 class MainActivity : FlutterFragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -16,10 +15,9 @@ class MainActivity : FlutterFragmentActivity() {
     }
 
     override fun configureFlutterEngine(@NonNull flutterEngine: FlutterEngine) {
-        // Ensure all Flutter plugins are properly initialized
-        GeneratedPluginRegistrant.registerWith(flutterEngine)
         super.configureFlutterEngine(flutterEngine)
         flutterEngine.plugins.add(ChatSecureMediaPlugin())
         flutterEngine.plugins.add(ChatUploadPlugin())
+        flutterEngine.plugins.add(MapsDiagnosticsPlugin())
     }
 }

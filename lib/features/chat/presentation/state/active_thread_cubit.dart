@@ -714,6 +714,7 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
     }
 
     const preview = 'Shared a note';
+    if (_detached) await jumpToLatest();
     late final ChatMessage sent;
     try {
       final encrypted = await cryptoService.encryptMessage(
@@ -730,6 +731,7 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
             sharedNoteId: noteId,
           )
           .timeout(const Duration(seconds: 20));
+      _requestScroll(null);
     } catch (error) {
       _reportActionError('Could not share note: $error');
       return false;
@@ -764,6 +766,7 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
     }
 
     const preview = 'Shared live location';
+    if (_detached) await jumpToLatest();
     late final ChatMessage sent;
     try {
       final encrypted = await cryptoService.encryptMessage(
@@ -780,6 +783,7 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
             liveLocationSessionId: sessionId,
           )
           .timeout(const Duration(seconds: 20));
+      _requestScroll(null);
     } catch (error) {
       _reportActionError('Could not send live location: $error');
       return false;
@@ -820,6 +824,7 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
     if (_detached) await jumpToLatest();
     await outbox.enqueue(item);
     _showPending(item, decryptedPreview);
+    _requestScroll(null);
     if (waitForDelivery) {
       await _deliver(item, decryptedPreview: decryptedPreview);
     } else {
@@ -1261,7 +1266,7 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
               before: from,
             )).firstOrNull;
       if (target == null) return false;
-      return jumpToMessage(target.messageId);
+      return await jumpToMessage(target.messageId);
     } catch (_) {
       return false;
     }
@@ -1706,30 +1711,48 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
     bool propagateFailure = false,
     String? sourceUri,
     int sourceFlags = 0,
-  }) => _uploadCoordinator.sendMedia(
-    messageId: messageId,
-    rawBytes: rawBytes,
-    type: type,
-    filename: filename,
-    quality: quality,
-    videoQuality: videoQuality,
-    propagateFailure: propagateFailure,
-    sourceUri: sourceUri,
-    sourceFlags: sourceFlags,
-  );
+  }) async {
+    if (_detached) await jumpToLatest();
+    _requestScroll(null);
+    return _uploadCoordinator.sendMedia(
+      messageId: messageId,
+      rawBytes: rawBytes,
+      type: type,
+      filename: filename,
+      quality: quality,
+      videoQuality: videoQuality,
+      propagateFailure: propagateFailure,
+      sourceUri: sourceUri,
+      sourceFlags: sourceFlags,
+    );
+  }
 
   /// Queue multiple images at once, immediately showing optimistic messages in
   /// the thread while background isolate preparation and upload proceed.
   Future<void> sendMultipleImages({
     required List<OutgoingImageItem> items,
     required ImageQuality quality,
-  }) => _uploadCoordinator.sendMultipleImages(items: items, quality: quality);
+  }) async {
+    if (_detached) await jumpToLatest();
+    _requestScroll(null);
+    return _uploadCoordinator.sendMultipleImages(
+      items: items,
+      quality: quality,
+    );
+  }
 
   /// Stages all selected videos immediately and processes them sequentially.
   Future<void> sendMultipleVideos({
     required List<OutgoingVideoItem> items,
     required VideoQuality quality,
-  }) => _uploadCoordinator.sendMultipleVideos(items: items, quality: quality);
+  }) async {
+    if (_detached) await jumpToLatest();
+    _requestScroll(null);
+    return _uploadCoordinator.sendMultipleVideos(
+      items: items,
+      quality: quality,
+    );
+  }
 
   // ---------------------------------------------------------------------------
   // Pagination

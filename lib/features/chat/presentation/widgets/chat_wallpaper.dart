@@ -16,23 +16,18 @@ class ChatWallpaper extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final chat = context.chatColors;
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [
-            chat.wallpaper,
-            Color.alphaBlend(
-              chat.wallpaperPattern.withValues(alpha: 0.04),
-              chat.wallpaper,
+    return ColoredBox(
+      color: chat.wallpaper,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          RepaintBoundary(
+            child: CustomPaint(
+              painter: _WallpaperPainter(color: chat.wallpaperPattern),
             ),
-          ],
-        ),
-      ),
-      child: CustomPaint(
-        painter: _WallpaperPainter(color: chat.wallpaperPattern),
-        child: child,
+          ),
+          child,
+        ],
       ),
     );
   }
@@ -49,9 +44,9 @@ class _WallpaperPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final paint = Paint()
-      ..color = color.withValues(alpha: 0.05)
+      ..color = color.withValues(alpha: 0.025)
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.6
+      ..strokeWidth = 1.4
       ..strokeCap = StrokeCap.round;
 
     final cols = (size.width / _tile).ceil() + 1;

@@ -199,6 +199,7 @@ class _ThreadScreenState extends State<ThreadScreen>
 
   /// Rows most recently rendered, so a message id can be mapped to an index.
   List<_ThreadItem> _items = const [];
+  List<ChatMessage>? _cachedVisibleMessages;
 
   /// Drives the send button's reveal without rebuilding the whole composer on
   /// every keystroke.
@@ -210,6 +211,7 @@ class _ThreadScreenState extends State<ThreadScreen>
   final _showJumpToLatest = ValueNotifier<bool>(false);
   Timer? _scrollbarHide;
   Timer? _positionThrottle;
+  Timer? _readThrottle;
   StreamSubscription<Object>? _liveLocationErrorSubscription;
 
   /// Whether the rows in [_items] were built from a detached window.
@@ -527,15 +529,24 @@ class _ThreadScreenState extends State<ThreadScreen>
     final detached = state is ActiveThreadLoaded && state.isDetached;
     // A detached window pages newer history in as the bottom is approached.
     if (detached && nearest <= 3) cubit.loadNewerMessages();
-    _showJumpToLatest.value = detached || nearest > 12;
-    _scrollbarVisible.value = true;
+    final shouldShowJump = detached || nearest > 4;
+    if (_showJumpToLatest.value != shouldShowJump) {
+      _showJumpToLatest.value = shouldShowJump;
+    }
+    if (!_scrollbarVisible.value) {
+      _scrollbarVisible.value = true;
+    }
     _scrollbarHide?.cancel();
     _scrollbarHide = Timer(const Duration(milliseconds: 1500), () {
       if (mounted) _scrollbarVisible.value = false;
     });
     _scheduleHistoryPosition((nearest + furthest) ~/ 2);
-    // Scrolling reveals older messages, which are now read too.
-    cubit.markVisibleAsRead();
+    // Throttle read-receipt marking during rapid scrolling to prevent frame drops.
+    if (!(_readThrottle?.isActive ?? false)) {
+      _readThrottle = Timer(const Duration(milliseconds: 300), () {
+        if (mounted) cubit.markVisibleAsRead();
+      });
+    }
   }
 
   /// Refresh the scrollbar thumb from the message around [index], throttled
@@ -609,6 +620,7 @@ class _ThreadScreenState extends State<ThreadScreen>
     _itemPositions.itemPositions.removeListener(_onScroll);
     _scrollbarHide?.cancel();
     _positionThrottle?.cancel();
+    _readThrottle?.cancel();
     unawaited(_liveLocationErrorSubscription?.cancel());
     _historyPosition.dispose();
     _scrollbarVisible.dispose();
@@ -695,7 +707,20 @@ class _ThreadScreenState extends State<ThreadScreen>
               next is ActiveThreadLoaded &&
               !identical(prev.messages, next.messages) &&
               prev.scrollRequest == next.scrollRequest,
-          listener: (context, state) => _keepAnchor(),
+          listener: (context, state) {
+            final nextLoaded = state as ActiveThreadLoaded;
+            final myUid = context.read<ActiveThreadCubit>().myUid;
+            final newest = nextLoaded.visibleMessages.firstOrNull;
+            if (newest != null &&
+                newest.senderId == myUid &&
+                !nextLoaded.isDetached) {
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (mounted) _scrollToBottom();
+              });
+              return;
+            }
+            _keepAnchor();
+          },
         ),
       ],
       child: Scaffold(
@@ -1041,6 +1066,7 @@ class _ThreadScreenState extends State<ThreadScreen>
         final msgs = state.visibleMessages;
         if (msgs.isEmpty) {
           _items = const [];
+          _cachedVisibleMessages = null;
           return EmptyView(
             icon: Icons.waving_hand_outlined,
             title: 'No messages yet',
@@ -1054,10 +1080,18 @@ class _ThreadScreenState extends State<ThreadScreen>
         final myUid = cubit.myUid;
 
         final showPagingSpinner = state.hasMore;
-        final items = _buildThreadItems(msgs, withDayDividers: true);
-        _items = items;
+        final List<_ThreadItem> items;
+        if (identical(msgs, _cachedVisibleMessages) && _items.isNotEmpty) {
+          items = _items;
+        } else {
+          items = _buildThreadItems(msgs, withDayDividers: true);
+          _items = items;
+          _cachedVisibleMessages = msgs;
+        }
         _renderedDetached = state.isDetached;
-        final matchIds = state.searchMatchIds.toSet();
+        final matchIds = state.searchMatchIds.isEmpty
+            ? const <String>{}
+            : state.searchMatchIds.toSet();
 
         return ScrollablePositionedList.builder(
           itemScrollController: _itemScrollCtrl,
@@ -1246,14 +1280,31 @@ class _ThreadScreenState extends State<ThreadScreen>
     });
   }
 
+  void _scrollToBottom() {
+    if (!_itemScrollCtrl.isAttached || _items.isEmpty) return;
+    final positions = _itemPositions.itemPositions.value;
+    final nearBottom =
+        positions.isNotEmpty && positions.any((p) => p.index > 0 && p.index < 8);
+    if (nearBottom) {
+      _itemScrollCtrl.scrollTo(
+        index: 0,
+        alignment: 0,
+        duration: AppDuration.fast,
+        curve: AppCurves.standard,
+      );
+    } else {
+      _itemScrollCtrl.jumpTo(index: 0, alignment: 0);
+    }
+    _showJumpToLatest.value = false;
+  }
+
   /// Honour a scroll request from the cubit (search match, quote, date,
   /// scrollbar or jump-to-latest).
   void _performScroll(ChatScrollRequest request) {
     if (!_itemScrollCtrl.isAttached) return;
     final id = request.messageId;
     if (id == null) {
-      _itemScrollCtrl.jumpTo(index: 0);
-      _showJumpToLatest.value = false;
+      _scrollToBottom();
       return;
     }
     final index = _items.indexWhere((i) => i.message?.messageId == id);
@@ -1606,28 +1657,84 @@ class _ThreadScreenState extends State<ThreadScreen>
 
     final chosen = await showModalBottomSheet<ForwardTarget>(
       context: context,
-      builder: (sheetContext) => SafeArea(
-        child: ListView(
-          shrinkWrap: true,
-          children: [
-            const ListTile(
-              title: Text(
-                'Forward to',
-                style: TextStyle(fontWeight: FontWeight.w600),
-              ),
+      showDragHandle: true,
+      builder: (sheetContext) {
+        final theme = Theme.of(sheetContext);
+        final cs = theme.colorScheme;
+        final preview = message.isMedia
+            ? message.mediaPreview
+            : (message.localDecryptedText ?? 'Encrypted message');
+        return SafeArea(
+          child: ListView(
+            shrinkWrap: true,
+            padding: const EdgeInsets.fromLTRB(
+              AppSpacing.md,
+              0,
+              AppSpacing.md,
+              AppSpacing.md,
             ),
-            for (final target in targets)
-              ListTile(
-                leading: UserAvatar(
-                  avatar: target.user.avatar,
-                  name: _nameOf(target.user),
+            children: [
+              Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: AppSpacing.sm,
+                  vertical: AppSpacing.xs,
                 ),
-                title: Text(_nameOf(target.user)),
-                onTap: () => Navigator.pop(sheetContext, target),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Forward message',
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      preview,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: cs.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
               ),
-          ],
-        ),
-      ),
+              const SizedBox(height: AppSpacing.xs),
+              for (final target in targets)
+                ListTile(
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  leading: UserAvatar(
+                    avatar: target.user.avatar,
+                    name: _nameOf(target.user),
+                  ),
+                  title: Text(
+                    _nameOf(target.user),
+                    style: theme.textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  subtitle: Text(
+                    target.user.email,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: cs.onSurfaceVariant,
+                    ),
+                  ),
+                  trailing: Icon(
+                    Icons.send_rounded,
+                    size: 18,
+                    color: cs.primary,
+                  ),
+                  onTap: () => Navigator.pop(sheetContext, target),
+                ),
+            ],
+          ),
+        );
+      },
     );
     if (chosen == null) return;
 
@@ -1788,8 +1895,11 @@ class _ThreadScreenState extends State<ThreadScreen>
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          if (_isEditing) _buildEditHeader(),
-          if (!_isEditing) _buildReplyPreview(),
+          AnimatedSize(
+            duration: AppDuration.fast,
+            curve: AppCurves.standard,
+            child: _isEditing ? _buildEditHeader() : _buildReplyPreview(),
+          ),
           _buildInputBar(
             context,
             applyBottomSafeArea: applyBottomSafeArea,
@@ -1820,32 +1930,38 @@ class _ThreadScreenState extends State<ThreadScreen>
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.end,
           children: [
-            // Emoji, attach and the field share one pill so the composer reads
-            // as a single control rather than three loose widgets.
+            // Element X style circular attachment button on the left of the pill.
+            Material(
+              color: cs.surfaceContainerHigh,
+              shape: const CircleBorder(),
+              clipBehavior: Clip.antiAlias,
+              child: IconButton(
+                icon: const Icon(Icons.add_rounded, size: 22),
+                tooltip: 'Attach',
+                color: cs.onSurfaceVariant,
+                visualDensity: VisualDensity.compact,
+                onPressed: () => _pickMedia(context),
+              ),
+            ),
+            const SizedBox(width: AppSpacing.xs),
             Expanded(
               child: Container(
                 key: const ValueKey('chat-composer-surface'),
                 decoration: BoxDecoration(
-                  color: cs.surfaceContainerHighest.withValues(alpha: 0.6),
+                  color: cs.surfaceContainerHigh,
                   borderRadius: BorderRadius.circular(18),
                   border: Border.all(
-                    color: cs.outlineVariant.withValues(alpha: 0.4),
+                    color: cs.outlineVariant.withValues(alpha: 0.35),
                     width: 1,
                   ),
                 ),
-                padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xxs),
+                padding: const EdgeInsets.only(
+                  left: AppSpacing.md,
+                  right: AppSpacing.xxs,
+                ),
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.end,
                   children: [
-                    _ComposerAction(
-                      icon: _showEmojiPicker
-                          ? Icons.keyboard_outlined
-                          : Icons.emoji_emotions_outlined,
-                      tooltip: _showEmojiPicker
-                          ? 'Keyboard'
-                          : 'Emoji, stickers, and GIFs',
-                      onPressed: _toggleEmojiPicker,
-                    ),
                     Expanded(
                       child: TextField(
                         controller: _textCtrl,
@@ -1860,7 +1976,7 @@ class _ThreadScreenState extends State<ThreadScreen>
                           }
                         },
                         decoration: InputDecoration(
-                          hintText: _isEditing ? 'Edit message' : 'Message',
+                          hintText: _isEditing ? 'Edit message' : 'Message…',
                           filled: false,
                           border: InputBorder.none,
                           enabledBorder: InputBorder.none,
@@ -1882,15 +1998,19 @@ class _ThreadScreenState extends State<ThreadScreen>
                       ),
                     ),
                     _ComposerAction(
-                      icon: Icons.attach_file_rounded,
-                      tooltip: 'Attach',
-                      onPressed: () => _pickMedia(context),
+                      icon: _showEmojiPicker
+                          ? Icons.keyboard_outlined
+                          : Icons.emoji_emotions_outlined,
+                      tooltip: _showEmojiPicker
+                          ? 'Keyboard'
+                          : 'Emoji, stickers, and GIFs',
+                      onPressed: _toggleEmojiPicker,
                     ),
                   ],
                 ),
               ),
             ),
-            const SizedBox(width: AppSpacing.sm),
+            const SizedBox(width: AppSpacing.xs),
             _SendButton(
               hasText: _hasText,
               onSend: _isEditing ? _commitEdit : _send,
@@ -3220,7 +3340,7 @@ class _ThreadItem {
   final bool isLastInGroup;
 }
 
-/// App-bar avatar with a presence ring, so status reads at a glance.
+/// App-bar avatar with a crisp presence indicator dot, matching Element X.
 class _PresenceAvatar extends StatelessWidget {
   const _PresenceAvatar({
     required this.user,
@@ -3236,23 +3356,27 @@ class _PresenceAvatar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
     return SizedBox(
-      width: 40,
-      height: 40,
+      width: 38,
+      height: 38,
       child: Stack(
         children: [
-          AnimatedContainer(
-            duration: AppDuration.normal,
-            padding: const EdgeInsets.all(2),
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              border: Border.all(
-                color: online ? ringColor : Colors.transparent,
-                width: 2,
+          UserAvatar(avatar: user.avatar, name: name, radius: 19),
+          if (online)
+            Positioned(
+              right: 0,
+              bottom: 0,
+              child: Container(
+                width: 11,
+                height: 11,
+                decoration: BoxDecoration(
+                  color: ringColor,
+                  shape: BoxShape.circle,
+                  border: Border.all(color: cs.surfaceContainerLow, width: 2),
+                ),
               ),
             ),
-            child: UserAvatar(avatar: user.avatar, name: name, radius: 18),
-          ),
         ],
       ),
     );
@@ -3364,10 +3488,6 @@ class _AttachmentOption extends StatelessWidget {
               decoration: BoxDecoration(
                 color: color.withValues(alpha: 0.14),
                 shape: BoxShape.circle,
-                border: Border.all(
-                  color: color.withValues(alpha: 0.32),
-                  width: 1.5,
-                ),
               ),
               child: Icon(icon, color: color, size: 24),
             ),

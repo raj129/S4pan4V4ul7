@@ -18,25 +18,28 @@ class ChatColors extends ThemeExtension<ChatColors> {
     required this.bubbleShadow,
   });
 
-  factory ChatColors.of(Brightness brightness) {
+  factory ChatColors.of(
+    Brightness brightness, {
+    AppThemePalette palette = AppThemePalette.royalIndigo,
+  }) {
     final dark = brightness == Brightness.dark;
     return ChatColors(
-      bubbleMine: dark ? AppColors.bubbleMineDark : AppColors.bubbleMineLight,
+      bubbleMine: dark ? palette.bubbleMineDark : palette.bubbleMineLight,
       onBubbleMine: dark
-          ? AppColors.onBubbleMineDark
-          : AppColors.onBubbleMineLight,
+          ? palette.onBubbleMineDark
+          : palette.onBubbleMineLight,
       bubbleTheirs: dark
           ? AppColors.bubbleTheirsDark
           : AppColors.bubbleTheirsLight,
       onBubbleTheirs: dark
           ? AppColors.onBubbleTheirsDark
           : AppColors.onBubbleTheirsLight,
-      readTick: AppColors.readTick,
+      readTick: palette.readTick,
       wallpaper: dark ? AppColors.wallpaperDark : AppColors.wallpaperLight,
       wallpaperPattern: dark
           ? AppColors.wallpaperPatternDark
           : AppColors.wallpaperPatternLight,
-      quoteStrip: dark ? AppColors.onlineDark : AppColors.seed,
+      quoteStrip: dark ? palette.readTick : palette.seed,
       bubbleShadow: dark
           ? Colors.black.withValues(alpha: 0.35)
           : Colors.black.withValues(alpha: 0.08),

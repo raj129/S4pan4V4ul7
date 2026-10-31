@@ -28,13 +28,13 @@ abstract final class AppRadius {
   static const double pill = 999;
 
   static const Radius bubble = Radius.circular(18);
-  static const Radius bubbleTight = Radius.circular(6);
+  static const Radius bubbleTight = Radius.circular(4);
 
   static BorderRadius all(double value) => BorderRadius.circular(value);
 }
 
 /// Elevation is used sparingly: surfaces are mostly separated by tone, with a
-/// soft shadow reserved for things that genuinely float (bubbles, composer).
+/// soft shadow reserved for things that genuinely float (FABs, menus).
 abstract final class AppElevation {
   static const double none = 0;
   static const double card = 0;
@@ -42,9 +42,16 @@ abstract final class AppElevation {
   static const double floating = 6;
 }
 
-/// Shared animation durations, so motion feels consistent across screens.
+/// Shared animation durations and curves so motion feels snappy and consistent.
 abstract final class AppDuration {
+  static const instant = Duration(milliseconds: 100);
   static const fast = Duration(milliseconds: 150);
-  static const normal = Duration(milliseconds: 250);
-  static const slow = Duration(milliseconds: 400);
+  static const normal = Duration(milliseconds: 220);
+  static const slow = Duration(milliseconds: 350);
+}
+
+abstract final class AppCurves {
+  static const standard = Curves.easeOutCubic;
+  static const emphasized = Curves.easeInOutCubicEmphasized;
+  static const spring = Curves.elasticOut;
 }

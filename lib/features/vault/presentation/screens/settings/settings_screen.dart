@@ -10,6 +10,7 @@ import 'package:photo_vault/core/widgets/app_surfaces.dart';
 import 'package:photo_vault/core/widgets/base_screen_shell.dart';
 import 'package:photo_vault/features/vault/domain/entities/user_mode.dart';
 import 'package:photo_vault/features/vault/domain/repositories/settings_repository.dart';
+import 'package:photo_vault/core/presentation/theme/app_colors.dart';
 import 'package:photo_vault/core/presentation/theme/app_spacing.dart';
 import '../../widgets/pin_reauth_dialog.dart';
 
@@ -38,23 +39,17 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
-  bool _appLockOnOpen = true;
   bool _autoLockOnBackground = true;
   bool _photoSyncEnabled = false;
-  bool _vmkBackupEnabled = false;
   bool _wifiOnlyBackup = true;
-  bool _chargingOnlySync = false;
   bool _externalStorageMirrorEnabled = true;
   bool _driveEncryptedBackupEnabled = false;
-  bool _preserveExif = false;
-  bool _stripMetadataOnShare = true;
-  bool _allowCameraImport = true;
-  bool _allowShareIntentImport = true;
+  AppThemePalette _themePalette = AppThemePalette.royalIndigo;
+  String _themeMode = 'system';
 
   @override
   void initState() {
     super.initState();
-    _vmkBackupEnabled = widget.mode == UserMode.googleEnabled;
     _loadSettings();
   }
 
@@ -64,11 +59,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
         .isExternalStorageMirrorEnabled();
     final driveBackup = await widget.settingsRepository
         .isDriveEncryptedBackupEnabled();
+    final autoLock = await widget.settingsRepository
+        .isAutoLockOnBackgroundEnabled();
+    final paletteId = await widget.settingsRepository.getThemePaletteId();
+    final themeMode = await widget.settingsRepository.getThemeMode();
     if (!mounted) return;
     setState(() {
       _photoSyncEnabled = photoSync;
       _externalStorageMirrorEnabled = externalMirror;
       _driveEncryptedBackupEnabled = driveBackup;
+      _autoLockOnBackground = autoLock;
+      _themePalette = AppThemePalette.fromId(paletteId);
+      _themeMode = switch (themeMode) {
+        'light' || 'dark' => themeMode!,
+        _ => 'system',
+      };
     });
     await _loadChatBackupInfo();
   }
@@ -178,9 +183,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
+  Future<void> _selectPalette(AppThemePalette palette) async {
+    if (_themePalette == palette) return;
+    setState(() => _themePalette = palette);
+    await widget.settingsRepository.setThemePaletteId(palette.id);
+    await widget.onSettingsChanged();
+  }
+
+  Future<void> _selectThemeMode(String mode) async {
+    if (_themeMode == mode) return;
+    setState(() => _themeMode = mode);
+    await widget.settingsRepository.setThemeMode(mode);
+    await widget.onSettingsChanged();
+  }
+
   @override
   Widget build(BuildContext context) {
-    final errorColor = Theme.of(context).colorScheme.error;
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
 
     return BaseScreenShell(
       title: 'Settings',
@@ -188,39 +208,157 @@ class _SettingsScreenState extends State<SettingsScreen> {
       body: ListView(
         padding: const EdgeInsets.only(bottom: AppSpacing.xl),
         children: [
+          const SectionHeader('Appearance'),
+          SettingsCard(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(
+                  AppSpacing.lg,
+                  AppSpacing.md,
+                  AppSpacing.lg,
+                  AppSpacing.md,
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(
+                          Icons.palette_outlined,
+                          color: cs.onSurfaceVariant,
+                        ),
+                        const SizedBox(width: AppSpacing.md),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Theme color',
+                                style: theme.textTheme.titleSmall,
+                              ),
+                              Text(
+                                _themePalette.label,
+                                style: theme.textTheme.bodySmall?.copyWith(
+                                  color: cs.onSurfaceVariant,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: AppSpacing.md),
+                    Wrap(
+                      spacing: AppSpacing.sm,
+                      runSpacing: AppSpacing.sm,
+                      children: [
+                        for (final palette in AppThemePalette.values)
+                          _ThemePaletteChip(
+                            palette: palette,
+                            selected: _themePalette == palette,
+                            onTap: () => _selectPalette(palette),
+                          ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(
+                  AppSpacing.lg,
+                  AppSpacing.md,
+                  AppSpacing.lg,
+                  AppSpacing.md,
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(
+                          Icons.brightness_6_outlined,
+                          color: cs.onSurfaceVariant,
+                        ),
+                        const SizedBox(width: AppSpacing.md),
+                        Text(
+                          'Appearance mode',
+                          style: theme.textTheme.titleSmall,
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: AppSpacing.md),
+                    SizedBox(
+                      width: double.infinity,
+                      child: SegmentedButton<String>(
+                        segments: const [
+                          ButtonSegment(
+                            value: 'system',
+                            icon: Icon(Icons.brightness_auto_rounded, size: 18),
+                            label: Text('System'),
+                          ),
+                          ButtonSegment(
+                            value: 'light',
+                            icon: Icon(Icons.light_mode_outlined, size: 18),
+                            label: Text('Light'),
+                          ),
+                          ButtonSegment(
+                            value: 'dark',
+                            icon: Icon(Icons.dark_mode_outlined, size: 18),
+                            label: Text('Dark'),
+                          ),
+                        ],
+                        selected: {_themeMode},
+                        onSelectionChanged: (selection) {
+                          if (selection.isNotEmpty) {
+                            unawaited(_selectThemeMode(selection.first));
+                          }
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
           const SectionHeader('Security'),
           SettingsCard(
             children: [
               _SettingsSwitch(
-                icon: Icons.lock_outline_rounded,
-                title: 'Lock app on open',
-                subtitle: 'Require your PIN each time the vault opens.',
-                value: _appLockOnOpen,
-                onChanged: (v) => setState(() => _appLockOnOpen = v),
-              ),
-              _SettingsSwitch(
                 icon: Icons.screen_lock_portrait_outlined,
                 title: 'Auto-lock on background',
-                subtitle: 'Protect the vault when you leave the app.',
+                subtitle:
+                    'Lock the vault automatically after 10 seconds in the background.',
                 value: _autoLockOnBackground,
-                onChanged: (v) => setState(() => _autoLockOnBackground = v),
+                onChanged: (v) async {
+                  setState(() => _autoLockOnBackground = v);
+                  await widget.settingsRepository
+                      .setAutoLockOnBackgroundEnabled(v);
+                  await widget.onSettingsChanged();
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.password_rounded),
+                title: const Text('Change app PIN'),
+                subtitle: const Text(
+                  'Re-authenticate before choosing a new PIN.',
+                ),
+                trailing: const Icon(Icons.chevron_right_rounded),
+                onTap: () async {
+                  final allowed = await requirePinReauth(
+                    context: context,
+                    unlockVaultUseCase: widget.unlockVaultUseCase,
+                    pinValidator: widget.pinValidator,
+                    actionLabel: 'change your PIN',
+                  );
+                  if (!allowed || !context.mounted) return;
+                  context.push('/settings/change-pin');
+                },
               ),
             ],
           ),
           const SectionHeader('Backup & sync'),
           SettingsCard(
             children: [
-              _SettingsSwitch(
-                icon: Icons.vpn_key_outlined,
-                title: 'VMK backup',
-                subtitle: widget.mode == UserMode.googleEnabled
-                    ? 'Back up the wrapped vault master key for restore.'
-                    : 'Switch to Google mode to enable key backup.',
-                value: _vmkBackupEnabled,
-                onChanged: widget.mode == UserMode.googleEnabled
-                    ? (v) => setState(() => _vmkBackupEnabled = v)
-                    : null,
-              ),
               _SettingsSwitch(
                 icon: Icons.cloud_sync_outlined,
                 title: 'Photo sync',
@@ -257,8 +395,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
               _SettingsSwitch(
                 icon: Icons.drive_folder_upload_outlined,
                 title: 'Google Drive encrypted package',
-                subtitle:
-                    'Back up encrypted objects, manifest, and wrapped key envelope.',
+                subtitle: widget.mode == UserMode.googleEnabled
+                    ? 'Back up encrypted objects, manifest, and wrapped key envelope.'
+                    : 'Switch to Google mode below to enable Drive backup.',
                 value: _driveEncryptedBackupEnabled,
                 onChanged: widget.mode == UserMode.googleEnabled
                     ? (v) async {
@@ -278,40 +417,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       }
                     : null,
               ),
-              _SettingsSwitch(
-                icon: Icons.wifi_rounded,
-                title: 'Backup on Wi-Fi only',
-                subtitle: 'Avoid mobile data when backup jobs run.',
-                value: _wifiOnlyBackup,
-                onChanged: (v) {
-                  setState(() => _wifiOnlyBackup = v);
-                  final backup = _chatBackup();
-                  if (backup != null) unawaited(backup.setWifiOnly(v));
-                },
-              ),
-              _SettingsSwitch(
-                icon: Icons.battery_charging_full_rounded,
-                title: 'Sync while charging only',
-                subtitle: 'Defer sync jobs until the device is plugged in.',
-                value: _chargingOnlySync,
-                onChanged: (v) => setState(() => _chargingOnlySync = v),
-              ),
-              ListTile(
-                leading: const Icon(Icons.sync_rounded),
-                title: const Text('Sync now'),
-                subtitle: const Text('Queue a manual encrypted backup sync.'),
-                onTap: () {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Sync job queued.')),
-                  );
-                },
-              ),
             ],
           ),
           if (widget.chatBackupService != null) ...[
             const SectionHeader('Chat backup'),
             SettingsCard(
               children: [
+                _SettingsSwitch(
+                  icon: Icons.wifi_rounded,
+                  title: 'Backup on Wi-Fi only',
+                  subtitle: 'Avoid mobile data when nightly chat backups run.',
+                  value: _wifiOnlyBackup,
+                  onChanged: (v) {
+                    setState(() => _wifiOnlyBackup = v);
+                    final backup = _chatBackup();
+                    if (backup != null) unawaited(backup.setWifiOnly(v));
+                  },
+                ),
                 ListTile(
                   leading: const Icon(Icons.backup_outlined),
                   title: const Text('Back up chats now'),
@@ -327,7 +449,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           dimension: 20,
                           child: CircularProgressIndicator(strokeWidth: 2),
                         )
-                      : null,
+                      : const Icon(Icons.chevron_right_rounded),
                   onTap: _chatBackupBusy ? null : _backUpChatNow,
                 ),
                 ListTile(
@@ -336,70 +458,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   subtitle: const Text(
                     'Bring back messages from this device or Google Drive.',
                   ),
+                  trailing: const Icon(Icons.chevron_right_rounded),
                   onTap: _chatBackupBusy ? null : _restoreChatBackup,
                 ),
               ],
             ),
           ],
-          const SectionHeader('Import & privacy'),
+          const SectionHeader('Account & restore'),
           SettingsCard(
             children: [
-              _SettingsSwitch(
-                icon: Icons.photo_camera_outlined,
-                title: 'Allow camera import',
-                subtitle: 'Let the app add new photos captured on-device.',
-                value: _allowCameraImport,
-                onChanged: (v) => setState(() => _allowCameraImport = v),
-              ),
-              _SettingsSwitch(
-                icon: Icons.ios_share_outlined,
-                title: 'Allow share-intent import',
-                subtitle:
-                    'Accept photos shared into the vault from other apps.',
-                value: _allowShareIntentImport,
-                onChanged: (v) => setState(() => _allowShareIntentImport = v),
-              ),
-              _SettingsSwitch(
-                icon: Icons.badge_outlined,
-                title: 'Preserve EXIF metadata',
-                subtitle:
-                    'Keep camera, location, and timestamp metadata on import.',
-                value: _preserveExif,
-                onChanged: (v) => setState(() => _preserveExif = v),
-              ),
-              _SettingsSwitch(
-                icon: Icons.privacy_tip_outlined,
-                title: 'Strip metadata on share',
-                subtitle: 'Remove metadata when exporting a decrypted copy.',
-                value: _stripMetadataOnShare,
-                onChanged: (v) => setState(() => _stripMetadataOnShare = v),
-              ),
-            ],
-          ),
-          const SectionHeader('Vault & account'),
-          SettingsCard(
-            children: [
-              ListTile(
-                leading: const Icon(Icons.password_rounded),
-                title: const Text('Change app PIN'),
-                subtitle: const Text(
-                  'Re-authenticate before choosing a new PIN.',
-                ),
-                onTap: () async {
-                  final allowed = await requirePinReauth(
-                    context: context,
-                    unlockVaultUseCase: widget.unlockVaultUseCase,
-                    pinValidator: widget.pinValidator,
-                    actionLabel: 'change your PIN',
-                  );
-                  if (!allowed || !context.mounted) return;
-                  context.push('/settings/change-pin');
-                },
-              ),
               ListTile(
                 leading: const Icon(Icons.cloud_outlined),
                 title: const Text('Google mode & restore'),
                 subtitle: Text('${widget.mode.title} · Manage cloud restore'),
+                trailing: const Icon(Icons.chevron_right_rounded),
                 onTap: () async {
                   final allowed = await requirePinReauth(
                     context: context,
@@ -411,17 +483,77 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   context.push('/restore');
                 },
               ),
-              ListTile(
-                leading: Icon(Icons.delete_forever_outlined, color: errorColor),
-                title: Text('Reset vault', style: TextStyle(color: errorColor)),
-                subtitle: const Text(
-                  'Delete local vault data from this device.',
-                ),
-                onTap: () {},
-              ),
             ],
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _ThemePaletteChip extends StatelessWidget {
+  const _ThemePaletteChip({
+    required this.palette,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final AppThemePalette palette;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    return Material(
+      color: selected
+          ? cs.primaryContainer.withValues(alpha: 0.55)
+          : cs.surfaceContainerHighest.withValues(alpha: 0.55),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(999),
+        side: BorderSide(
+          color: selected ? palette.seed : cs.outlineVariant,
+          width: selected ? 1.8 : 1,
+        ),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(
+            horizontal: AppSpacing.md,
+            vertical: AppSpacing.sm,
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 20,
+                height: 20,
+                decoration: BoxDecoration(
+                  color: palette.seed,
+                  shape: BoxShape.circle,
+                ),
+                child: selected
+                    ? const Icon(
+                        Icons.check_rounded,
+                        size: 14,
+                        color: Colors.white,
+                      )
+                    : null,
+              ),
+              const SizedBox(width: AppSpacing.sm),
+              Text(
+                palette.label,
+                style: theme.textTheme.labelMedium?.copyWith(
+                  fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                  color: selected ? cs.onSurface : cs.onSurfaceVariant,
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

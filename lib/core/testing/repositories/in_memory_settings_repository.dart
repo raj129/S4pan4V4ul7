@@ -52,6 +52,9 @@ class InMemorySettingsRepository implements SettingsRepository {
   }
 
   String? _chatImageQuality;
+  bool _autoLockOnBackground = true;
+  String? _themePaletteId;
+  String? _themeMode;
 
   @override
   Future<String?> getChatImageQuality() async => _chatImageQuality;
@@ -59,5 +62,29 @@ class InMemorySettingsRepository implements SettingsRepository {
   @override
   Future<void> setChatImageQuality(String quality) async {
     _chatImageQuality = quality;
+  }
+
+  @override
+  Future<bool> isAutoLockOnBackgroundEnabled() async => _autoLockOnBackground;
+
+  @override
+  Future<void> setAutoLockOnBackgroundEnabled(bool enabled) async {
+    _autoLockOnBackground = enabled;
+  }
+
+  @override
+  Future<String?> getThemePaletteId() async => _themePaletteId;
+
+  @override
+  Future<void> setThemePaletteId(String paletteId) async {
+    _themePaletteId = paletteId;
+  }
+
+  @override
+  Future<String?> getThemeMode() async => _themeMode;
+
+  @override
+  Future<void> setThemeMode(String mode) async {
+    _themeMode = mode;
   }
 }

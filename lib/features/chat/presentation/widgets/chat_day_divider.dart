@@ -3,7 +3,6 @@ import 'package:intl/intl.dart';
 
 import 'package:photo_vault/core/presentation/theme/app_spacing.dart';
 import 'package:photo_vault/core/presentation/theme/app_typography.dart';
-import 'package:photo_vault/core/presentation/theme/chat_theme.dart';
 
 /// Pill-shaped "Today / Yesterday / 12 Mar 2024" divider between day runs.
 class ChatDayDivider extends StatelessWidget {
@@ -26,7 +25,7 @@ class ChatDayDivider extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final chat = context.chatColors;
+    final cs = Theme.of(context).colorScheme;
     return Center(
       child: Padding(
         padding: const EdgeInsets.symmetric(vertical: AppSpacing.md),
@@ -36,21 +35,12 @@ class ChatDayDivider extends StatelessWidget {
             vertical: AppSpacing.xs,
           ),
           decoration: BoxDecoration(
-            color: chat.bubbleTheirs,
+            color: cs.surfaceContainerHigh,
             borderRadius: AppRadius.all(AppRadius.pill),
-            boxShadow: [
-              BoxShadow(
-                color: chat.bubbleShadow,
-                blurRadius: 3,
-                offset: const Offset(0, 1),
-              ),
-            ],
           ),
           child: Text(
             labelFor(date),
-            style: AppTypography.overline(
-              chat.onBubbleTheirs.withValues(alpha: 0.75),
-            ),
+            style: AppTypography.overline(cs.onSurfaceVariant),
           ),
         ),
       ),

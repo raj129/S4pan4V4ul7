@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 
 import '../../domain/entities/chat_message.dart';
 import '../../domain/entities/giphy_media.dart';
+import 'maps_diagnostics.dart';
 
 class GiphyMediaPage {
   const GiphyMediaPage({required this.results, required this.nextOffset});
@@ -16,6 +17,7 @@ class GiphyMediaPage {
 class GiphyMediaService {
   GiphyMediaService({http.Client? client, String? apiKey})
     : _client = client ?? http.Client(),
+      _hasExplicitKey = apiKey != null,
       _apiKey = apiKey ?? const String.fromEnvironment('GIPHY_API_KEY');
 
   static const pageSize = 24;
@@ -25,7 +27,17 @@ class GiphyMediaService {
   static const _allowedMediaHostSuffix = '.giphy.com';
 
   final http.Client _client;
-  final String _apiKey;
+  final bool _hasExplicitKey;
+  String _apiKey;
+
+  Future<String> _resolveApiKey() async {
+    if (_apiKey.isNotEmpty || _hasExplicitKey) return _apiKey;
+    final fallback = await MapsDiagnostics.loadGiphyApiKey();
+    if (fallback.isNotEmpty) {
+      _apiKey = fallback;
+    }
+    return _apiKey;
+  }
 
   Future<GiphyMediaPage> search({
     required String query,
@@ -35,7 +47,8 @@ class GiphyMediaService {
     if (type != MessageType.gif && type != MessageType.sticker) {
       throw ArgumentError.value(type, 'type', 'Expected GIF or sticker.');
     }
-    if (_apiKey.isEmpty) {
+    final resolvedKey = await _resolveApiKey();
+    if (resolvedKey.isEmpty) {
       throw StateError(
         'GIPHY_API_KEY is not configured. Supply it at build time with '
         '--dart-define=GIPHY_API_KEY=<your-key>.',
@@ -56,7 +69,7 @@ class GiphyMediaService {
     final kind = type == MessageType.sticker ? 'stickers' : 'gifs';
     final endpoint = normalized.isEmpty ? 'trending' : 'search';
     final uri = Uri.https('api.giphy.com', '/v1/$kind/$endpoint', {
-      'api_key': _apiKey,
+      'api_key': resolvedKey,
       'limit': '$pageSize',
       'offset': '$offset',
       'rating': 'g',

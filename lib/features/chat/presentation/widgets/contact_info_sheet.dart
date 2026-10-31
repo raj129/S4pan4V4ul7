@@ -227,23 +227,16 @@ class _ContactInfoSheetState extends State<_ContactInfoSheet> {
               Card(
                 margin: EdgeInsets.zero,
                 child: Padding(
-                  padding: const EdgeInsets.all(AppSpacing.xl),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: AppSpacing.xl,
+                    vertical: AppSpacing.lg,
+                  ),
                   child: Column(
                     children: [
-                      Container(
-                        padding: const EdgeInsets.all(3),
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          border: Border.all(
-                            color: colors.primary.withValues(alpha: 0.35),
-                            width: 2,
-                          ),
-                        ),
-                        child: UserAvatar(
-                          avatar: user.avatar,
-                          name: shownName,
-                          radius: 44,
-                        ),
+                      UserAvatar(
+                        avatar: user.avatar,
+                        name: shownName,
+                        radius: 48,
                       ),
                       const SizedBox(height: AppSpacing.md),
                       Text(
@@ -254,7 +247,7 @@ class _ContactInfoSheetState extends State<_ContactInfoSheet> {
                         textAlign: TextAlign.center,
                       ),
                       if (_savedAlias != null) ...[
-                        const SizedBox(height: AppSpacing.xs),
+                        const SizedBox(height: AppSpacing.xxs),
                         Text(
                           user.displayName,
                           style: theme.textTheme.bodyMedium?.copyWith(
@@ -263,10 +256,12 @@ class _ContactInfoSheetState extends State<_ContactInfoSheet> {
                           textAlign: TextAlign.center,
                         ),
                       ],
-                      const SizedBox(height: AppSpacing.xs),
+                      const SizedBox(height: AppSpacing.xxs),
                       Text(
                         user.email,
-                        style: theme.textTheme.bodySmall?.copyWith(
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.bodyMedium?.copyWith(
                           color: colors.onSurfaceVariant,
                         ),
                         textAlign: TextAlign.center,
@@ -279,9 +274,14 @@ class _ContactInfoSheetState extends State<_ContactInfoSheet> {
               if (canManageMedia) ...[
                 Card(
                   child: ListTile(
-                    leading: Icon(
-                      Icons.perm_media_outlined,
-                      color: colors.primary,
+                    leading: CircleAvatar(
+                      radius: 20,
+                      backgroundColor: colors.primaryContainer,
+                      child: Icon(
+                        Icons.perm_media_outlined,
+                        color: colors.onPrimaryContainer,
+                        size: 20,
+                      ),
                     ),
                     title: const Text('Media in this chat'),
                     subtitle: const Text(
@@ -294,69 +294,98 @@ class _ContactInfoSheetState extends State<_ContactInfoSheet> {
                 const SizedBox(height: AppSpacing.md),
               ],
               if (_editing) ...[
-                TextField(
-                  controller: _controller,
-                  enabled: !_saving,
-                  maxLength: ProfileService.maxNameLength,
-                  textCapitalization: TextCapitalization.words,
-                  textInputAction: TextInputAction.done,
-                  onSubmitted: (_) => _saveAlias(),
-                  decoration: InputDecoration(
-                    labelText: 'Nickname',
-                    hintText: user.displayName,
-                    helperText: 'Visible only to you on this device.',
-                    prefixIcon: const Icon(Icons.edit_outlined),
-                    suffixIcon: ListenableBuilder(
-                      listenable: _controller,
-                      builder: (_, _) => _controller.text.isEmpty
-                          ? const SizedBox.shrink()
-                          : IconButton(
-                              tooltip: 'Clear',
-                              icon: const Icon(Icons.close_rounded),
-                              onPressed: _saving ? null : _controller.clear,
+                Card(
+                  child: Padding(
+                    padding: const EdgeInsets.all(AppSpacing.lg),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        TextField(
+                          controller: _controller,
+                          enabled: !_saving,
+                          maxLength: ProfileService.maxNameLength,
+                          textCapitalization: TextCapitalization.words,
+                          textInputAction: TextInputAction.done,
+                          onSubmitted: (_) => _saveAlias(),
+                          decoration: InputDecoration(
+                            labelText: 'Nickname',
+                            hintText: user.displayName,
+                            helperText: 'Visible only to you on this device.',
+                            prefixIcon: const Icon(Icons.edit_outlined),
+                            focusedBorder: OutlineInputBorder(
+                              borderRadius: AppRadius.all(AppRadius.md),
+                              borderSide: BorderSide.none,
                             ),
-                    ),
-                  ),
-                ),
-                Align(
-                  alignment: AlignmentDirectional.centerStart,
-                  child: TextButton.icon(
-                    onPressed: _saving || _controller.text.isEmpty
-                        ? null
-                        : _useRealName,
-                    icon: const Icon(Icons.person_outline_rounded),
-                    label: const Text('Use real name'),
-                  ),
-                ),
-                const SizedBox(height: AppSpacing.sm),
-                Row(
-                  children: [
-                    Expanded(
-                      child: OutlinedButton(
-                        onPressed: _saving ? null : _cancelEditing,
-                        child: const Text('Cancel'),
-                      ),
-                    ),
-                    const SizedBox(width: AppSpacing.sm),
-                    Expanded(
-                      child: FilledButton(
-                        onPressed: _saving ? null : _saveAlias,
-                        child: _saving
-                            ? const SizedBox.square(
-                                dimension: 18,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
+                            suffixIcon: ListenableBuilder(
+                              listenable: _controller,
+                              builder: (_, _) => _controller.text.isEmpty
+                                  ? const SizedBox.shrink()
+                                  : IconButton(
+                                      tooltip: 'Clear',
+                                      icon: const Icon(Icons.close_rounded),
+                                      onPressed: _saving
+                                          ? null
+                                          : _controller.clear,
+                                    ),
+                            ),
+                          ),
+                        ),
+                        Align(
+                          alignment: AlignmentDirectional.centerStart,
+                          child: TextButton.icon(
+                            onPressed: _saving || _controller.text.isEmpty
+                                ? null
+                                : _useRealName,
+                            icon: const Icon(Icons.person_outline_rounded),
+                            label: const Text('Use real name'),
+                          ),
+                        ),
+                        const SizedBox(height: AppSpacing.sm),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: TextButton(
+                                style: TextButton.styleFrom(
+                                  backgroundColor:
+                                      colors.surfaceContainerHighest,
+                                  foregroundColor: colors.onSurface,
                                 ),
-                              )
-                            : const Text('Save'),
-                      ),
+                                onPressed: _saving ? null : _cancelEditing,
+                                child: const Text('Cancel'),
+                              ),
+                            ),
+                            const SizedBox(width: AppSpacing.sm),
+                            Expanded(
+                              child: FilledButton(
+                                onPressed: _saving ? null : _saveAlias,
+                                child: _saving
+                                    ? const SizedBox.square(
+                                        dimension: 18,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                        ),
+                                      )
+                                    : const Text('Save'),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
                     ),
-                  ],
+                  ),
                 ),
               ] else ...[
                 Card(
                   child: ListTile(
-                    leading: Icon(Icons.badge_outlined, color: colors.primary),
+                    leading: CircleAvatar(
+                      radius: 20,
+                      backgroundColor: colors.secondaryContainer,
+                      child: Icon(
+                        Icons.badge_outlined,
+                        color: colors.onSecondaryContainer,
+                        size: 20,
+                      ),
+                    ),
                     title: Text(
                       _savedAlias ?? 'No nickname',
                       style: theme.textTheme.titleSmall,

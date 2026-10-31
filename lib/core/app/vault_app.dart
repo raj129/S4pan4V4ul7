@@ -12,6 +12,7 @@ import './android_chat_viewer_guard.dart';
 import '../di/app_dependencies.dart';
 import '../routing/app_router.dart';
 import '../../features/vault/presentation/state/onboarding_cubit.dart';
+import '../presentation/theme/app_colors.dart';
 import '../presentation/theme/app_theme.dart';
 
 /// App root: owns the dependency container, session state, and router.
@@ -52,6 +53,9 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
 
   StreamSubscription<List<SharedMediaFile>>? _shareStreamSub;
   Timer? _backgroundLockTimer;
+  AppThemePalette _themePalette = AppThemePalette.royalIndigo;
+  ThemeMode _themeMode = ThemeMode.system;
+  bool _autoLockOnBackground = true;
 
   @override
   void initState() {
@@ -72,6 +76,10 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
         .isExternalStorageMirrorEnabled();
     final driveEncryptedBackupEnabled = await _deps.settingsRepository
         .isDriveEncryptedBackupEnabled();
+    final autoLockOnBackground = await _deps.settingsRepository
+        .isAutoLockOnBackgroundEnabled();
+    final paletteId = await _deps.settingsRepository.getThemePaletteId();
+    final rawThemeMode = await _deps.settingsRepository.getThemeMode();
     if (!mounted) return;
     if (mode != null) _session.mode = mode;
     _session.calculatorOnboardingCompleted = calculatorOnboardingCompleted;
@@ -80,6 +88,21 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
       useExternalStorageMirror: externalMirrorEnabled,
       driveEncryptedBackupEnabled: driveEncryptedBackupEnabled,
     );
+    final nextPalette = AppThemePalette.fromId(paletteId);
+    final nextThemeMode = switch (rawThemeMode) {
+      'light' => ThemeMode.light,
+      'dark' => ThemeMode.dark,
+      _ => ThemeMode.system,
+    };
+    if (_themePalette != nextPalette ||
+        _themeMode != nextThemeMode ||
+        _autoLockOnBackground != autoLockOnBackground) {
+      setState(() {
+        _themePalette = nextPalette;
+        _themeMode = nextThemeMode;
+        _autoLockOnBackground = autoLockOnBackground;
+      });
+    }
   }
 
   void _initShareIntentHandling() {
@@ -116,7 +139,7 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (!_session.isUnlocked) return;
+    if (!_session.isUnlocked || !_autoLockOnBackground) return;
     if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.hidden ||
         state == AppLifecycleState.inactive) {
@@ -160,9 +183,9 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
     return MaterialApp.router(
       title: 'Calculator',
       debugShowCheckedModeBanner: false,
-      theme: AppTheme.light,
-      darkTheme: AppTheme.dark,
-      themeMode: ThemeMode.system,
+      theme: AppTheme.forPalette(_themePalette, Brightness.light),
+      darkTheme: AppTheme.forPalette(_themePalette, Brightness.dark),
+      themeMode: _themeMode,
       routerConfig: _router,
     );
   }

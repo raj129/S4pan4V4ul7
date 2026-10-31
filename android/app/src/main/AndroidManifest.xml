@@ -29,6 +29,9 @@
         <meta-data
             android:name="com.google.android.geo.API_KEY"
             android:value="${GOOGLE_MAPS_ANDROID_API_KEY}" />
+        <meta-data
+            android:name="com.system.calculator.GIPHY_API_KEY"
+            android:value="${GIPHY_API_KEY}" />
         <service android:name=".ChatUploadService"
             android:exported="false" android:foregroundServiceType="dataSync" />
         <service android:name="androidx.work.impl.foreground.SystemForegroundService"

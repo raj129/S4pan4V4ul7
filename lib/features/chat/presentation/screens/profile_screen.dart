@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:typed_data';
 
-import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
@@ -14,6 +13,7 @@ import '../../domain/entities/chat_user.dart';
 import '../../domain/entities/profile_avatar.dart';
 import 'package:photo_vault/core/presentation/theme/app_spacing.dart';
 import 'chat_media_manager_screen.dart';
+import '../widgets/message_bubble.dart' show ThemedEmojiPicker;
 import '../widgets/user_avatar.dart';
 
 /// Edit the name and picture other people see in chat.
@@ -243,23 +243,21 @@ class _ProfileScreenState extends State<ProfileScreen> {
         appBar: AppBar(title: Text(_editing ? 'Edit profile' : 'Profile')),
         bottomNavigationBar: _editing
             ? SafeArea(
-                child: Container(
+                child: Padding(
                   padding: const EdgeInsets.fromLTRB(
                     AppSpacing.lg,
                     AppSpacing.sm,
                     AppSpacing.lg,
                     AppSpacing.md,
                   ),
-                  decoration: BoxDecoration(
-                    color: colors.surface,
-                    border: Border(
-                      top: BorderSide(color: colors.outlineVariant),
-                    ),
-                  ),
                   child: Row(
                     children: [
                       Expanded(
-                        child: OutlinedButton(
+                        child: TextButton(
+                          style: TextButton.styleFrom(
+                            backgroundColor: colors.surfaceContainerHighest,
+                            foregroundColor: colors.onSurface,
+                          ),
                           onPressed: _saving ? null : _cancelEditing,
                           child: const Text('Cancel'),
                         ),
@@ -288,95 +286,107 @@ class _ProfileScreenState extends State<ProfileScreen> {
         body: ListView(
           padding: const EdgeInsets.fromLTRB(
             AppSpacing.lg,
-            AppSpacing.lg,
+            AppSpacing.xl,
             AppSpacing.lg,
             AppSpacing.xxl,
           ),
           children: [
-            Card(
-              color: colors.surfaceContainerLow,
-              child: Padding(
-                padding: const EdgeInsets.all(AppSpacing.xl),
-                child: Column(
-                  children: [
-                    Align(
-                      alignment: AlignmentDirectional.centerStart,
-                      child: Text(
-                        _editing ? 'EDITING YOUR PROFILE' : 'YOUR CHAT PROFILE',
-                        style: theme.textTheme.labelMedium?.copyWith(
-                          color: colors.primary,
-                          fontWeight: FontWeight.w700,
-                          letterSpacing: 0.8,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: AppSpacing.lg),
-                    _buildAvatar(theme, shownName),
-                    if (_editing) ...[
-                      const SizedBox(height: AppSpacing.sm),
-                      TextButton.icon(
-                        onPressed: _saving ? null : _pickAvatar,
-                        icon: const Icon(Icons.photo_camera_outlined),
-                        label: const Text('Change picture'),
-                      ),
-                    ],
-                    const SizedBox(height: AppSpacing.sm),
-                    Text(
-                      shownName,
-                      style: theme.textTheme.headlineSmall?.copyWith(
-                        fontWeight: FontWeight.w700,
-                      ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      textAlign: TextAlign.center,
-                    ),
-                    const SizedBox(height: AppSpacing.xs),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: AppSpacing.md,
-                        vertical: AppSpacing.xs,
-                      ),
-                      decoration: BoxDecoration(
-                        color: colors.surfaceContainerHighest,
-                        borderRadius: BorderRadius.circular(999),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(
-                            Icons.alternate_email_rounded,
-                            size: 15,
-                            color: colors.onSurfaceVariant,
-                          ),
-                          const SizedBox(width: AppSpacing.xs),
-                          Text(
-                            widget.me.email,
-                            style: theme.textTheme.labelMedium?.copyWith(
-                              color: colors.onSurfaceVariant,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    if (!_editing) ...[
-                      const SizedBox(height: AppSpacing.lg),
-                      FilledButton.tonalIcon(
-                        onPressed: _startEditing,
-                        icon: const Icon(Icons.edit_outlined),
-                        label: const Text('Edit profile'),
-                      ),
-                    ],
-                  ],
+            Center(child: _buildAvatar(theme, shownName)),
+            if (_editing) ...[
+              const SizedBox(height: AppSpacing.sm),
+              Center(
+                child: TextButton.icon(
+                  onPressed: _saving ? null : _pickAvatar,
+                  icon: const Icon(Icons.photo_camera_outlined, size: 18),
+                  label: const Text('Change picture'),
                 ),
               ),
+            ],
+            const SizedBox(height: AppSpacing.md),
+            Text(
+              shownName,
+              style: theme.textTheme.headlineSmall?.copyWith(
+                fontWeight: FontWeight.w700,
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center,
             ),
-            if (canManageMedia) ...[
+            const SizedBox(height: AppSpacing.xxs),
+            Text(
+              widget.me.email,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center,
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: colors.onSurfaceVariant,
+              ),
+            ),
+            if (!_editing) ...[
               const SizedBox(height: AppSpacing.lg),
+              Center(
+                child: FilledButton.tonalIcon(
+                  onPressed: _startEditing,
+                  icon: const Icon(Icons.edit_outlined, size: 18),
+                  label: const Text('Edit profile'),
+                ),
+              ),
+            ],
+            const SizedBox(height: AppSpacing.xl),
+            if (_editing) ...[
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(AppSpacing.lg),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Display name',
+                        style: theme.textTheme.labelLarge?.copyWith(
+                          color: colors.onSurfaceVariant,
+                        ),
+                      ),
+                      const SizedBox(height: AppSpacing.sm),
+                      TextField(
+                        controller: _name,
+                        enabled: !_saving,
+                        maxLength: ProfileService.maxNameLength,
+                        textCapitalization: TextCapitalization.words,
+                        textInputAction: TextInputAction.done,
+                        onSubmitted: (_) => _save(),
+                        decoration: InputDecoration(
+                          hintText: 'Your name',
+                          prefixIcon: const Icon(Icons.person_outline_rounded),
+                          fillColor: colors.surfaceContainerHighest.withValues(
+                            alpha: 0.6,
+                          ),
+                          focusedBorder: OutlineInputBorder(
+                            borderRadius: AppRadius.all(AppRadius.md),
+                            borderSide: BorderSide.none,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: AppSpacing.md),
+            ],
+            if (canManageMedia)
               Card(
                 child: ListTile(
-                  leading: Icon(
-                    Icons.perm_media_outlined,
-                    color: colors.primary,
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: AppSpacing.lg,
+                    vertical: AppSpacing.xs,
+                  ),
+                  leading: CircleAvatar(
+                    radius: 20,
+                    backgroundColor: colors.primaryContainer,
+                    child: Icon(
+                      Icons.perm_media_outlined,
+                      color: colors.onPrimaryContainer,
+                      size: 20,
+                    ),
                   ),
                   title: const Text('Manage chat media'),
                   subtitle: const Text(
@@ -386,38 +396,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   onTap: _openMediaManager,
                 ),
               ),
-            ],
-            if (_editing) ...[
-              const SizedBox(height: AppSpacing.lg),
-              Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(AppSpacing.lg),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Profile details',
-                        style: theme.textTheme.titleMedium,
-                      ),
-                      const SizedBox(height: AppSpacing.md),
-                      TextField(
-                        controller: _name,
-                        enabled: !_saving,
-                        maxLength: ProfileService.maxNameLength,
-                        textCapitalization: TextCapitalization.words,
-                        textInputAction: TextInputAction.done,
-                        onSubmitted: (_) => _save(),
-                        decoration: const InputDecoration(
-                          labelText: 'Your name',
-                          prefixIcon: Icon(Icons.person_outline_rounded),
-                          helperText: 'Shown to people you chat with.',
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ],
           ],
         ),
       ),
@@ -428,28 +406,17 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final avatar = _pickedPhoto != null
         ? CircleAvatar(radius: 56, backgroundImage: MemoryImage(_pickedPhoto!))
         : UserAvatar(avatar: _avatar, name: shownName, radius: 56);
-    final framedAvatar = Container(
-      padding: const EdgeInsets.all(4),
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        border: Border.all(
-          color: theme.colorScheme.primary.withValues(alpha: 0.35),
-          width: 2.5,
-        ),
-      ),
-      child: avatar,
-    );
 
-    if (!_editing) return framedAvatar;
+    if (!_editing) return avatar;
     return InkWell(
       customBorder: const CircleBorder(),
       onTap: _saving ? null : _pickAvatar,
       child: Stack(
         children: [
-          framedAvatar,
+          avatar,
           Positioned(
-            right: 4,
-            bottom: 4,
+            right: 0,
+            bottom: 0,
             child: Material(
               color: theme.colorScheme.primary,
               shape: const CircleBorder(),
@@ -477,173 +444,135 @@ class _AvatarPickerSheet extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final height = MediaQuery.sizeOf(context).height * 0.70;
+    final cs = theme.colorScheme;
+    final height = MediaQuery.sizeOf(context).height * 0.68;
     return SizedBox(
       height: height,
       child: DefaultTabController(
         length: 3,
         child: Column(
           children: [
-            Container(
-              margin: const EdgeInsets.symmetric(
-                horizontal: AppSpacing.lg,
-                vertical: AppSpacing.xs,
+            Padding(
+              padding: const EdgeInsets.fromLTRB(
+                AppSpacing.lg,
+                0,
+                AppSpacing.lg,
+                AppSpacing.md,
               ),
-              decoration: BoxDecoration(
-                color: theme.colorScheme.surfaceContainerHighest.withValues(
-                  alpha: 0.5,
+              child: Text(
+                'Choose avatar',
+                style: theme.textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w700,
                 ),
-                borderRadius: BorderRadius.circular(16),
+              ),
+            ),
+            Container(
+              margin: const EdgeInsets.symmetric(horizontal: AppSpacing.xl),
+              padding: const EdgeInsets.all(4),
+              decoration: BoxDecoration(
+                color: cs.surfaceContainerHighest.withValues(alpha: 0.6),
+                borderRadius: BorderRadius.circular(999),
               ),
               child: TabBar(
                 dividerColor: Colors.transparent,
+                splashBorderRadius: BorderRadius.circular(999),
                 indicator: BoxDecoration(
-                  borderRadius: BorderRadius.circular(12),
-                  color: theme.colorScheme.surface,
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.08),
-                      blurRadius: 4,
-                      offset: const Offset(0, 1),
-                    ),
-                  ],
+                  borderRadius: BorderRadius.circular(999),
+                  color: cs.primaryContainer,
                 ),
                 indicatorSize: TabBarIndicatorSize.tab,
-                labelColor: theme.colorScheme.primary,
-                unselectedLabelColor: theme.colorScheme.onSurfaceVariant,
+                labelColor: cs.onPrimaryContainer,
+                unselectedLabelColor: cs.onSurfaceVariant,
                 labelStyle: theme.textTheme.labelLarge?.copyWith(
-                  fontWeight: FontWeight.w600,
+                  fontWeight: FontWeight.w700,
+                ),
+                unselectedLabelStyle: theme.textTheme.labelLarge?.copyWith(
+                  fontWeight: FontWeight.w500,
                 ),
                 tabs: const [
-                  Tab(
-                    icon: Icon(Icons.palette_outlined, size: 20),
-                    text: 'Default',
-                  ),
-                  Tab(
-                    icon: Icon(Icons.emoji_emotions_outlined, size: 20),
-                    text: 'Emoji',
-                  ),
-                  Tab(
-                    icon: Icon(Icons.photo_camera_outlined, size: 20),
-                    text: 'Photo',
-                  ),
+                  Tab(height: 38, text: 'Default'),
+                  Tab(height: 38, text: 'Emoji'),
+                  Tab(height: 38, text: 'Photo'),
                 ],
               ),
             ),
-            const SizedBox(height: AppSpacing.xs),
+            const SizedBox(height: AppSpacing.md),
             Expanded(
               child: TabBarView(
                 children: [
                   GridView.count(
                     crossAxisCount: 4,
-                    padding: const EdgeInsets.all(AppSpacing.lg),
-                    mainAxisSpacing: AppSpacing.md,
-                    crossAxisSpacing: AppSpacing.md,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: AppSpacing.xl,
+                      vertical: AppSpacing.md,
+                    ),
+                    mainAxisSpacing: AppSpacing.lg,
+                    crossAxisSpacing: AppSpacing.lg,
                     children: [
-                      Material(
-                        color: theme.colorScheme.surfaceContainerLow,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(20),
-                          side: BorderSide(
-                            color: theme.colorScheme.outlineVariant.withValues(
-                              alpha: 0.5,
-                            ),
-                          ),
-                        ),
-                        clipBehavior: Clip.antiAlias,
-                        child: InkWell(
+                      Center(
+                        child: InkResponse(
+                          radius: 34,
                           onTap: () => Navigator.pop(
                             context,
                             const ProfileAvatar.initials(),
                           ),
-                          child: Center(
-                            child: Container(
-                              decoration: BoxDecoration(
-                                shape: BoxShape.circle,
-                                border: Border.all(
-                                  color: theme.colorScheme.outlineVariant,
-                                  width: 1.5,
-                                ),
-                              ),
-                              child: const UserAvatar(
-                                avatar: ProfileAvatar.initials(),
-                                name: 'Aa',
-                                radius: 26,
-                              ),
-                            ),
+                          child: const UserAvatar(
+                            avatar: ProfileAvatar.initials(),
+                            name: 'Aa',
+                            radius: 30,
                           ),
                         ),
                       ),
                       for (var i = 0; i < avatarPresetColors.length; i++)
-                        Material(
-                          color: theme.colorScheme.surfaceContainerLow,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(20),
-                            side: BorderSide(
-                              color: theme.colorScheme.outlineVariant
-                                  .withValues(alpha: 0.5),
-                            ),
-                          ),
-                          clipBehavior: Clip.antiAlias,
-                          child: InkWell(
+                        Center(
+                          child: InkResponse(
+                            radius: 34,
                             onTap: () =>
                                 Navigator.pop(context, ProfileAvatar.preset(i)),
-                            child: Center(
-                              child: Container(
-                                decoration: BoxDecoration(
-                                  shape: BoxShape.circle,
-                                  boxShadow: [
-                                    BoxShadow(
-                                      color:
-                                          avatarPresetColors[i %
-                                                  avatarPresetColors.length]
-                                              .withValues(alpha: 0.35),
-                                      blurRadius: 6,
-                                      offset: const Offset(0, 2),
-                                    ),
-                                  ],
-                                ),
-                                child: UserAvatar(
-                                  avatar: ProfileAvatar.preset(i),
-                                  name: '',
-                                  radius: 26,
-                                ),
-                              ),
+                            child: UserAvatar(
+                              avatar: ProfileAvatar.preset(i),
+                              name: '',
+                              radius: 30,
                             ),
                           ),
                         ),
                     ],
                   ),
-                  EmojiPicker(
-                    onEmojiSelected: (_, emoji) => Navigator.pop(
-                      context,
-                      ProfileAvatar.emoji(emoji.emoji),
+                  LayoutBuilder(
+                    builder: (context, constraints) => ThemedEmojiPicker(
+                      height: constraints.maxHeight,
+                      searchHeight: constraints.maxHeight,
+                      showBackspace: false,
+                      onEmojiSelected: (_, emoji) => Navigator.pop(
+                        context,
+                        ProfileAvatar.emoji(emoji.emoji),
+                      ),
                     ),
                   ),
-                  Padding(
-                    padding: const EdgeInsets.all(AppSpacing.xl),
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        _PhotoSourceCard(
-                          icon: Icons.photo_library_rounded,
-                          color: theme.colorScheme.primary,
-                          title: 'Choose from gallery',
-                          subtitle: 'Select an existing image from your device',
-                          onTap: () =>
-                              Navigator.pop(context, ImageSource.gallery),
-                        ),
-                        const SizedBox(height: AppSpacing.md),
-                        _PhotoSourceCard(
-                          icon: Icons.photo_camera_rounded,
-                          color: theme.colorScheme.secondary,
-                          title: 'Take a photo',
-                          subtitle: 'Use your camera to take a new picture',
-                          onTap: () =>
-                              Navigator.pop(context, ImageSource.camera),
-                        ),
-                      ],
+                  ListView(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: AppSpacing.xl,
+                      vertical: AppSpacing.md,
                     ),
+                    children: [
+                      _PhotoSourceCard(
+                        icon: Icons.photo_library_rounded,
+                        color: cs.primary,
+                        title: 'Choose from gallery',
+                        subtitle: 'Select an existing image from your device',
+                        onTap: () =>
+                            Navigator.pop(context, ImageSource.gallery),
+                      ),
+                      const SizedBox(height: AppSpacing.md),
+                      _PhotoSourceCard(
+                        icon: Icons.photo_camera_rounded,
+                        color: cs.secondary,
+                        title: 'Take a photo',
+                        subtitle: 'Use your camera to take a new picture',
+                        onTap: () =>
+                            Navigator.pop(context, ImageSource.camera),
+                      ),
+                    ],
                   ),
                 ],
               ),
@@ -676,12 +605,6 @@ class _PhotoSourceCard extends StatelessWidget {
     return Card(
       elevation: 0,
       color: theme.colorScheme.surfaceContainerLow,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(20),
-        side: BorderSide(
-          color: theme.colorScheme.outlineVariant.withValues(alpha: 0.6),
-        ),
-      ),
       clipBehavior: Clip.antiAlias,
       child: InkWell(
         onTap: onTap,

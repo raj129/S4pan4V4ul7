@@ -8,14 +8,19 @@ import 'chat_theme.dart';
 
 /// The app's shared light and dark Material 3 themes.
 abstract final class AppTheme {
-  static ThemeData get light => _build(Brightness.light);
+  static ThemeData get light =>
+      forPalette(AppThemePalette.royalIndigo, Brightness.light);
 
-  static ThemeData get dark => _build(Brightness.dark);
+  static ThemeData get dark =>
+      forPalette(AppThemePalette.royalIndigo, Brightness.dark);
 
-  static ThemeData _build(Brightness brightness) {
+  static ThemeData forPalette(
+    AppThemePalette palette,
+    Brightness brightness,
+  ) {
     final isDark = brightness == Brightness.dark;
     final scheme = ColorScheme.fromSeed(
-      seedColor: AppColors.seed,
+      seedColor: palette.seed,
       brightness: brightness,
     );
     final text = AppTypography.textTheme(brightness);
@@ -27,7 +32,10 @@ abstract final class AppTheme {
       scaffoldBackgroundColor: scheme.surface,
       splashFactory: InkSparkle.splashFactory,
       visualDensity: VisualDensity.standard,
-      extensions: [AppSemanticColors.of(brightness), ChatColors.of(brightness)],
+      extensions: [
+        AppSemanticColors.of(brightness),
+        ChatColors.of(brightness, palette: palette),
+      ],
 
       appBarTheme: AppBarTheme(
         backgroundColor: scheme.surfaceContainerLow,
@@ -49,8 +57,8 @@ abstract final class AppTheme {
         margin: EdgeInsets.zero,
         clipBehavior: Clip.antiAlias,
         shape: RoundedRectangleBorder(
-          borderRadius: AppRadius.all(AppRadius.md),
-          side: BorderSide(color: scheme.outlineVariant.withValues(alpha: 0.6)),
+          borderRadius: AppRadius.all(AppRadius.lg),
+          side: BorderSide.none,
         ),
       ),
 
@@ -216,13 +224,30 @@ abstract final class AppTheme {
         labelTextStyle: WidgetStatePropertyAll(text.labelLarge),
       ),
       navigationBarTheme: NavigationBarThemeData(
+        height: 68,
+        elevation: AppElevation.none,
         backgroundColor: scheme.surfaceContainerLow,
         indicatorColor: scheme.secondaryContainer,
         surfaceTintColor: Colors.transparent,
+        labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
+        iconTheme: WidgetStateProperty.resolveWith(
+          (states) => IconThemeData(
+            size: 23,
+            color: states.contains(WidgetState.selected)
+                ? scheme.onSecondaryContainer
+                : scheme.onSurfaceVariant,
+          ),
+        ),
         labelTextStyle: WidgetStateProperty.resolveWith(
           (states) => states.contains(WidgetState.selected)
-              ? text.labelMedium?.copyWith(fontWeight: FontWeight.w600)
-              : text.labelMedium,
+              ? text.labelMedium?.copyWith(
+                  fontWeight: FontWeight.w700,
+                  color: scheme.onSurface,
+                )
+              : text.labelMedium?.copyWith(
+                  fontWeight: FontWeight.w500,
+                  color: scheme.onSurfaceVariant,
+                ),
         ),
       ),
 
@@ -284,8 +309,15 @@ abstract final class AppTheme {
 
       pageTransitionsTheme: const PageTransitionsTheme(
         builders: {
-          TargetPlatform.android: PredictiveBackPageTransitionsBuilder(),
-          TargetPlatform.windows: FadeUpwardsPageTransitionsBuilder(),
+          TargetPlatform.android: ZoomPageTransitionsBuilder(
+            allowSnapshotting: false,
+          ),
+          TargetPlatform.iOS: ZoomPageTransitionsBuilder(
+            allowSnapshotting: false,
+          ),
+          TargetPlatform.windows: ZoomPageTransitionsBuilder(
+            allowSnapshotting: false,
+          ),
         },
       ),
     );

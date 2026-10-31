@@ -208,31 +208,38 @@ void main() {
     }
   });
 
-  testWidgets('received image retains the standard chat bubble', (
+  testWidgets('received image, gif, and video have no bubble border', (
     tester,
   ) async {
-    await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
-          body: MessageBubble(
-            message: _message(mediaType: MessageType.image),
-            isMine: false,
-            myUid: 'me',
-            otherUid: 'other',
-            mediaLoader: _TestMediaLoader(),
-            onDeleteForMe: () {},
+    for (final mediaType in [
+      MessageType.image,
+      MessageType.gif,
+      MessageType.video,
+    ]) {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: MessageBubble(
+              message: _message(mediaType: mediaType),
+              isMine: false,
+              myUid: 'me',
+              otherUid: 'other',
+              mediaLoader: _TestMediaLoader(),
+              onDeleteForMe: () {},
+            ),
           ),
         ),
-      ),
-    );
-    await tester.pump();
+      );
+      await tester.pump();
 
-    expect(
-      find.byWidgetPredicate(
-        (widget) => widget is Material && widget.shape is ChatBubbleShape,
-      ),
-      findsOneWidget,
-    );
+      expect(find.byType(ChatMediaPreview), findsOneWidget);
+      expect(
+        find.byWidgetPredicate(
+          (widget) => widget is Material && widget.shape is ChatBubbleShape,
+        ),
+        findsNothing,
+      );
+    }
   });
 
   testWidgets('sent media keeps its action affordances', (tester) async {

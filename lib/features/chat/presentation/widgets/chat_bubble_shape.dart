@@ -13,17 +13,21 @@ import 'package:flutter/material.dart';
 class ChatBubbleShape extends ShapeBorder {
   const ChatBubbleShape({
     required this.isMine,
-    this.withTail = true,
+    this.withTail = false,
+    this.isFirstInGroup = true,
+    this.isLastInGroup = true,
     this.radius = 18,
-    this.tightRadius = 6,
+    this.tightRadius = 4,
     this.tailSize = 8,
   });
 
   final bool isMine;
   final bool withTail;
+  final bool isFirstInGroup;
+  final bool isLastInGroup;
   final double radius;
 
-  /// Radius used on the tail-side corner for continuation bubbles.
+  /// Radius used on the sender-side corner for grouped continuation bubbles.
   final double tightRadius;
 
   final double tailSize;
@@ -63,14 +67,19 @@ class ChatBubbleShape extends ShapeBorder {
     );
     final tight = math.max(0.0, math.min(tightRadius, r));
 
-    final outerTop = withTail ? Radius.zero : Radius.circular(tight);
+    final outerTop = withTail
+        ? Radius.zero
+        : Radius.circular(isFirstInGroup ? r : tight);
+    final outerBottom = withTail
+        ? Radius.circular(r)
+        : Radius.circular(isLastInGroup ? r : tight);
 
     final rrect = RRect.fromRectAndCorners(
       body,
       topLeft: isMine ? Radius.circular(r) : outerTop,
       topRight: isMine ? outerTop : Radius.circular(r),
-      bottomLeft: Radius.circular(r),
-      bottomRight: Radius.circular(r),
+      bottomLeft: isMine ? Radius.circular(r) : outerBottom,
+      bottomRight: isMine ? outerBottom : Radius.circular(r),
     );
 
     final path = Path()..addRRect(rrect);
@@ -122,6 +131,8 @@ class ChatBubbleShape extends ShapeBorder {
   ShapeBorder scale(double t) => ChatBubbleShape(
     isMine: isMine,
     withTail: withTail,
+    isFirstInGroup: isFirstInGroup,
+    isLastInGroup: isLastInGroup,
     radius: radius * t,
     tightRadius: tightRadius * t,
     tailSize: tailSize * t,
@@ -132,11 +143,20 @@ class ChatBubbleShape extends ShapeBorder {
       other is ChatBubbleShape &&
       other.isMine == isMine &&
       other.withTail == withTail &&
+      other.isFirstInGroup == isFirstInGroup &&
+      other.isLastInGroup == isLastInGroup &&
       other.radius == radius &&
       other.tightRadius == tightRadius &&
       other.tailSize == tailSize;
 
   @override
-  int get hashCode =>
-      Object.hash(isMine, withTail, radius, tightRadius, tailSize);
+  int get hashCode => Object.hash(
+    isMine,
+    withTail,
+    isFirstInGroup,
+    isLastInGroup,
+    radius,
+    tightRadius,
+    tailSize,
+  );
 }

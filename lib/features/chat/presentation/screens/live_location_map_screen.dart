@@ -3,10 +3,13 @@ import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:intl/intl.dart';
 import 'package:permission_handler/permission_handler.dart';
 
+import '../../application/services/maps_diagnostics.dart';
 import '../../domain/entities/live_location.dart';
 
 class LiveLocationMapScreen extends StatefulWidget {
@@ -33,6 +36,8 @@ class LiveLocationMapScreen extends StatefulWidget {
 
 class _LiveLocationMapScreenState extends State<LiveLocationMapScreen> {
   Timer? _countdownTimer;
+  MapsDiagnostics? _diagnostics;
+  LiveLocationPoint? _deviceFallbackPoint;
   bool _locationGranted = false;
 
   @override
@@ -42,22 +47,106 @@ class _LiveLocationMapScreenState extends State<LiveLocationMapScreen> {
       if (mounted) setState(() {});
     });
     if (Platform.isAndroid) {
+      unawaited(MapsDiagnostics.setMapActive(true));
       unawaited(_loadEnvironment());
     }
   }
 
   Future<void> _loadEnvironment() async {
+    final diagnostics = await MapsDiagnostics.load();
     final granted = await Permission.locationWhenInUse.isGranted;
-    if (!mounted) return;
-    setState(() {
-      _locationGranted = granted;
-    });
+    if (mounted) {
+      setState(() {
+        _diagnostics = diagnostics;
+        _locationGranted = granted;
+      });
+    }
+    if (granted) {
+      try {
+        final last = await Geolocator.getLastKnownPosition();
+        if (last != null && mounted) {
+          setState(() {
+            _deviceFallbackPoint = LiveLocationPoint(
+              latitude: last.latitude,
+              longitude: last.longitude,
+              accuracy: last.accuracy,
+              timestamp: last.timestamp,
+            );
+          });
+        }
+        final current = await Geolocator.getCurrentPosition(
+          locationSettings: const LocationSettings(
+            accuracy: LocationAccuracy.high,
+            timeLimit: Duration(seconds: 6),
+          ),
+        );
+        if (mounted) {
+          setState(() {
+            _deviceFallbackPoint = LiveLocationPoint(
+              latitude: current.latitude,
+              longitude: current.longitude,
+              accuracy: current.accuracy,
+              timestamp: current.timestamp,
+            );
+          });
+        }
+      } catch (_) {}
+    }
   }
 
   @override
   void dispose() {
     _countdownTimer?.cancel();
+    if (Platform.isAndroid) {
+      unawaited(MapsDiagnostics.setMapActive(false));
+    }
     super.dispose();
+  }
+
+  void _showDiagnosticsDialog(BuildContext context, MapsDiagnostics diag) {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        icon: const Icon(Icons.map_outlined),
+        title: const Text('Google Maps Diagnostics'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Package: ${diag.packageName ?? 'com.system.calculator'}'),
+            const SizedBox(height: 6),
+            Text(
+              'API Key: ${diag.keyPresent ? (diag.keyMasked ?? 'Configured') : 'MISSING in AndroidManifest'}',
+            ),
+            const SizedBox(height: 6),
+            SelectableText('Signing SHA-1:\n${diag.signingSha1 ?? 'Unknown'}'),
+            const SizedBox(height: 12),
+            Text(
+              'Ensure Maps SDK for Android is enabled in Google Cloud Console and the API key allows this package name and SHA-1.',
+              style: Theme.of(ctx).textTheme.bodySmall,
+            ),
+          ],
+        ),
+        actions: [
+          if (diag.signingSha1 != null)
+            TextButton.icon(
+              onPressed: () {
+                Clipboard.setData(ClipboardData(text: diag.signingSha1!));
+                Navigator.pop(ctx);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('SHA-1 copied to clipboard.')),
+                );
+              },
+              icon: const Icon(Icons.copy_rounded, size: 18),
+              label: const Text('Copy SHA-1'),
+            ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -88,9 +177,12 @@ class _LiveLocationMapScreenState extends State<LiveLocationMapScreen> {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
     final point = session?.currentPoint;
+    final effectivePoint =
+        point ?? (widget.isMine ? _deviceFallbackPoint : null);
     final isLive = session?.isLive ?? false;
     final isStale = session?.isStale ?? false;
     final isActive = session?.isActive == true && session?.isExpired == false;
+    final mapConfigured = _diagnostics?.keyPresent ?? true;
 
     return Scaffold(
       appBar: AppBar(
@@ -101,8 +193,8 @@ class _LiveLocationMapScreenState extends State<LiveLocationMapScreen> {
               isActive
                   ? (widget.isMine ? 'Your Live Location' : 'Live Location')
                   : (widget.isMine
-                      ? 'Your Last Known Location'
-                      : 'Last Known Location'),
+                        ? 'Your Last Known Location'
+                        : 'Last Known Location'),
             ),
             Text(
               _statusLabel(session, isActive, isLive, isStale),
@@ -113,6 +205,12 @@ class _LiveLocationMapScreenState extends State<LiveLocationMapScreen> {
           ],
         ),
         actions: [
+          if (_diagnostics != null)
+            IconButton(
+              tooltip: 'Map diagnostics',
+              icon: const Icon(Icons.info_outline_rounded),
+              onPressed: () => _showDiagnosticsDialog(context, _diagnostics!),
+            ),
           if (widget.isMine && isActive && widget.onStopSharing != null)
             TextButton.icon(
               onPressed: () async {
@@ -135,20 +233,54 @@ class _LiveLocationMapScreenState extends State<LiveLocationMapScreen> {
       body: Stack(
         children: [
           Positioned.fill(
-            child: point == null
-                ? _MapUnavailable(
-                    message: isActive
-                        ? 'Waiting for the sender’s first location…'
-                        : 'Location session ended and no coordinates were recorded.',
+            child: !mapConfigured
+                ? const _MapUnavailable(
+                    message:
+                        'Google Maps is not configured. Set GOOGLE_MAPS_ANDROID_API_KEY in .api_keys.json.',
                   )
                 : _LiveGoogleMap(
-                    point: point,
+                    point: effectivePoint,
                     isActive: isActive,
                     isMine: widget.isMine,
                     lastUpdatedAt: session?.lastUpdatedAt,
                     myLocationEnabled: _locationGranted,
                   ),
           ),
+          if (mapConfigured && effectivePoint == null)
+            Positioned(
+              left: 16,
+              right: 16,
+              top: 12,
+              child: Card(
+                color: colors.surfaceContainerHigh.withValues(alpha: 0.92),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 10,
+                  ),
+                  child: Row(
+                    children: [
+                      SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: isActive
+                            ? const CircularProgressIndicator(strokeWidth: 2)
+                            : const Icon(Icons.location_off_outlined, size: 16),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          isActive
+                              ? 'Waiting for the sender’s first location…'
+                              : 'Location session ended and no coordinates were recorded.',
+                          style: theme.textTheme.bodySmall,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
           if (session != null)
             Positioned(
               left: 12,
@@ -158,7 +290,7 @@ class _LiveLocationMapScreenState extends State<LiveLocationMapScreen> {
                 session: session,
                 isLive: isLive,
                 isStale: isStale,
-                point: point,
+                point: effectivePoint,
               ),
             ),
         ],
@@ -199,7 +331,7 @@ class _LiveGoogleMap extends StatefulWidget {
     this.lastUpdatedAt,
   });
 
-  final LiveLocationPoint point;
+  final LiveLocationPoint? point;
   final bool isActive;
   final bool isMine;
   final bool myLocationEnabled;
@@ -210,17 +342,20 @@ class _LiveGoogleMap extends StatefulWidget {
 }
 
 class _LiveGoogleMapState extends State<_LiveGoogleMap> {
+  static const _defaultCenter = LatLng(20.5937, 78.9629);
   GoogleMapController? _controller;
 
   @override
   void didUpdateWidget(covariant _LiveGoogleMap oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.point.latitude != widget.point.latitude ||
-        oldWidget.point.longitude != widget.point.longitude) {
+    final next = widget.point;
+    final prev = oldWidget.point;
+    if (next != null &&
+        (prev == null ||
+            prev.latitude != next.latitude ||
+            prev.longitude != next.longitude)) {
       _controller?.animateCamera(
-        CameraUpdate.newLatLng(
-          LatLng(widget.point.latitude, widget.point.longitude),
-        ),
+        CameraUpdate.newLatLngZoom(LatLng(next.latitude, next.longitude), 16),
       );
     }
   }
@@ -234,52 +369,64 @@ class _LiveGoogleMapState extends State<_LiveGoogleMap> {
   @override
   Widget build(BuildContext context) {
     final point = widget.point;
-    final center = LatLng(point.latitude, point.longitude);
+    final center = point != null
+        ? LatLng(point.latitude, point.longitude)
+        : _defaultCenter;
     final markerTitle = widget.isActive
         ? (widget.isMine ? 'Your live location' : 'Shared live location')
         : (widget.isMine ? 'Your last known location' : 'Last known location');
-    final updatedAt = widget.lastUpdatedAt ?? point.timestamp;
-    final markerSnippet = [
-      if (!widget.isActive)
-        'Last seen ${DateFormat.jm().format(updatedAt.toLocal())}',
-      'Accuracy ±${point.accuracy.toStringAsFixed(0)} m',
-      if (point.heading != null)
-        'Heading ${point.heading!.toStringAsFixed(0)}°',
-    ].join(' · ');
+    final updatedAt =
+        widget.lastUpdatedAt ?? point?.timestamp ?? DateTime.now();
+    final markerSnippet = point == null
+        ? ''
+        : [
+            if (!widget.isActive)
+              'Last seen ${DateFormat.jm().format(updatedAt.toLocal())}',
+            'Accuracy ±${point.accuracy.toStringAsFixed(0)} m',
+            if (point.heading != null)
+              'Heading ${point.heading!.toStringAsFixed(0)}°',
+          ].join(' · ');
 
     return GoogleMap(
-      initialCameraPosition: CameraPosition(target: center, zoom: 16),
+      initialCameraPosition: CameraPosition(
+        target: center,
+        zoom: point != null ? 16 : 5,
+      ),
       onMapCreated: (controller) => _controller = controller,
-      markers: {
-        Marker(
-          markerId: const MarkerId('shared-location'),
-          position: center,
-          icon: BitmapDescriptor.defaultMarkerWithHue(
-            widget.isActive
-                ? BitmapDescriptor.hueAzure
-                : BitmapDescriptor.hueOrange,
-          ),
-          infoWindow: InfoWindow(
-            title: markerTitle,
-            snippet: markerSnippet,
-          ),
-        ),
-      },
-      circles: {
-        Circle(
-          circleId: const CircleId('location-accuracy'),
-          center: center,
-          radius: math.max(point.accuracy, 5.0),
-          fillColor: (widget.isActive ? Colors.blue : Colors.orange)
-              .withValues(alpha: 0.12),
-          strokeColor: (widget.isActive ? Colors.blue : Colors.orange)
-              .withValues(alpha: 0.5),
-          strokeWidth: 1,
-        ),
-      },
+      markers: point == null
+          ? const <Marker>{}
+          : {
+              Marker(
+                markerId: const MarkerId('shared-location'),
+                position: center,
+                icon: BitmapDescriptor.defaultMarkerWithHue(
+                  widget.isActive
+                      ? BitmapDescriptor.hueAzure
+                      : BitmapDescriptor.hueOrange,
+                ),
+                infoWindow: InfoWindow(
+                  title: markerTitle,
+                  snippet: markerSnippet,
+                ),
+              ),
+            },
+      circles: point == null
+          ? const <Circle>{}
+          : {
+              Circle(
+                circleId: const CircleId('location-accuracy'),
+                center: center,
+                radius: math.max(point.accuracy, 5.0),
+                fillColor: (widget.isActive ? Colors.blue : Colors.orange)
+                    .withValues(alpha: 0.12),
+                strokeColor: (widget.isActive ? Colors.blue : Colors.orange)
+                    .withValues(alpha: 0.5),
+                strokeWidth: 1,
+              ),
+            },
       myLocationEnabled: widget.myLocationEnabled,
       myLocationButtonEnabled: widget.myLocationEnabled,
-      zoomControlsEnabled: false,
+      zoomControlsEnabled: true,
       mapToolbarEnabled: false,
     );
   }

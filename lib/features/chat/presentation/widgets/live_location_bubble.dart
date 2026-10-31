@@ -120,7 +120,7 @@ class _LiveLocationBubbleState extends State<LiveLocationBubble> {
 
         return InkWell(
           borderRadius: BorderRadius.circular(12),
-          onTap: sessionUnavailable || (!isActive && !hasPoint)
+          onTap: (sessionUnavailable && !isWaiting) || (!isActive && !hasPoint && !isWaiting)
               ? null
               : () => Navigator.of(context).push(
                   MaterialPageRoute<void>(

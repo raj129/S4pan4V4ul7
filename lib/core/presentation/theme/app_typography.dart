@@ -64,13 +64,17 @@ abstract final class AppTypography {
 
   /// Uppercase micro-label used for section headers and day dividers.
   static TextStyle overline(Color color) => TextStyle(
-    fontSize: 11,
+    fontSize: 11.5,
     fontWeight: FontWeight.w700,
-    letterSpacing: 0.8,
+    letterSpacing: 0.7,
     color: color,
   );
 
   /// Timestamp / delivery-tick row inside a chat bubble.
-  static TextStyle bubbleMeta(Color color) =>
-      TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: color);
+  static TextStyle bubbleMeta(Color color) => TextStyle(
+    fontSize: 11,
+    fontWeight: FontWeight.w500,
+    letterSpacing: 0.1,
+    color: color,
+  );
 }

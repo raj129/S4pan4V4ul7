@@ -275,6 +275,7 @@ class _NotesScreenState extends State<NotesScreen> {
       title: 'Notes & Lists',
       drawerSelectedIndex: 4,
       floatingActionButton: FloatingActionButton.extended(
+        heroTag: 'notes_create_fab',
         onPressed: () => _showCreateOptions(context),
         icon: const Icon(Icons.add_rounded),
         label: const Text('Create'),
@@ -309,11 +310,16 @@ class _NoteGridCard extends StatelessWidget {
 
     return Card(
       elevation: 0,
-      color: theme.colorScheme.surfaceContainerLow,
+      color: note.isPinned
+          ? theme.colorScheme.surfaceContainer
+          : theme.colorScheme.surfaceContainerLow,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(18),
         side: BorderSide(
-          color: theme.colorScheme.outlineVariant.withValues(alpha: 0.5),
+          color: note.isPinned
+              ? theme.colorScheme.primary.withValues(alpha: 0.45)
+              : theme.colorScheme.outlineVariant.withValues(alpha: 0.5),
+          width: note.isPinned ? 1.4 : 1,
         ),
       ),
       clipBehavior: Clip.antiAlias,

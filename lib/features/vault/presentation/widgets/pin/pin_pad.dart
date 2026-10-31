@@ -155,6 +155,8 @@ class PinKey extends StatefulWidget {
 }
 
 class _PinKeyState extends State<PinKey> {
+  bool _pressed = false;
+
   void _handleTap() {
     HapticFeedback.lightImpact();
     widget.onTap();
@@ -167,31 +169,41 @@ class _PinKeyState extends State<PinKey> {
     final colors = theme.colorScheme;
     final key = SizedBox.square(
       dimension: widget.size,
-      child: Material(
-        color: colors.surfaceContainerHigh,
-        shape: const CircleBorder(),
-        clipBehavior: Clip.antiAlias,
-        child: InkWell(
-          onTap: enabled ? _handleTap : null,
-          customBorder: const CircleBorder(),
-          splashColor: colors.primary.withValues(alpha: 0.16),
-          highlightColor: colors.primary.withValues(alpha: 0.08),
-          child: Center(
-            child: IconTheme(
-              data: IconThemeData(
-                color: enabled
-                    ? colors.onSurface
-                    : colors.onSurface.withValues(alpha: 0.38),
-                size: 24,
-              ),
-              child: DefaultTextStyle(
-                style: theme.textTheme.headlineMedium!.copyWith(
+      child: AnimatedScale(
+        duration: AppDuration.instant,
+        curve: AppCurves.standard,
+        scale: _pressed && enabled ? 0.92 : 1.0,
+        child: Material(
+          color: _pressed && enabled
+              ? colors.secondaryContainer
+              : colors.surfaceContainerHigh,
+          shape: const CircleBorder(),
+          clipBehavior: Clip.antiAlias,
+          child: InkWell(
+            onTap: enabled ? _handleTap : null,
+            onHighlightChanged: enabled
+                ? (value) => setState(() => _pressed = value)
+                : null,
+            customBorder: const CircleBorder(),
+            splashColor: colors.primary.withValues(alpha: 0.16),
+            highlightColor: colors.primary.withValues(alpha: 0.08),
+            child: Center(
+              child: IconTheme(
+                data: IconThemeData(
                   color: enabled
                       ? colors.onSurface
                       : colors.onSurface.withValues(alpha: 0.38),
-                  fontWeight: FontWeight.w500,
+                  size: 24,
                 ),
-                child: widget.child,
+                child: DefaultTextStyle(
+                  style: theme.textTheme.headlineMedium!.copyWith(
+                    color: enabled
+                        ? colors.onSurface
+                        : colors.onSurface.withValues(alpha: 0.38),
+                    fontWeight: FontWeight.w600,
+                  ),
+                  child: widget.child,
+                ),
               ),
             ),
           ),

@@ -199,25 +199,26 @@ class MessageBubble extends StatelessWidget {
     final textColor = chat.onBubbleFor(isMine: isMine);
     final grouped = message.groupedReactions;
 
-    // Emoji-only messages render bare and oversized, as in WhatsApp.
+    // Emoji-only messages and visual media (images, videos, GIFs, stickers)
+    // render bare without an outer bubble border/background for both sent and
+    // received messages.
     final bare = message.isEmojiOnly;
-    final bareOutgoingMedia =
-        isMine &&
-        (message.mediaType == MessageType.image ||
-            message.mediaType == MessageType.video);
-    final bareAnimation =
+    final bareAttachment =
+        message.mediaType == MessageType.image ||
+        message.mediaType == MessageType.video ||
         message.mediaType == MessageType.gif ||
         message.mediaType == MessageType.sticker;
-    final bareAttachment = bareOutgoingMedia || bareAnimation;
 
     final shape = ChatBubbleShape(
       isMine: isMine,
-      withTail: isFirstInGroup && !bare && !bareAttachment,
+      withTail: false,
+      isFirstInGroup: isFirstInGroup,
+      isLastInGroup: isLastInGroup,
     );
 
     final bubble = bare || bareAttachment
         ? AnimatedContainer(
-            duration: AppDuration.normal,
+            duration: AppDuration.fast,
             decoration: BoxDecoration(
               color: bare && isHighlighted
                   ? cs.tertiaryContainer
@@ -250,13 +251,12 @@ class MessageBubble extends StatelessWidget {
         : Material(
             color: isHighlighted ? cs.tertiaryContainer : bgColor,
             shape: shape,
-            elevation: AppElevation.raised,
-            shadowColor: chat.bubbleShadow,
-            animationDuration: AppDuration.normal,
+            elevation: AppElevation.none,
+            animationDuration: Duration.zero,
             child: Padding(
               padding: EdgeInsets.fromLTRB(
                 AppSpacing.md + shape.tailInsets.left,
-                AppSpacing.sm,
+                AppSpacing.sm + 2,
                 AppSpacing.md + shape.tailInsets.right,
                 AppSpacing.sm,
               ),
@@ -282,68 +282,59 @@ class MessageBubble extends StatelessWidget {
             ),
           );
 
-    return Align(
-      alignment: isMine ? Alignment.centerRight : Alignment.centerLeft,
-      child: Padding(
-        padding: EdgeInsets.only(
-          top: AppSpacing.xxs,
-          bottom: isLastInGroup ? AppSpacing.sm : AppSpacing.xxs,
-          left: isMine ? AppSpacing.xxl : AppSpacing.sm,
-          right: isMine ? AppSpacing.sm : AppSpacing.xxl,
-        ),
-        child: Column(
-          crossAxisAlignment: isMine
-              ? CrossAxisAlignment.end
-              : CrossAxisAlignment.start,
-          children: [
-            Dismissible(
-              key: ValueKey('swipe_${message.messageId}'),
-              direction: onReply == null || !canReplyFromLeftToRight
-                  ? DismissDirection.none
-                  : DismissDirection.startToEnd,
-              dismissThresholds: const {DismissDirection.startToEnd: 0.25},
-              onUpdate: _replySwipeHaptic,
-              confirmDismiss: (_) async {
-                onReply?.call();
-                return false;
-              },
-              background: const _ReplySwipeBackground(alignEnd: false),
-              secondaryBackground: const SizedBox.shrink(),
-              child: GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onLongPress: () => _showActionSheet(context),
-                // Signal-style: double-tapping your own message jumps
-                // straight to edit. `onEdit` is only wired up for own
-                // messages, so this is a no-op on incoming messages. The
-                // 30-minute/edited-before-read rule itself is enforced
-                // centrally in `ActiveThreadCubit.canEditMessage` /
-                // `_promptEdit`, so the double-tap always attempts the
-                // action and lets that single source of truth decide
-                // whether it succeeds or surfaces a "can no longer be
-                // edited" message.
-                onDoubleTap: isMine ? onEdit : null,
-                child: AnimatedContainer(
-                  duration: AppDuration.normal,
-                  curve: Curves.easeOut,
-                  constraints: BoxConstraints(
-                    maxWidth: MediaQuery.of(context).size.width * 0.78,
-                    minWidth: 0,
+    return RepaintBoundary(
+      child: Align(
+        alignment: isMine ? Alignment.centerRight : Alignment.centerLeft,
+        child: Padding(
+          padding: EdgeInsets.only(
+            top: isFirstInGroup ? AppSpacing.xs : 1.5,
+            bottom: isLastInGroup ? AppSpacing.xs : 1.5,
+            left: isMine ? AppSpacing.xxl + AppSpacing.md : AppSpacing.md,
+            right: isMine ? AppSpacing.md : AppSpacing.xxl + AppSpacing.md,
+          ),
+          child: Column(
+            crossAxisAlignment: isMine
+                ? CrossAxisAlignment.end
+                : CrossAxisAlignment.start,
+            children: [
+              Dismissible(
+                key: ValueKey('swipe_${message.messageId}'),
+                direction: onReply == null || !canReplyFromLeftToRight
+                    ? DismissDirection.none
+                    : DismissDirection.startToEnd,
+                dismissThresholds: const {DismissDirection.startToEnd: 0.25},
+                onUpdate: _replySwipeHaptic,
+                confirmDismiss: (_) async {
+                  onReply?.call();
+                  return false;
+                },
+                background: const _ReplySwipeBackground(alignEnd: false),
+                secondaryBackground: const SizedBox.shrink(),
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onLongPress: () => _showActionSheet(context),
+                  onDoubleTap: isMine ? onEdit : null,
+                  child: ConstrainedBox(
+                    constraints: BoxConstraints(
+                      maxWidth: MediaQuery.sizeOf(context).width * 0.78,
+                      minWidth: 0,
+                    ),
+                    child: bubble,
                   ),
-                  child: bubble,
                 ),
               ),
-            ),
-            if (sendStatus != null && message.mediaType != MessageType.audio)
-              AttachmentUploadProgress(
-                status: sendStatus!,
-                onPause: onPauseUpload,
-                onResume: onResumeUpload,
-                onRetry: onRetry,
-                onCancel: onCancelUpload,
-              ),
-            if (grouped.isNotEmpty)
-              _ReactionRow(grouped: grouped, myUid: myUid, onTap: onReact),
-          ],
+              if (sendStatus != null && message.mediaType != MessageType.audio)
+                AttachmentUploadProgress(
+                  status: sendStatus!,
+                  onPause: onPauseUpload,
+                  onResume: onResumeUpload,
+                  onRetry: onRetry,
+                  onCancel: onCancelUpload,
+                ),
+              if (grouped.isNotEmpty)
+                _ReactionRow(grouped: grouped, myUid: myUid, onTap: onReact),
+            ],
+          ),
         ),
       ),
     );
@@ -795,7 +786,7 @@ class _ThemedEmojiPickerState extends State<ThemedEmojiPicker> {
         iconColor: cs.onSurfaceVariant,
         iconColorSelected: cs.primary,
         backspaceColor: cs.primary,
-        dividerColor: cs.outlineVariant,
+        dividerColor: Colors.transparent,
       ),
       bottomActionBarConfig: BottomActionBarConfig(
         backgroundColor: bg,

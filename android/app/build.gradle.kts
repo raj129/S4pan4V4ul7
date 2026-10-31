@@ -34,23 +34,23 @@ android {
         targetSdk = 36
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        val apiKeysConfig = rootProject.file("../.api_keys.json").let { keyFile ->
+            if (!keyFile.isFile) {
+                emptyMap<String, Any?>()
+            } else {
+                @Suppress("UNCHECKED_CAST")
+                (groovy.json.JsonSlurper().parse(keyFile) as? Map<String, Any?>)
+                    ?: error(".api_keys.json must contain a JSON object.")
+            }
+        }
         manifestPlaceholders["GOOGLE_MAPS_ANDROID_API_KEY"] =
             System.getenv("GOOGLE_MAPS_ANDROID_API_KEY")
                 ?.takeIf { it.isNotBlank() }
-                ?: rootProject.file("../.api_keys.json").let { keyFile ->
-                    if (!keyFile.isFile) {
-                        ""
-                    } else {
-                        val configuration =
-                            groovy.json.JsonSlurper().parse(keyFile) as? Map<*, *>
-                                ?: error(".api_keys.json must contain a JSON object.")
-                        configuration["GOOGLE_MAPS_ANDROID_API_KEY"] as? String
-                            ?: error(
-                                ".api_keys.json must define " +
-                                    "GOOGLE_MAPS_ANDROID_API_KEY as a string.",
-                            )
-                    }
-                }
+                ?: (apiKeysConfig["GOOGLE_MAPS_ANDROID_API_KEY"] as? String).orEmpty()
+        manifestPlaceholders["GIPHY_API_KEY"] =
+            System.getenv("GIPHY_API_KEY")
+                ?.takeIf { it.isNotBlank() }
+                ?: (apiKeysConfig["GIPHY_API_KEY"] as? String).orEmpty()
     }
 
     signingConfigs {

@@ -80,4 +80,28 @@ class PersistentSettingsRepository implements SettingsRepository {
   @override
   Future<void> setChatImageQuality(String quality) =>
       _kv.write(StorageKeys.chatImageQuality, quality);
+
+  @override
+  Future<bool> isAutoLockOnBackgroundEnabled() async {
+    final raw = await _kv.read(StorageKeys.autoLockOnBackground);
+    return raw == null ? true : raw == 'true';
+  }
+
+  @override
+  Future<void> setAutoLockOnBackgroundEnabled(bool enabled) =>
+      _kv.write(StorageKeys.autoLockOnBackground, enabled.toString());
+
+  @override
+  Future<String?> getThemePaletteId() => _kv.read(StorageKeys.themePalette);
+
+  @override
+  Future<void> setThemePaletteId(String paletteId) =>
+      _kv.write(StorageKeys.themePalette, paletteId);
+
+  @override
+  Future<String?> getThemeMode() => _kv.read(StorageKeys.themeMode);
+
+  @override
+  Future<void> setThemeMode(String mode) =>
+      _kv.write(StorageKeys.themeMode, mode);
 }

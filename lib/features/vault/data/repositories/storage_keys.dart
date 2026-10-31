@@ -14,6 +14,8 @@ class StorageKeys {
   static const String driveEncryptedBackupEnabled =
       'settings.drive_encrypted_backup_enabled';
   static const String chatImageQuality = 'settings.chat_image_quality';
+  static const String themePalette = 'settings.theme_palette';
+  static const String themeMode = 'settings.theme_mode';
   static const String unlockFailures = 'vault.unlock_failures';
   static const String unlockLockedUntil = 'vault.unlock_locked_until';
 }

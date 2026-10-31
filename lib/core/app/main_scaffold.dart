@@ -6,7 +6,7 @@ import '../widgets/app_navigation_drawer.dart';
 import '../widgets/main_scaffold_scope.dart';
 import '../presentation/theme/app_spacing.dart';
 
-/// Hosts the four top-level tabs (Chat, Photos, Bin, Files) behind a single
+/// Hosts the top-level tabs (Chat, Photos, Bin, Files, Notes) behind a single
 /// shared [Scaffold] + drawer.
 ///
 /// Publishes a [MainScaffoldScope] so any descendant screen — including
@@ -69,6 +69,7 @@ class _MainScaffoldState extends State<MainScaffold> {
                     final running = progress.status == ImportJobStatus.running;
                     return AnimatedSlide(
                       duration: AppDuration.fast,
+                      curve: AppCurves.standard,
                       offset: running ? Offset.zero : const Offset(0, -1),
                       child: AnimatedOpacity(
                         duration: AppDuration.fast,

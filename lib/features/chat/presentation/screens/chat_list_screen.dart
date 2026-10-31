@@ -37,7 +37,9 @@ class _ChatListScreenState extends State<ChatListScreen> {
   ChatNotificationService? _notifications;
   ProfileService? get _profile => widget.profileService;
   bool _isSearching = false;
+  bool _unreadOnly = false;
   final _searchController = TextEditingController();
+  final _searchFocusNode = FocusNode();
   String _searchQuery = '';
 
   @override
@@ -62,6 +64,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
   void dispose() {
     _notifications?.pendingThreadId.removeListener(_openPendingThread);
     _searchController.dispose();
+    _searchFocusNode.dispose();
     super.dispose();
   }
 
@@ -167,6 +170,12 @@ class _ChatListScreenState extends State<ChatListScreen> {
           ],
         ],
       ),
+      floatingActionButton: FloatingActionButton(
+        heroTag: 'chat_list_new_chat_fab',
+        tooltip: 'Start new conversation',
+        onPressed: () => _openNewChat(context),
+        child: const Icon(Icons.add_comment_rounded),
+      ),
       body: Column(
         children: [
           BlocBuilder<ChatAuthCubit, ChatAuthState>(
@@ -228,60 +237,88 @@ class _ChatListScreenState extends State<ChatListScreen> {
           );
         }
 
-        final filteredItems = _searchQuery.isEmpty
-            ? state.items
-            : state.items.where((item) {
-                final name =
-                    (profile?.nameFor(item.otherUser) ??
-                            item.otherUser.displayName)
-                        .toLowerCase();
-                final last = item.thread.lastMessage.toLowerCase();
-                return name.contains(_searchQuery) ||
-                    last.contains(_searchQuery);
-              }).toList();
+        final totalUnread = state.items.fold<int>(
+          0,
+          (sum, item) => sum + item.thread.unreadCountFor(widget.myUid),
+        );
 
-        if (filteredItems.isEmpty) {
-          return EmptyView(
-            icon: Icons.search_off_rounded,
-            title: 'No matches found',
-            subtitle: 'No conversations match "$_searchQuery".',
-          );
-        }
+        final filteredItems = state.items.where((item) {
+          if (_unreadOnly && item.thread.unreadCountFor(widget.myUid) <= 0) {
+            return false;
+          }
+          if (_searchQuery.isEmpty) return true;
+          final name =
+              (profile?.nameFor(item.otherUser) ?? item.otherUser.displayName)
+                  .toLowerCase();
+          final last = item.thread.lastMessage.toLowerCase();
+          return name.contains(_searchQuery) || last.contains(_searchQuery);
+        }).toList();
 
-        return ListView.builder(
-          padding: const EdgeInsets.symmetric(
-            horizontal: AppSpacing.sm,
-            vertical: AppSpacing.sm,
-          ),
-          itemCount: filteredItems.length,
-          itemBuilder: (context, i) {
-            final item = filteredItems[i];
-            final unread = item.thread.unreadCountFor(widget.myUid);
-            return _ThreadTile(
-              key: ValueKey(item.thread.threadId),
-              user: item.otherUser,
-              name:
-                  profile?.nameFor(item.otherUser) ??
-                  item.otherUser.displayName,
-              isOnline: state.isOnline(item.otherUser.uid),
-              unread: unread,
-              lastMessage:
-                  item.thread.lastMessage.isEmpty &&
-                      !item.thread.lastMessageAt.isAfter(item.thread.createdAt)
-                  ? 'No messages yet'
-                  : item.thread.lastMessage,
-              timeLabel: _formatTime(item.thread.lastMessageAt),
-              onTap: () => openThreadScreen(
-                context,
-                thread: item.thread,
-                otherUser: item.otherUser,
-              ),
-              onConfirmDelete: () => _confirmDelete(context),
-              onDelete: () => context.read<ThreadListCubit>().deleteThread(
-                item.thread.threadId,
-              ),
-            );
-          },
+        return Column(
+          children: [
+            _ElementXFilterHeader(
+              controller: _searchController,
+              focusNode: _searchFocusNode,
+              searchQuery: _searchQuery,
+              unreadOnly: _unreadOnly,
+              totalUnread: totalUnread,
+              onUnreadFilterChanged: (val) => setState(() => _unreadOnly = val),
+              onClearSearch: _searchController.clear,
+            ),
+            Expanded(
+              child: filteredItems.isEmpty
+                  ? EmptyView(
+                      icon: _unreadOnly && _searchQuery.isEmpty
+                          ? Icons.mark_chat_read_outlined
+                          : Icons.search_off_rounded,
+                      title: _unreadOnly && _searchQuery.isEmpty
+                          ? 'All caught up'
+                          : 'No matches found',
+                      subtitle: _unreadOnly && _searchQuery.isEmpty
+                          ? 'You have no unread conversations.'
+                          : 'No conversations match "$_searchQuery".',
+                    )
+                  : ListView.builder(
+                      padding: const EdgeInsets.fromLTRB(
+                        AppSpacing.sm,
+                        AppSpacing.xs,
+                        AppSpacing.sm,
+                        88,
+                      ),
+                      itemCount: filteredItems.length,
+                      itemBuilder: (context, i) {
+                        final item = filteredItems[i];
+                        final unread = item.thread.unreadCountFor(widget.myUid);
+                        return _ThreadTile(
+                          key: ValueKey(item.thread.threadId),
+                          user: item.otherUser,
+                          name:
+                              profile?.nameFor(item.otherUser) ??
+                              item.otherUser.displayName,
+                          isOnline: state.isOnline(item.otherUser.uid),
+                          unread: unread,
+                          lastMessage:
+                              item.thread.lastMessage.isEmpty &&
+                                  !item.thread.lastMessageAt.isAfter(
+                                    item.thread.createdAt,
+                                  )
+                              ? 'No messages yet'
+                              : item.thread.lastMessage,
+                          timeLabel: _formatTime(item.thread.lastMessageAt),
+                          onTap: () => openThreadScreen(
+                            context,
+                            thread: item.thread,
+                            otherUser: item.otherUser,
+                          ),
+                          onConfirmDelete: () => _confirmDelete(context),
+                          onDelete: () => context
+                              .read<ThreadListCubit>()
+                              .deleteThread(item.thread.threadId),
+                        );
+                      },
+                    ),
+            ),
+          ],
         );
       },
     );
@@ -347,7 +384,136 @@ class _ChatListScreenState extends State<ChatListScreen> {
   }
 }
 
-/// A single conversation row: swipe-to-delete, unread emphasis, presence dot.
+/// Element X Android style inline pill search bar + All / Unread filter chips.
+class _ElementXFilterHeader extends StatelessWidget {
+  const _ElementXFilterHeader({
+    required this.controller,
+    required this.focusNode,
+    required this.searchQuery,
+    required this.unreadOnly,
+    required this.totalUnread,
+    required this.onUnreadFilterChanged,
+    required this.onClearSearch,
+  });
+
+  final TextEditingController controller;
+  final FocusNode focusNode;
+  final String searchQuery;
+  final bool unreadOnly;
+  final int totalUnread;
+  final ValueChanged<bool> onUnreadFilterChanged;
+  final VoidCallback onClearSearch;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+        AppSpacing.md,
+        AppSpacing.sm,
+        AppSpacing.md,
+        AppSpacing.xs,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            height: 44,
+            decoration: BoxDecoration(
+              color: cs.surfaceContainerHigh,
+              borderRadius: AppRadius.all(AppRadius.pill),
+            ),
+            padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
+            child: Row(
+              children: [
+                Icon(
+                  Icons.search_rounded,
+                  size: 20,
+                  color: cs.onSurfaceVariant,
+                ),
+                const SizedBox(width: AppSpacing.sm),
+                Expanded(
+                  child: TextField(
+                    controller: controller,
+                    focusNode: focusNode,
+                    style: theme.textTheme.bodyMedium,
+                    decoration: InputDecoration(
+                      hintText: 'Filter rooms or messages…',
+                      hintStyle: theme.textTheme.bodyMedium?.copyWith(
+                        color: cs.onSurfaceVariant,
+                      ),
+                      border: InputBorder.none,
+                      enabledBorder: InputBorder.none,
+                      focusedBorder: InputBorder.none,
+                      isDense: true,
+                      filled: false,
+                      contentPadding: EdgeInsets.zero,
+                    ),
+                  ),
+                ),
+                if (searchQuery.isNotEmpty)
+                  IconButton(
+                    visualDensity: VisualDensity.compact,
+                    icon: const Icon(Icons.close_rounded, size: 18),
+                    onPressed: onClearSearch,
+                  ),
+              ],
+            ),
+          ),
+          const SizedBox(height: AppSpacing.sm),
+          Row(
+            children: [
+              FilterChip(
+                selected: !unreadOnly,
+                showCheckmark: false,
+                label: const Text('All'),
+                onSelected: (_) => onUnreadFilterChanged(false),
+              ),
+              const SizedBox(width: AppSpacing.sm),
+              FilterChip(
+                selected: unreadOnly,
+                showCheckmark: false,
+                label: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Text('Unread'),
+                    if (totalUnread > 0) ...[
+                      const SizedBox(width: 6),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 1,
+                        ),
+                        decoration: BoxDecoration(
+                          color: cs.primary,
+                          borderRadius: AppRadius.all(AppRadius.pill),
+                        ),
+                        child: Text(
+                          '$totalUnread',
+                          style: theme.textTheme.labelSmall?.copyWith(
+                            color: cs.onPrimary,
+                            fontWeight: FontWeight.w700,
+                            fontSize: 10.5,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+                onSelected: (_) => onUnreadFilterChanged(!unreadOnly),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// A single conversation row: Element X room row with 52dp avatar, bold title,
+/// single-line preview, right-aligned time and flat tonal unread badge.
 class _ThreadTile extends StatelessWidget {
   const _ThreadTile({
     super.key,
@@ -377,10 +543,10 @@ class _ThreadTile extends StatelessWidget {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
     final hasUnread = unread > 0;
-    final radius = AppRadius.all(AppRadius.lg);
+    final radius = AppRadius.all(AppRadius.md);
 
     return Padding(
-      padding: const EdgeInsets.only(bottom: AppSpacing.xxs),
+      padding: const EdgeInsets.only(bottom: 2),
       child: Dismissible(
         key: ValueKey('dismiss_${user.uid}'),
         direction: DismissDirection.endToStart,
@@ -396,9 +562,8 @@ class _ThreadTile extends StatelessWidget {
         confirmDismiss: (_) => onConfirmDelete(),
         onDismissed: (_) => onDelete(),
         child: Material(
-          // Unread rows sit on a faint tint so they stand out in a long list.
           color: hasUnread
-              ? cs.primary.withValues(alpha: 0.06)
+              ? cs.primary.withValues(alpha: 0.05)
               : Colors.transparent,
           borderRadius: radius,
           clipBehavior: Clip.antiAlias,
@@ -407,12 +572,12 @@ class _ThreadTile extends StatelessWidget {
             child: Padding(
               padding: const EdgeInsets.symmetric(
                 horizontal: AppSpacing.sm,
-                vertical: AppSpacing.sm + AppSpacing.xxs,
+                vertical: AppSpacing.sm + 2,
               ),
               child: Row(
                 children: [
                   _Avatar(user: user, name: name, isOnline: isOnline),
-                  const SizedBox(width: AppSpacing.sm + AppSpacing.xxs),
+                  const SizedBox(width: AppSpacing.md),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -424,7 +589,8 @@ class _ThreadTile extends StatelessWidget {
                               child: Text(
                                 name,
                                 overflow: TextOverflow.ellipsis,
-                                style: theme.textTheme.titleSmall?.copyWith(
+                                style: theme.textTheme.titleMedium?.copyWith(
+                                  fontSize: 16,
                                   fontWeight: hasUnread
                                       ? FontWeight.w700
                                       : FontWeight.w600,
@@ -439,13 +605,13 @@ class _ThreadTile extends StatelessWidget {
                                     ? cs.primary
                                     : cs.onSurfaceVariant,
                                 fontWeight: hasUnread
-                                    ? FontWeight.w600
-                                    : FontWeight.w400,
+                                    ? FontWeight.w700
+                                    : FontWeight.w500,
                               ),
                             ),
                           ],
                         ),
-                        const SizedBox(height: AppSpacing.xxs),
+                        const SizedBox(height: 3),
                         Row(
                           children: [
                             Expanded(
@@ -453,7 +619,8 @@ class _ThreadTile extends StatelessWidget {
                                 lastMessage,
                                 overflow: TextOverflow.ellipsis,
                                 maxLines: 1,
-                                style: theme.textTheme.bodySmall?.copyWith(
+                                style: theme.textTheme.bodyMedium?.copyWith(
+                                  fontSize: 14,
                                   color: hasUnread
                                       ? cs.onSurface
                                       : cs.onSurfaceVariant,
@@ -491,21 +658,11 @@ class _UnreadBadge extends StatelessWidget {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     return Container(
-      constraints: const BoxConstraints(minWidth: 22, minHeight: 18),
-      padding: const EdgeInsets.symmetric(
-        horizontal: 6,
-        vertical: 2,
-      ),
+      constraints: const BoxConstraints(minWidth: 22, minHeight: 20),
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
       decoration: BoxDecoration(
         color: cs.primary,
         borderRadius: BorderRadius.circular(10),
-        boxShadow: [
-          BoxShadow(
-            color: cs.primary.withValues(alpha: 0.35),
-            blurRadius: 4,
-            offset: const Offset(0, 1),
-          ),
-        ],
       ),
       alignment: Alignment.center,
       child: Text(
@@ -589,22 +746,22 @@ class _Avatar extends StatelessWidget {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     return SizedBox(
-      width: 48,
-      height: 48,
+      width: 52,
+      height: 52,
       child: Stack(
         children: [
-          UserAvatar(avatar: user.avatar, name: name),
+          UserAvatar(avatar: user.avatar, name: name, radius: 26),
           if (isOnline)
             Positioned(
               bottom: 0,
               right: 0,
               child: Container(
-                width: 13,
-                height: 13,
+                width: 14,
+                height: 14,
                 decoration: BoxDecoration(
                   color: context.semantic.online,
                   shape: BoxShape.circle,
-                  border: Border.all(color: cs.surface, width: 2),
+                  border: Border.all(color: cs.surface, width: 2.2),
                 ),
               ),
             ),

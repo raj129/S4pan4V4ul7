@@ -57,9 +57,8 @@ class _TypingIndicatorState extends State<TypingIndicator>
                 ),
                 child: Material(
                   color: chat.bubbleTheirs,
-                  shape: const ChatBubbleShape(isMine: false),
-                  elevation: AppElevation.raised,
-                  shadowColor: chat.bubbleShadow,
+                  shape: const ChatBubbleShape(isMine: false, withTail: false),
+                  elevation: AppElevation.none,
                   child: Padding(
                     padding: const EdgeInsets.fromLTRB(
                       AppSpacing.lg,

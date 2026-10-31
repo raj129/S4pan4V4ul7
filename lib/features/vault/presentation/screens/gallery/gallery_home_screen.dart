@@ -70,6 +70,7 @@ class GalleryHomeScreen extends StatelessWidget {
         pinValidator: pinValidator,
       ),
       floatingActionButton: FloatingActionButton.extended(
+        heroTag: 'gallery_import_fab',
         onPressed: () {
           showImportBottomSheet(context, importManager: importManager);
         },
@@ -385,28 +386,35 @@ class _GalleryBodyState extends State<_GalleryBody> {
     }
     return Column(
       children: [
-        if (_isSelectionMode)
-          AppBar(
-            backgroundColor: Theme.of(context).colorScheme.surfaceContainer,
-            title: Text('${_selectedIds.length} selected'),
-            leading: IconButton(
-              icon: const Icon(Icons.close),
-              onPressed: _exitSelectionMode,
-            ),
-            actions: [
-              if (widget.exportPhotoUseCase != null)
-                IconButton(
-                  icon: const Icon(Icons.file_download_outlined),
-                  onPressed: _exportSelected,
-                  tooltip: 'Export selected',
-                ),
-              IconButton(
-                icon: const Icon(Icons.delete_outline),
-                onPressed: _deleteSelected,
-                tooltip: 'Delete selected',
-              ),
-            ],
-          ),
+        AnimatedSize(
+          duration: AppDuration.fast,
+          curve: AppCurves.standard,
+          child: _isSelectionMode
+              ? AppBar(
+                  backgroundColor: Theme.of(
+                    context,
+                  ).colorScheme.surfaceContainer,
+                  title: Text('${_selectedIds.length} selected'),
+                  leading: IconButton(
+                    icon: const Icon(Icons.close),
+                    onPressed: _exitSelectionMode,
+                  ),
+                  actions: [
+                    if (widget.exportPhotoUseCase != null)
+                      IconButton(
+                        icon: const Icon(Icons.file_download_outlined),
+                        onPressed: _exportSelected,
+                        tooltip: 'Export selected',
+                      ),
+                    IconButton(
+                      icon: const Icon(Icons.delete_outline),
+                      onPressed: _deleteSelected,
+                      tooltip: 'Delete selected',
+                    ),
+                  ],
+                )
+              : const SizedBox.shrink(),
+        ),
         if (widget.photoSyncEnabled && !_isSelectionMode)
           const LinearProgressIndicator(minHeight: 2),
         if (widget.photoSyncEnabled && !_isSelectionMode)
