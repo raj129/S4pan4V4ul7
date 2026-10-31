@@ -360,6 +360,9 @@ GoRoute _chatRoute(AppDependencies deps, AppSessionState session) {
             liveLocationService: Platform.isAndroid
                 ? deps.chatDependencies.liveLocationService
                 : null,
+            arrivalAlertService: Platform.isAndroid
+                ? deps.chatDependencies.arrivalAlertService
+                : null,
             notesRepository: deps.chatDependencies.notesRepository,
             chatDraftRepository: deps.chatDependencies.draftRepository,
           );

@@ -326,6 +326,9 @@ class _ChatAppState extends State<ChatApp> with WidgetsBindingObserver {
                   child: ChatListScreen(
                     myUid: currentUser.uid,
                     profileService: _deps.profileService,
+                    placesService: _deps.savedPlacesService,
+                    arrivalService: _deps.arrivalAlertService,
+                    sendGeoShare: _deps.sendGeoShare,
                   ),
                 ),
               );

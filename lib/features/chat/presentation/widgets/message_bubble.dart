@@ -24,6 +24,7 @@ import 'chat_media_preview.dart';
 import 'chat_audio_player.dart';
 import 'attachment_download_progress.dart';
 import 'live_location_bubble.dart';
+import 'geo_share_bubble.dart';
 import 'shared_note_bubble.dart';
 import '../../domain/repositories/notes_repository.dart';
 import '../../application/media/media_send_status.dart';
@@ -176,8 +177,17 @@ class MessageBubble extends StatelessWidget {
         ),
       );
     }
-    if (message.mediaType == MessageType.liveLocation) {
-      return LiveLocationBubble(
+
+    final cs = Theme.of(context).colorScheme;
+    final chat = context.chatColors;
+    final bgColor = chat.bubbleFor(isMine: isMine);
+    final textColor = chat.onBubbleFor(isMine: isMine);
+    final grouped = message.groupedReactions;
+
+    // Location cards render inside the same swipe-to-reply / long-press
+    // wrapper as text, so a live location can be replied to and reacted to.
+    final locationCard = switch (message.mediaType) {
+      MessageType.liveLocation => LiveLocationBubble(
         message: message,
         isMine: isMine,
         repository: liveLocationRepository,
@@ -190,14 +200,16 @@ class MessageBubble extends StatelessWidget {
                 message.senderId,
                 message.liveLocationSessionId!,
               ),
-      );
-    }
-
-    final cs = Theme.of(context).colorScheme;
-    final chat = context.chatColors;
-    final bgColor = chat.bubbleFor(isMine: isMine);
-    final textColor = chat.onBubbleFor(isMine: isMine);
-    final grouped = message.groupedReactions;
+      ),
+      MessageType.pin ||
+      MessageType.route ||
+      MessageType.arrival => Material(
+        color: bgColor,
+        borderRadius: AppRadius.all(AppRadius.sm),
+        child: GeoShareBubble(message: message, isMine: isMine),
+      ),
+      _ => null,
+    };
 
     // Emoji-only messages and visual media (images, videos, GIFs, stickers)
     // render bare without an outer bubble border/background for both sent and
@@ -216,7 +228,37 @@ class MessageBubble extends StatelessWidget {
       isLastInGroup: isLastInGroup,
     );
 
-    final bubble = bare || bareAttachment
+    final bubble = locationCard != null
+        ? Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (message.replyTo != null)
+                Material(
+                  color: bgColor,
+                  borderRadius: AppRadius.all(AppRadius.sm),
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(
+                      AppSpacing.sm,
+                      AppSpacing.sm,
+                      AppSpacing.sm,
+                      AppSpacing.xs,
+                    ),
+                    child: _QuotedHeader(
+                      reply: message.replyTo!,
+                      isMine: isMine,
+                      myUid: myUid,
+                      textColor: textColor,
+                      onTap: onTapQuote == null
+                          ? null
+                          : () => onTapQuote!(message.replyTo!.messageId),
+                    ),
+                  ),
+                ),
+              locationCard,
+            ],
+          )
+        : bare || bareAttachment
         ? AnimatedContainer(
             duration: AppDuration.fast,
             decoration: BoxDecoration(
@@ -429,6 +471,7 @@ class MessageBubble extends StatelessWidget {
             if (isMine &&
                 onEdit != null &&
                 !message.isMedia &&
+                !message.isGeoShare &&
                 message.mediaType != MessageType.liveLocation)
               ListTile(
                 leading: const Icon(Icons.edit_outlined),

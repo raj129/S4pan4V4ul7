@@ -16,3 +16,9 @@ Without a key, the feature remains buildable but the map screen explains that Go
 The user chooses a 15-minute, 1-hour, or 8-hour session. The app requests location access and notification permission before starting. To keep sharing active when the app is backgrounded, Android must grant **Allow all the time** location access and display the ongoing foreground-service notification. Users can stop sharing from the message card or map screen; sessions also stop at expiry.
 
 The sharing action and map are intentionally unavailable on Windows. The Windows chat shows an Android-availability notice for received live-location messages.
+
+## Pins, routes and arrival alerts
+
+- **Pin / Route** (attach sheet, or type `/pin`): drop a pin or choose a start and destination. The payload is encrypted as the message body. Routes are drawn from the Google Directions API; enable it and set `GOOGLE_DIRECTIONS_API_KEY` in `.api_keys.json` (a server-side key, not restricted to Android apps). Without it a route is a straight line.
+- **Arrival alert** (attach sheet, or type `/arrive`): add several places for the current chat. When the device comes within 100 m of a place, an encrypted "I have reached <place>" message is sent once to the chat partner. Alerts are stored in secure storage on the device, run while the location foreground service is allowed (**Allow all the time** recommended), and are cleared on sign-out.
+- Any of these messages, including live locations, can be replied to by swiping or from the long-press menu.

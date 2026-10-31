@@ -196,7 +196,7 @@ class ThreadSearchDelegate {
 
   /// The text a message contributes to search, or null if it has none.
   String? searchableText(ChatMessage m) {
-    if (m.isMedia || m.deletedForEveryone || m.isDeletedFor(_myUid)) {
+    if (m.isMedia || m.isGeoShare || m.deletedForEveryone || m.isDeletedFor(_myUid)) {
       return null;
     }
     final text = m.localDecryptedText;

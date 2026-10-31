@@ -24,6 +24,10 @@ import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import '../../application/services/live_location_service.dart';
+import '../../application/services/arrival_alert_service.dart';
+import '../../domain/entities/geo_share.dart';
+import 'arrival_alerts_screen.dart';
+import 'location_picker_screen.dart';
 import '../../application/services/chat_notification_service.dart';
 import 'package:photo_vault/core/integrations/chat_vault_bridge.dart';
 import '../../application/media/image_compressor.dart';
@@ -123,6 +127,7 @@ class ThreadScreen extends StatefulWidget {
     this.profileService,
     this.liveLocationRepository,
     this.liveLocationService,
+    this.arrivalAlertService,
     this.notesRepository,
     this.chatDraftRepository,
   });
@@ -149,6 +154,7 @@ class ThreadScreen extends StatefulWidget {
   final SettingsRepository? settingsRepository;
   final LiveLocationRepository? liveLocationRepository;
   final LiveLocationService? liveLocationService;
+  final ArrivalAlertService? arrivalAlertService;
   final NotesRepository? notesRepository;
   final ChatDraftRepository? chatDraftRepository;
 
@@ -213,6 +219,7 @@ class _ThreadScreenState extends State<ThreadScreen>
   Timer? _positionThrottle;
   Timer? _readThrottle;
   StreamSubscription<Object>? _liveLocationErrorSubscription;
+  StreamSubscription<Object>? _arrivalErrorSubscription;
 
   /// Whether the rows in [_items] were built from a detached window.
   bool _renderedDetached = false;
@@ -236,6 +243,16 @@ class _ThreadScreenState extends State<ThreadScreen>
         SnackBar(content: Text('Live location update failed: $error')),
       );
     });
+    final arrivals = widget.arrivalAlertService;
+    if (arrivals != null) {
+      unawaited(arrivals.restore());
+      _arrivalErrorSubscription = arrivals.errors.listen((error) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Arrival message failed: $error')),
+        );
+      });
+    }
   }
 
   Future<void> _prepareChat() async {
@@ -622,6 +639,7 @@ class _ThreadScreenState extends State<ThreadScreen>
     _positionThrottle?.cancel();
     _readThrottle?.cancel();
     unawaited(_liveLocationErrorSubscription?.cancel());
+    unawaited(_arrivalErrorSubscription?.cancel());
     _historyPosition.dispose();
     _scrollbarVisible.dispose();
     _showJumpToLatest.dispose();
@@ -1165,10 +1183,13 @@ class _ThreadScreenState extends State<ThreadScreen>
                   isMine &&
                       !msg.isMedia &&
                       msg.mediaType != MessageType.liveLocation &&
+                      !msg.isGeoShare &&
                       cubit.canEditMessage(msg)
                   ? () => _promptEdit(msg)
                   : null,
-              onCopy: msg.localDecryptedText?.trim().isNotEmpty == true
+              onCopy:
+                  msg.localDecryptedText?.trim().isNotEmpty == true &&
+                      !msg.isGeoShare
                   ? () => _copyMessage(msg.localDecryptedText!)
                   : null,
               canReplyFromLeftToRight: true,
@@ -1186,7 +1207,8 @@ class _ThreadScreenState extends State<ThreadScreen>
                       }.contains(msg.mediaType)
                   ? () => unawaited(_saveAsSticker(msg, cubit))
                   : null,
-              onForward: msg.mediaType == MessageType.liveLocation
+              onForward:
+                  msg.mediaType == MessageType.liveLocation || msg.isGeoShare
                   ? null
                   : () => _promptForward(msg),
               onRetry: msg.status == MessageStatus.failed
@@ -1783,7 +1805,7 @@ class _ThreadScreenState extends State<ThreadScreen>
         final cs = Theme.of(context).colorScheme;
         final textTheme = Theme.of(context).textTheme;
         final myUid = context.read<ActiveThreadCubit>().myUid;
-        final preview = target.isMedia
+        final preview = target.isMedia || target.isGeoShare
             ? target.mediaPreview
             : (target.localDecryptedText ?? '');
 
@@ -2287,8 +2309,64 @@ class _ThreadScreenState extends State<ThreadScreen>
   void _send() {
     final text = _textCtrl.text;
     if (text.trim().isEmpty || _sendingText) return;
+    if (_runLocationCommand(text.trim())) return;
     _sendingText = true;
     unawaited(_sendText(text));
+  }
+
+  /// Handles `/arrive` and `/pin` typed in the composer. Returns true when
+  /// the text was a command and must not be sent as a message.
+  bool _runLocationCommand(String text) {
+    final command = text.toLowerCase();
+    if (command != '/arrive' && command != '/pin' && command != '/route') {
+      return false;
+    }
+    if (!Platform.isAndroid) return false;
+    _suppressDraftChanges = true;
+    _textCtrl.clear();
+    _suppressDraftChanges = false;
+    final cubit = context.read<ActiveThreadCubit>();
+    if (command == '/arrive') {
+      unawaited(_openArrivalAlerts(cubit, startByAdding: true));
+    } else {
+      unawaited(_sharePinOrRoute(cubit));
+    }
+    return true;
+  }
+
+  Future<void> _sharePinOrRoute(ActiveThreadCubit cubit) async {
+    final share = await Navigator.of(context).push<GeoShare>(
+      MaterialPageRoute(builder: (_) => const LocationPickerScreen()),
+    );
+    if (share == null || !mounted) return;
+    await cubit.sendGeoShareMessage(share);
+  }
+
+  Future<void> _openArrivalAlerts(
+    ActiveThreadCubit cubit, {
+    bool startByAdding = false,
+  }) async {
+    final service = widget.arrivalAlertService;
+    if (!Platform.isAndroid || service == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Arrival alerts are unavailable on this device.'),
+        ),
+      );
+      return;
+    }
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        builder: (_) => ArrivalAlertsScreen(
+          service: service,
+          ownerUid: cubit.myUid,
+          threadId: widget.thread.threadId,
+          recipientUid: widget.otherUser.uid,
+          recipientName: _nameOf(widget.otherUser),
+          startByAdding: startByAdding,
+        ),
+      ),
+    );
   }
 
   Future<void> _sendText(String text) async {
@@ -2532,6 +2610,20 @@ class _ThreadScreenState extends State<ThreadScreen>
                   color: const Color(0xFF4CAF50),
                   onTap: () => Navigator.pop(sheetContext, 'liveLocation'),
                 ),
+              if (Platform.isAndroid)
+                _AttachmentOption(
+                  icon: Icons.pin_drop_rounded,
+                  label: 'Pin / Route',
+                  color: const Color(0xFFE53935),
+                  onTap: () => Navigator.pop(sheetContext, 'pinRoute'),
+                ),
+              if (Platform.isAndroid)
+                _AttachmentOption(
+                  icon: Icons.notifications_active_rounded,
+                  label: 'Arrival alert',
+                  color: const Color(0xFF3949AB),
+                  onTap: () => Navigator.pop(sheetContext, 'arrival'),
+                ),
             ],
           ),
         ),
@@ -2596,6 +2688,14 @@ class _ThreadScreenState extends State<ThreadScreen>
     }
     if (choice == 'liveLocation') {
       await _shareLiveLocation(cubit);
+      return;
+    }
+    if (choice == 'pinRoute') {
+      await _sharePinOrRoute(cubit);
+      return;
+    }
+    if (choice == 'arrival') {
+      await _openArrivalAlerts(cubit);
       return;
     }
     if (choice == 'saved') {

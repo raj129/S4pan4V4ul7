@@ -12,6 +12,7 @@ import 'package:uuid/uuid.dart';
 import '../../domain/entities/chat_message.dart';
 import '../../domain/entities/chat_thread.dart';
 import '../../domain/entities/chat_user.dart';
+import '../../domain/entities/geo_share.dart';
 import '../../domain/entities/message_metadata.dart';
 import '../../domain/entities/message_reply.dart';
 import '../../domain/entities/user_presence.dart';
@@ -807,6 +808,64 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
     return true;
   }
 
+  /// Sends a pin, route or arrival message. The payload is encrypted as the
+  /// message body. Attaches the staged reply target, so a location can be
+  /// sent as a reply.
+  Future<bool> sendGeoShareMessage(GeoShare share) async {
+    final threadId = _currentThreadId;
+    final recipientUid = _otherUser?.uid;
+    if (threadId == null || recipientUid == null) {
+      _reportActionError('Open a chat before sharing a location.');
+      return false;
+    }
+
+    if (_detached) await jumpToLatest();
+    late final ChatMessage sent;
+    try {
+      final reply = await _buildReplyPayload(threadId);
+      final encrypted = await cryptoService.encryptMessage(
+        threadId: threadId,
+        plaintext: share.encode(),
+      );
+      sent = await messageRepository
+          .sendMessage(
+            threadId: threadId,
+            senderId: myUid,
+            encryptedText: encrypted,
+            messageId: _uuid.v4(),
+            mediaType: switch (share.kind) {
+              GeoShareKind.pin => MessageType.pin,
+              GeoShareKind.route => MessageType.route,
+              GeoShareKind.arrival => MessageType.arrival,
+            },
+            replyTo: reply,
+          )
+          .timeout(const Duration(seconds: 20));
+      clearReplyTarget();
+      _requestScroll(null);
+    } catch (error) {
+      _reportActionError('Could not send location: $error');
+      return false;
+    }
+
+    try {
+      await threadRepository.updateLastMessage(
+        threadId: threadId,
+        preview: share.preview,
+        sentAt: sent.sentAt,
+      );
+      await threadRepository.incrementUnread(
+        threadId: threadId,
+        recipientUid: recipientUid,
+      );
+    } catch (error) {
+      _reportActionError(
+        'Location was sent, but the chat preview could not be updated: $error',
+      );
+    }
+    return true;
+  }
+
   // ---------------------------------------------------------------------------
   // Outbox
   // ---------------------------------------------------------------------------
@@ -987,7 +1046,7 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
     final target = current.replyTarget;
     if (target == null) return null;
 
-    final source = target.isMedia
+    final source = target.isMedia || target.isGeoShare
         ? target.mediaPreview
         : (target.localDecryptedText ?? '');
     // Long quotes are truncated: the header only ever renders two lines.

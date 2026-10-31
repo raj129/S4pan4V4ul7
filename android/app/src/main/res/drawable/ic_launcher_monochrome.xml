@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Display Screen outline & readout -->
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="2.5"
+        android:pathData="M31,25h46c2.21,0 4,1.79 4,4v10c0,2.21 -1.79,4 -4,4H31c-2.21,0 -4,-1.79 -4,-4V29c0,-2.21 1.79,-4 4,-4z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M48,35.5h26c1.1,0 2,0.9 2,2s-0.9,2 -2,2H48c-1.1,0 -2,-0.9 -2,-2s0.9,-2 2,-2z" />
+
+    <!-- Top-Left Key (+) -->
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="2.2"
+        android:pathData="M31,49h19c2.21,0 4,1.79 4,4v10c0,2.21 -1.79,4 -4,4H31c-2.21,0 -4,-1.79 -4,-4V53c0,-2.21 1.79,-4 4,-4z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M39.25,53.5h2.5v3.25H45v2.5h-3.25v3.25h-2.5v-3.25H36v-2.5h3.25V53.5z" />
+
+    <!-- Top-Right Key (-) -->
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="2.2"
+        android:pathData="M58,49h19c2.21,0 4,1.79 4,4v10c0,2.21 -1.79,4 -4,4H58c-2.21,0 -4,-1.79 -4,-4V53c0,-2.21 1.79,-4 4,-4z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M63,56.75h9v2.5h-9z" />
+
+    <!-- Bottom-Left Key (×) -->
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="2.2"
+        android:pathData="M31,68h19c2.21,0 4,1.79 4,4v10c0,2.21 -1.79,4 -4,4H31c-2.21,0 -4,-1.79 -4,-4V72c0,-2.21 1.79,-4 4,-4z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M37.32,74.55l1.77,-1.77L40.5,74.2l1.41,-1.42 1.77,1.77 -1.42,1.41 1.42,1.42 -1.77,1.77 -1.41,-1.42 -1.41,1.42 -1.77,-1.77 1.42,-1.42z" />
+
+    <!-- Bottom-Right Key (=) Solid Fill -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M58,68h19c2.76,0 5,2.24 5,5v8c0,2.76 -2.24,5 -5,5H58c-2.76,0 -5,-2.24 -5,-5v-8c0,-2.76 2.24,-5 5,-5z M63,73.75v2.2h9v-2.2h-9z M63,78.05v2.2h9v-2.2h-9z"
+        android:fillType="evenOdd" />
+</vector>

@@ -12,6 +12,11 @@ import '../application/services/chat_identity_service.dart';
 import '../application/services/chat_notification_service.dart';
 import '../application/services/contact_discovery_service.dart';
 import '../application/services/live_location_service.dart';
+import '../application/services/arrival_alert_service.dart';
+import '../application/services/saved_places_service.dart';
+import '../domain/entities/arrival_alert.dart';
+import '../domain/entities/chat_message.dart';
+import '../domain/entities/geo_share.dart';
 import '../application/services/presence_service.dart';
 import '../application/services/profile_service.dart';
 import '../application/services/push_notification_service.dart';
@@ -176,6 +181,60 @@ class ChatDependencies {
       ? LiveLocationService(repository: liveLocationRepository)
       : null;
 
+  /// Sends "I've reached X" messages when a saved place is reached.
+  late final ArrivalAlertService? arrivalAlertService = Platform.isAndroid
+      ? ArrivalAlertService(
+          store: FlutterSecureStringKv(const FlutterSecureStorage()),
+          sender: _sendArrivalMessage,
+        )
+      : null;
+
+  Future<void> _sendArrivalMessage(ArrivalAlert alert) => sendGeoShare(
+    threadId: alert.threadId,
+    senderId: alert.ownerUid,
+    recipientUid: alert.recipientUid,
+    share: GeoShare.arrival(point: alert.point, label: alert.label),
+  );
+
+  /// Your saved places, for sending on demand without opening a chat.
+  late final SavedPlacesService? savedPlacesService = Platform.isAndroid
+      ? SavedPlacesService(
+          store: FlutterSecureStringKv(const FlutterSecureStorage()),
+        )
+      : null;
+
+  /// Encrypts and posts a pin / route / arrival message to [threadId].
+  Future<void> sendGeoShare({
+    required String threadId,
+    required String senderId,
+    required String recipientUid,
+    required GeoShare share,
+  }) async {
+    final encrypted = await cryptoService.encryptMessage(
+      threadId: threadId,
+      plaintext: share.encode(),
+    );
+    final sent = await messageRepository.sendMessage(
+      threadId: threadId,
+      senderId: senderId,
+      encryptedText: encrypted,
+      mediaType: switch (share.kind) {
+        GeoShareKind.pin => MessageType.pin,
+        GeoShareKind.route => MessageType.route,
+        GeoShareKind.arrival => MessageType.arrival,
+      },
+    );
+    await threadRepository.updateLastMessage(
+      threadId: threadId,
+      preview: share.preview,
+      sentAt: sent.sentAt,
+    );
+    await threadRepository.incrementUnread(
+      threadId: threadId,
+      recipientUid: recipientUid,
+    );
+  }
+
   late final NotesRepository notesRepository = AppNotesRepository(
     cryptoService: cryptoService,
     secureKv: FlutterSecureStringKv(const FlutterSecureStorage()),
@@ -281,6 +340,8 @@ class ChatDependencies {
       if (locationService?.isSharing == true) {
         await locationService!.stopSharing();
       }
+      await arrivalAlertService?.clear();
+      await savedPlacesService?.clear();
       await _pushService?.stop();
       if (localMedia == null) {
         await mediaLoader.clearAll();
@@ -309,6 +370,8 @@ class ChatDependencies {
     presenceService.dispose();
     _pushService?.dispose();
     liveLocationService?.dispose();
+    arrivalAlertService?.dispose();
+    savedPlacesService?.dispose();
     notificationService.dispose();
     mediaLoader.clear();
   }

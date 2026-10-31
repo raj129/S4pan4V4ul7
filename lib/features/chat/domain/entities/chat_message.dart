@@ -1,5 +1,6 @@
 import 'package:equatable/equatable.dart';
 
+import 'geo_share.dart';
 import 'message_metadata.dart';
 import 'message_reply.dart';
 
@@ -13,6 +14,9 @@ enum MessageType {
   file,
   liveLocation,
   sharedNote,
+  pin,
+  route,
+  arrival,
 }
 
 enum DeleteScope { forMe, forEveryone }
@@ -108,7 +112,8 @@ class ChatMessage extends Equatable {
   /// True for an attachment bubble, including one still uploading (no
   /// `mediaRef` yet), so the upload progress can be shown on it.
   bool get hasMediaSlot =>
-      mediaRef != null || (mediaType != null && mediaType != MessageType.text);
+      mediaRef != null ||
+      (mediaType != null && mediaType != MessageType.text && !isGeoShare);
 
   bool get isDocument => hasMediaSlot && mediaType == MessageType.file;
 
@@ -124,6 +129,9 @@ class ChatMessage extends Equatable {
   static String mediaPreviewFor(MessageType? type, {String? filename}) =>
       switch (type) {
         MessageType.liveLocation => 'Live location',
+        MessageType.pin => '📍 Pin',
+        MessageType.route => '🧭 Route',
+        MessageType.arrival => '✅ Arrival',
         MessageType.gif => 'GIF',
         MessageType.sticker => 'Sticker',
         MessageType.file || MessageType.audio =>
@@ -136,7 +144,19 @@ class ChatMessage extends Equatable {
       ? (localDecryptedText?.isNotEmpty == true
             ? localDecryptedText!
             : mediaPreviewFor(MessageType.file))
+      : isGeoShare
+      ? (geoShare?.preview ?? mediaPreviewFor(mediaType))
       : mediaPreviewFor(mediaType);
+
+  /// True for pin, route and arrival messages, whose body is a [GeoShare].
+  bool get isGeoShare =>
+      mediaType == MessageType.pin ||
+      mediaType == MessageType.route ||
+      mediaType == MessageType.arrival;
+
+  /// Decoded payload of a geo message, once the body has been decrypted.
+  GeoShare? get geoShare =>
+      isGeoShare ? GeoShare.tryDecode(localDecryptedText) : null;
 
   /// Original file name of a document attachment, recovered from the body.
   String? get documentName {
