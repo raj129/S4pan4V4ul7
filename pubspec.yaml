@@ -31,20 +31,20 @@ dependencies:
   flutter:
     sdk: flutter
 
-  cupertino_icons: ^1.0.9
+  cupertino_icons: ^2.0.0
 
   # Cryptography primitives — AES-256-GCM, PBKDF2, HKDF
   cryptography: ^2.9.0
 
   # State management (OnboardingCubit + future cubits)
   flutter_bloc: ^9.1.1
-  equatable: ^2.1.0
+  equatable: ^3.0.0
 
   # Declarative routing with redirect guards (vault-status check)
-  go_router: ^17.3.0
+  go_router: ^18.1.2
 
   # Android Keystore-backed encrypted key/value store
-  flutter_secure_storage: ^10.3.1
+  flutter_secure_storage: ^11.2.0
 
   # SQLite ORM with typed migrations
   drift: ^2.34.2
@@ -67,13 +67,13 @@ dependencies:
   cloud_firestore: ^6.7.1
   firebase_storage: ^13.5.0
   google_sign_in: ^7.2.0
-  googleapis: ^16.0.0
+  googleapis: ^17.0.0
   googleapis_auth: ^2.3.3
   http: ^1.2.1
 
   # Chat UI helpers
   mime: ^2.0.0
-  cached_network_image: ^3.4.1
+  cached_network_image: ^4.0.6
   video_player: ^2.9.2
   intl: ^0.20.2
   emoji_picker_flutter: ^4.3.0
@@ -87,7 +87,7 @@ dependencies:
   scrollable_positioned_list: ^0.3.8
   firebase_messaging: ^16.7.0
   file_picker: ^13.1.0
-  open_filex: ^4.7.0
+  open_filex: ^5.0.0
   provider: ^6.1.5+1
   android_chat_downloads:
     path: packages/android_chat_downloads

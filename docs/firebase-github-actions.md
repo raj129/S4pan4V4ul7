@@ -30,6 +30,29 @@ The Android release job also needs these **Actions secrets**:
 
 Do not put the JSON key in the repository or workflow YAML. Rotate the key if it is exposed, and grant its service account only the permissions required by the Firebase resources being deployed.
 
+## Signing fingerprints
+
+One release/tester keystore signs every release build: local release builds, the GitHub Actions App Distribution job, and any Jenkins pipeline that reuses the same `ANDROID_KEYSTORE_*` secrets. Debug builds use the separate debug keystore. Never sign release builds with the debug key.
+
+Register these fingerprints for package `com.system.calculator`:
+
+| Key | Register in Firebase (Android app) | Restrict Google Maps key | Used by |
+| --- | --- | --- | --- |
+| Release/tester keystore | SHA-1 and SHA-256 | SHA-1 | Release APK, CI, Jenkins |
+| Debug keystore (`%USERPROFILE%\.android\debug.keystore`) | SHA-1 | SHA-1 | Local debug runs |
+
+Print both fingerprints with:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\print_signing_fingerprints.ps1 -ReleaseKeystore shadow-signing-key.jks -ReleaseAlias tester
+```
+
+The script reads `ANDROID_KEYSTORE_PASSWORD` when set, or accepts `-ReleaseStorePass`. It prints SHA-1 and SHA-256 for both keystores, so values can be copied into Firebase and the Maps key restriction.
+
+After adding SHA values in Firebase Console, download a fresh `google-services.json` into `android/app/` so Google Sign-In gets an Android OAuth client (`client_type: 1`) for `com.system.calculator`. Without that entry, Google Sign-In fails with `DEVELOPER_ERROR`. Remove stale entries for `com.example.weather` when replacing the file.
+
+Back up the keystore and its passwords. Losing the release keystore breaks in-place updates for testers and requires re-registering every fingerprint.
+
 ## Google Cloud service account setup
 
 1. Create or select a dedicated Google Cloud service account for this repository.
