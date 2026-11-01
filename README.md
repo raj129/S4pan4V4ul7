@@ -75,6 +75,44 @@ Force-stopping the application suspends work until Android permits it again,
 typically after the application is relaunched. A locked vault never causes an
 automatic vault import; background chat work uses separately protected chat keys.
 
+## Mock location (Developer options)
+
+- **Open it:** side drawer → **Location → Mock location** (always visible).
+
+- **Fixed point** – search a place, tap the map, or type "lat, lng"; every
+  in-app location consumer (live-location sharing, arrival alerts, location
+  picker, maps) gets that point.
+- **Route A → B** – search or tap-to-mark A and B (or "my location"), choose
+  Walk / Cycle / Drive; the route is drawn on the map automatically and
+  recalculated when A, B or the mode changes. Driving routes use the Google
+  Routes API with `TRAFFIC_ON_POLYLINE`; the simulated speed drops on SLOW
+  (≈45%) and TRAFFIC_JAM (≈15%) stretches, slows for turns and arrival, and
+  traffic is re-requested periodically. Speed, time multiplier (1–10×), loop
+  and "follow traffic" are adjustable. Without a usable key or API it falls back
+  to a straight line and says why.
+- **Use real GPS** – one tap in the banner or screen. Mock state is in memory
+  only, so the app always starts on the real GPS.
+- **Reminder** – while mock is on, a banner is pinned to the top of every vault
+  screen (hidden on the calculator disguise). Sharing live location while
+  mocking asks for confirmation first.
+- **System-wide (Android)** – optionally feeds the mock into Android's GPS,
+  network and fused providers so other apps see it. Select this app under
+  *System Developer options → Select mock location app*. An ongoing
+  "Mock location is on" notification with a **Stop mock** action is shown.
+
+### Google keys for search and routes
+
+Place search, route previews (chat and mock) and live traffic reuse the
+`GOOGLE_MAPS_ANDROID_API_KEY`. If the app wasn't launched with
+`--dart-define-from-file=.api_keys.json`, the key baked into the Android
+manifest is used instead. Because the key is restricted to Android apps, the
+app sends its package name and signing SHA-1 with each request; that SHA-1 must
+be in the key's allowed list (debug and release differ). In Google Cloud, enable
+**Routes API** and **Places API (New)** (Geocoding API is an optional fallback)
+— they are separate from the Maps SDK. Errors in the app name the API to enable.
+The same search and A→B route preview (with Drive / Walk / Cycle) is used when
+sharing a location or route in chat.
+
 ## Android tester builds (Firebase App Distribution)
 
 The `Flutter CI` GitHub Actions workflow uploads a release APK to Firebase App

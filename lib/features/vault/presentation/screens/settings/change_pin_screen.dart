@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
@@ -5,7 +7,9 @@ import 'package:photo_vault/features/vault/application/services/pin_validator.da
 import 'package:photo_vault/features/vault/application/usecases/change_pin_usecase.dart';
 import 'package:photo_vault/core/widgets/app_surfaces.dart';
 import 'package:photo_vault/core/presentation/theme/app_spacing.dart';
+import '../../widgets/pin/pin_flow_body.dart';
 import '../../widgets/pin/pin_pad.dart';
+import '../../widgets/pin/pin_step_indicator.dart';
 
 enum ChangePinStep { verifyOld, enterNew, confirmNew }
 
@@ -62,17 +66,35 @@ class _ChangePinScreenState extends State<ChangePinScreen> {
 
     switch (_step) {
       case ChangePinStep.verifyOld:
+        setState(() => _busy = true);
+        bool ok;
+        try {
+          ok = await widget.changePinUseCase.verifyOldPin(pin);
+        } catch (e) {
+          ok = false;
+        }
+        if (!mounted) return;
         setState(() {
-          _oldPin = pin;
-          _step = ChangePinStep.enterNew;
+          _busy = false;
+          if (ok) {
+            _oldPin = pin;
+            _step = ChangePinStep.enterNew;
+          } else {
+            _error = "That's not your current PIN. Try again.";
+          }
         });
         break;
       case ChangePinStep.enterNew:
         final pinError = widget.pinValidator.validate(pin);
         if (pinError != null) {
-          setState(() {
-            _error = pinError;
-          });
+          setState(() => _error = pinError);
+          return;
+        }
+        if (pin == _oldPin) {
+          setState(
+            () =>
+                _error = 'Your new PIN must be different from the current one.',
+          );
           return;
         }
         setState(() {
@@ -82,16 +104,22 @@ class _ChangePinScreenState extends State<ChangePinScreen> {
         break;
       case ChangePinStep.confirmNew:
         if (pin != _newPin) {
-          setState(() {
-            _error = 'PINs do not match. Try again.';
-            _step = ChangePinStep.enterNew;
-            _newPin = '';
-          });
+          // Stay on confirm: the user only retypes the confirmation.
+          setState(() => _error = "PINs don't match. Try confirming again.");
           return;
         }
-        _submit();
+        unawaited(_submit());
         break;
     }
+  }
+
+  void _restartNewPin() {
+    setState(() {
+      _digits.clear();
+      _newPin = '';
+      _error = null;
+      _step = ChangePinStep.enterNew;
+    });
   }
 
   Future<void> _submit() async {
@@ -123,17 +151,19 @@ class _ChangePinScreenState extends State<ChangePinScreen> {
       );
       context.pop();
     } catch (e) {
+      if (!mounted) return;
+      final wrongOld = e.toString().contains('Incorrect old PIN');
       setState(() {
         _busy = false;
-        _error = e.toString();
-        // Reset to first step if old PIN was wrong
-        if (e.toString().contains('Incorrect old PIN')) {
+        if (wrongOld) {
+          _error = "That's not your current PIN. Try again.";
           _step = ChangePinStep.verifyOld;
           _oldPin = '';
         } else {
+          _error = e is ChangePinException ? e.message : e.toString();
           _step = ChangePinStep.enterNew;
-          _newPin = '';
         }
+        _newPin = '';
       });
     }
   }
@@ -143,18 +173,18 @@ class _ChangePinScreenState extends State<ChangePinScreen> {
     final copy = switch (_step) {
       ChangePinStep.verifyOld => (
         icon: Icons.lock_outline_rounded,
-        title: 'Confirm Old PIN',
-        subtitle: 'Enter your current app PIN to continue.',
+        title: 'Enter current PIN',
+        subtitle: 'The PIN you use to unlock the app today.',
       ),
       ChangePinStep.enterNew => (
         icon: Icons.password_rounded,
-        title: 'Enter New PIN',
-        subtitle: 'Choose a new 4-digit PIN.',
+        title: 'Choose a new PIN',
+        subtitle: 'Pick a 4-digit PIN you have not used before.',
       ),
       ChangePinStep.confirmNew => (
         icon: Icons.verified_user_outlined,
-        title: 'Confirm New PIN',
-        subtitle: 'Re-enter your new PIN.',
+        title: 'Confirm new PIN',
+        subtitle: 'Enter the new PIN once more.',
       ),
     };
 
@@ -162,55 +192,65 @@ class _ChangePinScreenState extends State<ChangePinScreen> {
     return Scaffold(
       appBar: AppBar(title: const Text('Change PIN')),
       body: SafeArea(
-        child: Padding(
-          padding: AppSpacing.page,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              const SizedBox(height: AppSpacing.xxl),
-              _ChangePinHero(
-                icon: copy.icon,
-                title: copy.title,
-                subtitle: copy.subtitle,
-              ),
-              const SizedBox(height: AppSpacing.xxl),
-              PinDotRow(
-                filledCount: _digits.length,
-                total: _pinLength,
-                hasError: _error != null,
-              ),
-              if (_step != ChangePinStep.verifyOld) ...[
+        child: PinFlowBody(
+          child: Padding(
+            padding: AppSpacing.page,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
                 const SizedBox(height: AppSpacing.lg),
-                const InfoBanner(
-                  message:
-                      'Your PIN also unlocks your chat history on a new device. '
-                      'If you forget it, past messages cannot be recovered.',
-                  tone: InfoBannerTone.info,
+                PinStepIndicator(current: _step.index + 1, total: 3),
+                const SizedBox(height: AppSpacing.xl),
+                _ChangePinHero(
+                  icon: copy.icon,
+                  title: copy.title,
+                  subtitle: copy.subtitle,
                 ),
-              ],
-              if (_error != null) ...[
-                const SizedBox(height: AppSpacing.lg),
-                InfoBanner(message: _error!, tone: InfoBannerTone.error),
-              ],
-              if (_busy) ...[
-                const SizedBox(height: AppSpacing.lg),
-                const Center(child: CircularProgressIndicator()),
-              ],
-              const Spacer(),
-              PinPad(
-                onDigit: _onDigitTap,
-                onDelete: _onDelete,
-                enabled: !_busy,
-              ),
-              Text(
-                'Digits are hidden while you update the vault PIN.',
-                textAlign: TextAlign.center,
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
+                const SizedBox(height: AppSpacing.xxl),
+                PinDotRow(
+                  filledCount: _digits.length,
+                  total: _pinLength,
+                  hasError: _error != null,
                 ),
-              ),
-              const SizedBox(height: AppSpacing.lg),
-            ],
+                if (_step != ChangePinStep.verifyOld) ...[
+                  const SizedBox(height: AppSpacing.lg),
+                  const InfoBanner(
+                    message:
+                        'Your PIN also unlocks your chat history on a new device. '
+                        'If you forget it, past messages cannot be recovered.',
+                    tone: InfoBannerTone.info,
+                  ),
+                ],
+                if (_error != null) ...[
+                  const SizedBox(height: AppSpacing.lg),
+                  InfoBanner(message: _error!, tone: InfoBannerTone.error),
+                ],
+                if (_busy) ...[
+                  const SizedBox(height: AppSpacing.lg),
+                  const Center(child: CircularProgressIndicator()),
+                ],
+                const Spacer(),
+                if (_step == ChangePinStep.confirmNew && !_busy)
+                  TextButton.icon(
+                    onPressed: _restartNewPin,
+                    icon: const Icon(Icons.restart_alt_rounded),
+                    label: const Text('Choose a different new PIN'),
+                  ),
+                PinPad(
+                  onDigit: _onDigitTap,
+                  onDelete: _onDelete,
+                  enabled: !_busy,
+                ),
+                Text(
+                  'Digits are hidden while you update the vault PIN.',
+                  textAlign: TextAlign.center,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: AppSpacing.lg),
+              ],
+            ),
           ),
         ),
       ),
@@ -245,11 +285,7 @@ class _ChangePinHero extends StatelessWidget {
               width: 1.5,
             ),
           ),
-          child: Icon(
-            icon,
-            size: 34,
-            color: theme.colorScheme.primary,
-          ),
+          child: Icon(icon, size: 34, color: theme.colorScheme.primary),
         ),
         const SizedBox(height: AppSpacing.xl),
         Text(

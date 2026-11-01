@@ -10,11 +10,16 @@ import '../entities/user_presence.dart';
 abstract class PresenceRepository {
   /// Mark [uid] online and keep it online until [setOffline] is called.
   ///
-  /// Implementations that require a heartbeat start it here.
-  Future<void> setOnline(String uid);
+  /// Implementations that require a heartbeat start it here. When
+  /// [shareLastSeen] is false, other users must not be able to learn when
+  /// [uid] was last active.
+  Future<void> setOnline(String uid, {bool shareLastSeen = true});
 
   /// Mark [uid] offline and stop any heartbeat.
-  Future<void> setOffline(String uid);
+  ///
+  /// When [shareLastSeen] is false the stored last-seen time is removed rather
+  /// than updated.
+  Future<void> setOffline(String uid, {bool shareLastSeen = true});
 
   /// Observe a single user's presence.
   Stream<UserPresence> watch(String uid);

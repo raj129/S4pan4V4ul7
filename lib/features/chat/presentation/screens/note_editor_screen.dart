@@ -140,7 +140,7 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
       widget.onNoteSaved?.call(updated);
       if (closeAfter) {
         if (revision != _editRevision) {
-          return _save(closeAfter: true);
+          return await _save(closeAfter: true);
         }
         Navigator.of(context).pop();
       }

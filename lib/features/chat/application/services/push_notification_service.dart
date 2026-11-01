@@ -14,7 +14,13 @@ import 'chat_backup_scheduler.dart';
 
 @pragma('vm:entry-point')
 Future<void> handleChatPushInBackground(RemoteMessage message) async {
-  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+  // The background isolate may be reused between messages; a second
+  // initializeApp for the default app throws.
+  if (Firebase.apps.isEmpty) {
+    await Firebase.initializeApp(
+      options: DefaultFirebaseOptions.currentPlatform,
+    ).timeout(const Duration(seconds: 20));
+  }
 
   final Object? rawThreadId = message.data['threadId'];
   final Object? rawMessageId = message.data['messageId'];

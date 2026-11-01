@@ -4,11 +4,11 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:intl/intl.dart';
 import 'package:permission_handler/permission_handler.dart';
 
+import '../../../../core/location/app_location.dart';
 import '../../application/services/maps_diagnostics.dart';
 import '../../domain/entities/live_location.dart';
 
@@ -61,9 +61,10 @@ class _LiveLocationMapScreenState extends State<LiveLocationMapScreen> {
         _locationGranted = granted;
       });
     }
-    if (granted) {
+    if (granted || AppLocation.instance.isMocking) {
       try {
-        final last = await Geolocator.getLastKnownPosition();
+        final location = AppLocation.instance;
+        final last = await location.lastKnown();
         if (last != null && mounted) {
           setState(() {
             _deviceFallbackPoint = LiveLocationPoint(
@@ -74,11 +75,8 @@ class _LiveLocationMapScreenState extends State<LiveLocationMapScreen> {
             );
           });
         }
-        final current = await Geolocator.getCurrentPosition(
-          locationSettings: const LocationSettings(
-            accuracy: LocationAccuracy.high,
-            timeLimit: Duration(seconds: 6),
-          ),
+        final current = await location.current(
+          timeLimit: const Duration(seconds: 6),
         );
         if (mounted) {
           setState(() {

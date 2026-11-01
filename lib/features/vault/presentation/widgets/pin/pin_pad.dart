@@ -256,6 +256,9 @@ class _PinDotRowState extends State<PinDotRow>
     super.didUpdateWidget(oldWidget);
     if (widget.hasError && !oldWidget.hasError) {
       _shakeController.forward(from: 0);
+      // Felt as well as seen: a wrong or mismatched PIN is easy to miss when
+      // the user is looking at the keypad rather than the dots.
+      HapticFeedback.vibrate();
     }
   }
 

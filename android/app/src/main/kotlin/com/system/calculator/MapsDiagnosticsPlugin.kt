@@ -30,6 +30,7 @@ class MapsDiagnosticsPlugin : FlutterPlugin, ActivityAware {
                 when (call.method) {
                     "report" -> result.success(report(context))
                     "getGiphyApiKey" -> result.success(getGiphyApiKey(context))
+                    "getMapsApiIdentity" -> result.success(getMapsApiIdentity(context))
                     "setMapActive" -> {
                         val active = call.argument<Boolean>("active") ?: false
                         setMapActive(active)
@@ -75,6 +76,20 @@ class MapsDiagnosticsPlugin : FlutterPlugin, ActivityAware {
         val pm = context.packageManager
         val appInfo = pm.getApplicationInfo(context.packageName, PackageManager.GET_META_DATA)
         return appInfo.metaData?.getString("com.system.calculator.GIPHY_API_KEY").orEmpty()
+    }
+
+    /**
+     * What Google needs to accept REST calls made with an Android-restricted
+     * key: the key itself plus this app's package and signing certificate.
+     */
+    private fun getMapsApiIdentity(context: Context): Map<String, String> {
+        val pm = context.packageManager
+        val appInfo = pm.getApplicationInfo(context.packageName, PackageManager.GET_META_DATA)
+        return mapOf(
+            "key" to appInfo.metaData?.getString("com.google.android.geo.API_KEY").orEmpty(),
+            "package" to context.packageName,
+            "sha1" to (signingSha1(context)?.replace(":", "") ?: ""),
+        )
     }
 
     private fun report(context: Context): Map<String, Any?> {

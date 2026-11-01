@@ -1,7 +1,7 @@
-import 'dart:async';
-
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:photo_vault/features/chat/application/services/arrival_alert_service.dart';
+import 'package:photo_vault/features/chat/application/services/arrival_geofences.dart';
 import 'package:photo_vault/features/chat/application/services/directions_service.dart';
 import 'package:photo_vault/features/chat/application/services/saved_places_service.dart';
 import 'package:photo_vault/features/chat/domain/entities/arrival_alert.dart';
@@ -20,6 +20,33 @@ class _MemoryKv implements StorageStringKv {
 
   @override
   Future<void> write(String key, String value) async => values[key] = value;
+}
+
+class _FakeFences implements ArrivalGeofences {
+  final List<List<ArrivalFence>> syncs = [];
+  List<ArrivalGeofenceEvent> pending = [];
+  final List<String> acked = [];
+  Object? syncError;
+
+  @override
+  Future<void> sync(List<ArrivalFence> fences) async {
+    if (syncError != null) throw syncError!;
+    syncs.add(fences);
+  }
+
+  @override
+  Future<List<ArrivalGeofenceEvent>> peekPending() async => List.of(pending);
+
+  @override
+  Future<void> ackPending(List<String> eids) async {
+    acked.addAll(eids);
+    pending = [
+      for (final e in pending)
+        if (!eids.contains(e.eid)) e,
+    ];
+  }
+
+  List<String> get lastFenceIds => [for (final f in syncs.last) f.id];
 }
 
 void main() {
@@ -105,25 +132,106 @@ void main() {
     });
   });
 
+  group('places', () {
+    test('lists frequent places first and hides expired temporary ones', () async {
+      var now = DateTime.utc(2026, 11, 1);
+      final places = SavedPlacesService(store: _MemoryKv(), clock: () => now);
+      await places.add(ownerUid: 'me', label: 'Cafe', point: const GeoPoint(1, 1));
+      final gym = await places.add(ownerUid: 'me', label: 'Gym', point: const GeoPoint(2, 2));
+      await places.recordVisit(gym.id);
+      await places.recordVisit(gym.id);
+      await places.add(
+        ownerUid: 'me',
+        label: 'Temp',
+        point: const GeoPoint(3, 3),
+        temporary: true,
+      );
+      expect((await places.placesFor('me')).map((p) => p.label), ['Gym', 'Cafe', 'Temp']);
+
+      now = now.add(const Duration(hours: 25));
+      expect((await places.placesFor('me')).map((p) => p.label), ['Gym', 'Cafe']);
+      await places.purgeExpired();
+      expect((await places.placesFor('me')).map((p) => p.label), ['Gym', 'Cafe']);
+    });
+
+    test('keeping a temporary place makes it a saved place', () async {
+      final places = SavedPlacesService(store: _MemoryKv());
+      final temp = await places.add(
+        ownerUid: 'me',
+        label: 'Office',
+        point: const GeoPoint(1, 1),
+        temporary: true,
+      );
+      final kept = await places.update(temp.id, keep: true);
+      expect(kept?.temporary, isFalse);
+      expect(kept?.expiresAt, isNull);
+    });
+
+    test('cancelling an alert deletes its temporary place but not a saved one', () async {
+      final kv = _MemoryKv();
+      final places = SavedPlacesService(store: kv);
+      final temp = await places.add(
+        ownerUid: 'me',
+        label: 'Temp',
+        point: const GeoPoint(10, 10),
+        temporary: true,
+      );
+      final saved = await places.add(
+        ownerUid: 'me',
+        label: 'Home',
+        point: const GeoPoint(20, 20),
+      );
+      final alerts = ArrivalAlertService(
+        store: kv,
+        sender: (_) async {},
+        geofences: _FakeFences(),
+        places: places,
+      );
+      addTearDown(alerts.dispose);
+
+      final tempAlert = await alerts.add(
+        ownerUid: 'me',
+        threadId: 't',
+        recipientUid: 'you',
+        label: 'Temp',
+        point: temp.point,
+        placeId: temp.id,
+      );
+      final savedAlert = await alerts.add(
+        ownerUid: 'me',
+        threadId: 't',
+        recipientUid: 'you',
+        label: 'Home',
+        point: saved.point,
+        placeId: saved.id,
+      );
+      await alerts.remove(tempAlert.id);
+      await alerts.remove(savedAlert.id);
+
+      expect((await places.placesFor('me')).map((p) => p.label), ['Home']);
+    });
+  });
+
   group('ArrivalAlertService', () {
     late _MemoryKv kv;
     late List<ArrivalAlert> sent;
+    late _FakeFences fences;
     late ArrivalAlertService service;
-    final stream = StreamController<GeoPoint>.broadcast();
 
     setUp(() {
       kv = _MemoryKv();
       sent = [];
+      fences = _FakeFences();
       service = ArrivalAlertService(
         store: kv,
         sender: (alert) async => sent.add(alert),
-        locationUpdates: () => stream.stream,
+        geofences: fences,
       );
     });
 
     tearDown(() => service.dispose());
 
-    Future<void> addPlace(String label, GeoPoint point) => service.add(
+    Future<ArrivalAlert> addPlace(String label, GeoPoint point) => service.add(
       ownerUid: 'me',
       threadId: 'me_you',
       recipientUid: 'you',
@@ -131,20 +239,128 @@ void main() {
       point: point,
     );
 
-    test('fires once per place when each is reached', () async {
+    var eventCount = 0;
+    ArrivalGeofenceEvent event(
+      String alertId, {
+      double? lat,
+      double? lng,
+      DateTime? at,
+    }) => ArrivalGeofenceEvent(
+      eid: 'event-${eventCount++}',
+      alertId: alertId,
+      enqueuedAt: at ?? DateTime.now(),
+      latitude: lat,
+      longitude: lng,
+    );
+
+    /// Queues [events] as if the native receiver had recorded them, then processes.
+    Future<bool> deliver(List<ArrivalGeofenceEvent> events) async {
+      fences.pending = events;
+      return service.processPendingArrivals();
+    }
+
+    test('arms every saved alert as soon as it is saved', () async {
       await addPlace('Cafe', const GeoPoint(10, 10));
-      await addPlace('Office', const GeoPoint(20, 20));
+      expect(fences.lastFenceIds, hasLength(1));
+      expect(fences.syncs.last.single.radiusMeters, 100);
+    });
 
-      await service.onLocation(const GeoPoint(0, 0));
-      expect(sent, isEmpty);
+    test('uses the radius chosen when saving', () async {
+      await service.add(
+        ownerUid: 'me',
+        threadId: 'me_you',
+        recipientUid: 'you',
+        label: 'Home',
+        point: const GeoPoint(10, 10),
+        radiusMeters: 200,
+      );
+      expect(fences.syncs.last.single.radiusMeters, 200);
+    });
 
-      await service.onLocation(const GeoPoint(10.0001, 10.0001));
-      await service.onLocation(const GeoPoint(10.0002, 10.0002));
+    test('sends once per place and disarms it', () async {
+      final cafe = await addPlace('Cafe', const GeoPoint(10, 10));
+      final office = await addPlace('Office', const GeoPoint(20, 20));
+
+      await deliver([event(cafe.id)]);
+      await deliver([event(cafe.id)]);
       expect(sent.map((a) => a.label), ['Cafe']);
+      expect(fences.lastFenceIds, [office.id]);
 
-      await service.onLocation(const GeoPoint(20, 20));
+      await deliver([event(office.id)]);
       expect(sent.map((a) => a.label), ['Cafe', 'Office']);
-      expect(service.isWatching, isFalse);
+      expect(fences.syncs.last, isEmpty);
+    });
+
+    test('matches every saved place that contains the coordinate', () async {
+      final near = await addPlace('Near', const GeoPoint(10, 10));
+      await addPlace('Far', const GeoPoint(20, 20));
+      // Within 100 m of "Near" only. The enter event names no alert.
+      await deliver([event('unknown', lat: 10.0003, lng: 10)]);
+      expect(sent.map((a) => a.id), [near.id]);
+    });
+
+    test('does not match a place when the coordinate is outside its radius', () async {
+      await addPlace('Cafe', const GeoPoint(10, 10));
+      await deliver([event('unknown', lat: 10.01, lng: 10)]);
+      expect(sent, isEmpty);
+    });
+
+    test('acks events for unknown or disarmed alerts without sending', () async {
+      final stale = event('missing');
+      expect(await deliver([stale]), isTrue);
+      expect(sent, isEmpty);
+      expect(fences.acked, [stale.eid]);
+    });
+
+    test('drops events older than 24 hours', () async {
+      final cafe = await addPlace('Cafe', const GeoPoint(10, 10));
+      final old = event(
+        cafe.id,
+        at: DateTime.now().subtract(const Duration(hours: 25)),
+      );
+      expect(await deliver([old]), isTrue);
+      expect(sent, isEmpty);
+      expect(fences.acked, [old.eid]);
+    });
+
+    test('delivers arrivals queued while the app was closed', () async {
+      final cafe = await addPlace('Cafe', const GeoPoint(10, 10));
+      fences.pending = [event(cafe.id, lat: 10, lng: 10)];
+
+      expect(await service.refreshArrivals(), isTrue);
+      expect(sent.map((a) => a.label), ['Cafe']);
+      expect(fences.pending, isEmpty);
+    });
+
+    test('a failed send stays queued and is retried', () async {
+      var offline = true;
+      final retryFences = _FakeFences();
+      final retrying = ArrivalAlertService(
+        store: _MemoryKv(),
+        sender: (alert) async {
+          if (offline) throw StateError('offline');
+          sent.add(alert);
+        },
+        geofences: retryFences,
+      );
+      addTearDown(retrying.dispose);
+      final cafe = await retrying.add(
+        ownerUid: 'me',
+        threadId: 't',
+        recipientUid: 'you',
+        label: 'Cafe',
+        point: const GeoPoint(10, 10),
+      );
+      retryFences.pending = [event(cafe.id)];
+
+      expect(await retrying.processPendingArrivals(), isFalse);
+      expect(retryFences.acked, isEmpty);
+      expect(retryFences.pending, hasLength(1));
+
+      offline = false;
+      expect(await retrying.processPendingArrivals(), isTrue);
+      expect(retryFences.acked, hasLength(1));
+      expect(sent.map((a) => a.label), ['Cafe']);
     });
 
     test('persists alerts and restores them', () async {
@@ -152,42 +368,54 @@ void main() {
       final restored = ArrivalAlertService(
         store: kv,
         sender: (_) async {},
-        locationUpdates: () => stream.stream,
+        geofences: _FakeFences(),
       );
       addTearDown(restored.dispose);
       await restored.restore();
       expect(restored.alertsFor('me', 'me_you'), hasLength(1));
-      expect(restored.isWatching, isTrue);
+    });
+
+    test('exposes a registration failure and clears it on success', () async {
+      fences.syncError = PlatformException(
+        code: 'geofence_failed',
+        message: 'Background location is off.',
+      );
+      await addPlace('Cafe', const GeoPoint(10, 10));
+      expect(service.fenceError, 'Background location is off.');
+
+      fences.syncError = null;
+      await addPlace('Office', const GeoPoint(20, 20));
+      expect(service.fenceError, isNull);
     });
 
     test('keeps the alert armed when sending fails', () async {
+      final failingFences = _FakeFences();
       final failing = ArrivalAlertService(
         store: _MemoryKv(),
         sender: (_) async => throw StateError('offline'),
-        locationUpdates: () => stream.stream,
+        geofences: failingFences,
       );
       addTearDown(failing.dispose);
       final errors = <Object>[];
       failing.errors.listen(errors.add);
-      await failing.add(
+      final cafe = await failing.add(
         ownerUid: 'me',
         threadId: 't',
         recipientUid: 'you',
         label: 'Cafe',
         point: const GeoPoint(10, 10),
       );
-      await failing.onLocation(const GeoPoint(10, 10));
+      failingFences.pending = [
+        ArrivalGeofenceEvent(
+          eid: 'e1',
+          alertId: cafe.id,
+          enqueuedAt: DateTime.now(),
+        ),
+      ];
+      expect(await failing.processPendingArrivals(), isFalse);
       await Future<void>.delayed(Duration.zero);
-      expect(errors, hasLength(1));
+      expect(errors, isNotEmpty);
       expect(failing.alertsFor('me', 't').single.isArmed, isTrue);
-    });
-
-    test('computes great-circle distance', () {
-      final d = ArrivalAlertService.distanceMeters(
-        const GeoPoint(0, 0),
-        const GeoPoint(0, 1),
-      );
-      expect(d, closeTo(111195, 100));
     });
   });
 }

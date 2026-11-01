@@ -32,6 +32,11 @@ linter:
     prefer_initializing_formals: false
     avoid_print: true
     curly_braces_in_flow_control_structures: true
+    # Async/lifecycle hygiene: surface fire-and-forget futures and leaked
+    # subscriptions/sinks, which caused stuck background work and leaks.
+    unawaited_futures: true
+    cancel_subscriptions: true
+    close_sinks: true
 
 # Additional information about this file can be found at
 # https://dart.dev/guides/language/analysis-options

@@ -27,8 +27,8 @@ class HistoryLockedBanner extends StatelessWidget {
         wrongPin
             ? 'That PIN did not unlock your chat history. Try again with the '
                   'PIN you used on your previous device.'
-            : 'Your earlier messages are locked. Enter your vault PIN to '
-                  'restore chat history on this device.',
+            : 'Your earlier messages are locked. Enter your app PIN (the same '
+                  'one you use to unlock this app) to restore chat history.',
         style: TextStyle(color: scheme.onErrorContainer),
       ),
       actions: [
@@ -90,8 +90,9 @@ class _PinPromptDialogState extends State<_PinPromptDialog> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const Text(
-            'Enter the vault PIN from the device where these chats were sent. '
-            'Without it, older messages cannot be recovered.',
+            'Enter the app PIN you used on the device where these chats were '
+            'sent. It is the same PIN that unlocks the app. Without it, older '
+            'messages cannot be recovered.',
           ),
           const SizedBox(height: 16),
           TextField(

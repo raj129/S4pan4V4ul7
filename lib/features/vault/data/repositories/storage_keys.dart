@@ -7,6 +7,7 @@ class StorageKeys {
       'settings.calculator_onboarding_completed';
   static const String appLockOnOpen = 'settings.app_lock_on_open';
   static const String autoLockOnBackground = 'settings.auto_lock_on_background';
+  static const String showLastSeen = 'settings.show_last_seen';
   static const String photoSyncEnabled = 'settings.photo_sync_enabled';
   static const String vmkBackupEnabled = 'settings.vmk_backup_enabled';
   static const String externalStorageMirrorEnabled =
@@ -16,6 +17,7 @@ class StorageKeys {
   static const String chatImageQuality = 'settings.chat_image_quality';
   static const String themePalette = 'settings.theme_palette';
   static const String themeMode = 'settings.theme_mode';
+  static const String mockLocationPrefs = 'settings.mock_location_prefs';
   static const String unlockFailures = 'vault.unlock_failures';
   static const String unlockLockedUntil = 'vault.unlock_locked_until';
 }

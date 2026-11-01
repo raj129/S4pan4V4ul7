@@ -124,16 +124,23 @@ class OnboardingCubit extends Cubit<OnboardingState> {
       return;
     }
     if (!_pinValidator.matches(first, confirmPin)) {
-      // Don't clear _firstPin — let user re-confirm.
+      // Keep _firstPin and stay on the confirm step so the user only retypes
+      // the confirmation, not the whole PIN.
       emit(
-        OnboardingPinInvalid(
+        OnboardingPinConfirm(
           mode: mode,
-          message: 'PINs do not match. Please re-enter the confirmation PIN.',
+          errorMessage: "PINs don't match. Try confirming again.",
         ),
       );
       return;
     }
     await _createVault(mode: mode);
+  }
+
+  /// Discards the first PIN and returns to step 1 ("Start over").
+  void restartPinEntry(UserMode mode) {
+    _firstPin = null;
+    emit(OnboardingPinEntry(mode: mode));
   }
 
   // ─────────────────────────────────────────────────

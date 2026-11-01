@@ -17,10 +17,13 @@ class ArrivalAlert extends Equatable {
     required this.point,
     this.radiusMeters = defaultRadiusMeters,
     this.status = ArrivalAlertStatus.armed,
-    this.insideSinceCreation = false,
+    this.placeId,
   });
 
   static const double defaultRadiusMeters = 100;
+
+  /// Radii offered when saving a place. 100 m is the smallest that Android
+  /// geofencing reliably honours.
 
   final String id;
   final String ownerUid;
@@ -31,16 +34,12 @@ class ArrivalAlert extends Equatable {
   final double radiusMeters;
   final ArrivalAlertStatus status;
 
-  /// True while the device is already inside the radius, so an alert created
-  /// at the current place still fires once the user leaves and comes back.
-  final bool insideSinceCreation;
+  /// The saved place this alert was made from, when there is one.
+  final String? placeId;
 
   bool get isArmed => status == ArrivalAlertStatus.armed;
 
-  ArrivalAlert copyWith({
-    ArrivalAlertStatus? status,
-    bool? insideSinceCreation,
-  }) => ArrivalAlert(
+  ArrivalAlert copyWith({ArrivalAlertStatus? status}) => ArrivalAlert(
     id: id,
     ownerUid: ownerUid,
     threadId: threadId,
@@ -49,7 +48,7 @@ class ArrivalAlert extends Equatable {
     point: point,
     radiusMeters: radiusMeters,
     status: status ?? this.status,
-    insideSinceCreation: insideSinceCreation ?? this.insideSinceCreation,
+    placeId: placeId,
   );
 
   Map<String, dynamic> toJson() => {
@@ -61,7 +60,7 @@ class ArrivalAlert extends Equatable {
     'p': point.toJson(),
     'radius': radiusMeters,
     'status': status.name,
-    'inside': insideSinceCreation,
+    if (placeId != null) 'pl': placeId,
   };
 
   static ArrivalAlert? fromJson(Map<String, dynamic> json) {
@@ -89,7 +88,7 @@ class ArrivalAlert extends Equatable {
       status: json['status'] == ArrivalAlertStatus.triggered.name
           ? ArrivalAlertStatus.triggered
           : ArrivalAlertStatus.armed,
-      insideSinceCreation: json['inside'] as bool? ?? false,
+      placeId: json['pl'] as String?,
     );
   }
 
@@ -120,6 +119,6 @@ class ArrivalAlert extends Equatable {
     point,
     radiusMeters,
     status,
-    insideSinceCreation,
+    placeId,
   ];
 }

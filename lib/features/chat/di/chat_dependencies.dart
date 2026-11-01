@@ -13,11 +13,16 @@ import '../application/services/chat_notification_service.dart';
 import '../application/services/contact_discovery_service.dart';
 import '../application/services/live_location_service.dart';
 import '../application/services/arrival_alert_service.dart';
+import '../application/services/arrival_geofences.dart';
+import '../application/services/device_battery.dart';
+import '../application/services/geo_share_sender.dart';
 import '../application/services/saved_places_service.dart';
 import '../domain/entities/arrival_alert.dart';
-import '../domain/entities/chat_message.dart';
 import '../domain/entities/geo_share.dart';
 import '../application/services/presence_service.dart';
+import '../application/services/last_seen_privacy_presence_repository.dart';
+import '../data/repositories/local_sticker_pack_repository.dart';
+import '../domain/repositories/sticker_pack_repository.dart';
 import '../application/services/profile_service.dart';
 import '../application/services/push_notification_service.dart';
 import 'package:photo_vault/core/data/firebase_current_user.dart';
@@ -108,7 +113,7 @@ class ChatDependencies {
       this.mediaRepository = mediaRepository;
     }
     if (presenceRepository != null) {
-      this.presenceRepository = presenceRepository;
+      _storagePresenceRepository = presenceRepository;
     }
     if (typingRepository != null) {
       this.typingRepository = typingRepository;
@@ -173,12 +178,28 @@ class ChatDependencies {
 
   /// Swap point for presence: replacing these two bindings with Realtime
   /// Database implementations is the whole cost of that migration.
-  late PresenceRepository presenceRepository = FirestorePresenceRepository();
+  late PresenceRepository _storagePresenceRepository =
+      FirestorePresenceRepository();
+
+  /// The local "Show last seen" setting, pushed in by the app from settings.
+  final ValueNotifier<bool> shareLastSeen = ValueNotifier<bool>(true);
+
+  /// Presence as every consumer should read it: the storage binding wrapped
+  /// with the reciprocal last-seen privacy rule.
+  late final PresenceRepository presenceRepository =
+      LastSeenPrivacyPresenceRepository(
+        inner: _storagePresenceRepository,
+        shareLastSeen: shareLastSeen,
+      );
   late TypingRepository typingRepository = FirestoreTypingRepository();
   late LiveLocationRepository liveLocationRepository =
       FirestoreLiveLocationRepository(cryptoService: cryptoService);
   late LiveLocationService? liveLocationService = Platform.isAndroid
-      ? LiveLocationService(repository: liveLocationRepository)
+      ? LiveLocationService(
+          repository: liveLocationRepository,
+          battery: ChannelBatteryReader(),
+          onLowBattery: _sendLowBatteryNotice,
+        )
       : null;
 
   /// Sends "I've reached X" messages when a saved place is reached.
@@ -186,6 +207,8 @@ class ChatDependencies {
       ? ArrivalAlertService(
           store: FlutterSecureStringKv(const FlutterSecureStorage()),
           sender: _sendArrivalMessage,
+          geofences: ChannelArrivalGeofences(),
+          places: savedPlacesService,
         )
       : null;
 
@@ -195,6 +218,34 @@ class ChatDependencies {
     recipientUid: alert.recipientUid,
     share: GeoShare.arrival(point: alert.point, label: alert.label),
   );
+
+  /// Tells the partner, as a plain thread message, that the sharer's battery is low.
+  Future<void> _sendLowBatteryNotice({
+    required String threadId,
+    required String senderId,
+    required String recipientUid,
+    required int level,
+  }) async {
+    final text = 'Battery is low ($level%). Live location may stop soon.';
+    final encrypted = await cryptoService.encryptMessage(
+      threadId: threadId,
+      plaintext: text,
+    );
+    final sent = await messageRepository.sendMessage(
+      threadId: threadId,
+      senderId: senderId,
+      encryptedText: encrypted,
+    );
+    await threadRepository.updateLastMessage(
+      threadId: threadId,
+      preview: text,
+      sentAt: sent.sentAt,
+    );
+    await threadRepository.incrementUnread(
+      threadId: threadId,
+      recipientUid: recipientUid,
+    );
+  }
 
   /// Your saved places, for sending on demand without opening a chat.
   late final SavedPlacesService? savedPlacesService = Platform.isAndroid
@@ -209,31 +260,15 @@ class ChatDependencies {
     required String senderId,
     required String recipientUid,
     required GeoShare share,
-  }) async {
-    final encrypted = await cryptoService.encryptMessage(
-      threadId: threadId,
-      plaintext: share.encode(),
-    );
-    final sent = await messageRepository.sendMessage(
-      threadId: threadId,
-      senderId: senderId,
-      encryptedText: encrypted,
-      mediaType: switch (share.kind) {
-        GeoShareKind.pin => MessageType.pin,
-        GeoShareKind.route => MessageType.route,
-        GeoShareKind.arrival => MessageType.arrival,
-      },
-    );
-    await threadRepository.updateLastMessage(
-      threadId: threadId,
-      preview: share.preview,
-      sentAt: sent.sentAt,
-    );
-    await threadRepository.incrementUnread(
-      threadId: threadId,
-      recipientUid: recipientUid,
-    );
-  }
+  }) => sendGeoShareMessage(
+    crypto: cryptoService,
+    messages: messageRepository,
+    threads: threadRepository,
+    threadId: threadId,
+    senderId: senderId,
+    recipientUid: recipientUid,
+    share: share,
+  );
 
   late final NotesRepository notesRepository = AppNotesRepository(
     cryptoService: cryptoService,
@@ -309,7 +344,12 @@ class ChatDependencies {
   late final PresenceService presenceService = PresenceService(
     presenceRepository: presenceRepository,
     currentUid: firebaseCurrentUid,
+    shareLastSeen: shareLastSeen,
   );
+
+  /// The user's encrypted, device-local sticker pack.
+  StickerPackRepository stickerPackFor(String userId) =>
+      LocalStickerPackRepository(userId: userId);
 
   late final ChatIdentityService identityService = ChatIdentityService(
     userRepository: userRepository,

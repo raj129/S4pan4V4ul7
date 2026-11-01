@@ -44,6 +44,39 @@ void main() {
     expect(firstDestinationTop - brandBottom, greaterThan(16));
   });
 
+  testWidgets('drawer always offers Mock location; My locations is optional', (
+    tester,
+  ) async {
+    Future<void> pump({bool? show, bool scoped = false}) async {
+      Widget drawer = AppNavigationDrawer(
+        selectedIndex: 0,
+        showMyLocations: show,
+        onDestinationSelected: (_) {},
+      );
+      if (scoped) {
+        drawer = AppDrawerScope(hasMyLocations: () => true, child: drawer);
+      }
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: AppTheme.light,
+          home: Scaffold(
+            body: SizedBox(width: 320, height: 900, child: drawer),
+          ),
+        ),
+      );
+    }
+
+    await pump();
+    expect(find.text('Mock location'), findsOneWidget);
+    expect(find.text('My locations'), findsNothing);
+
+    await pump(show: true);
+    expect(find.text('My locations'), findsOneWidget);
+
+    await pump(scoped: true);
+    expect(find.text('My locations'), findsOneWidget);
+  });
+
   testWidgets('Calculator shell renders without visible vault hints', (
     WidgetTester tester,
   ) async {

@@ -6,6 +6,7 @@ import 'package:photo_vault/features/chat/domain/entities/chat_thread.dart';
 import 'package:photo_vault/features/chat/domain/repositories/thread_repository.dart';
 
 class _ThreadRepository implements ThreadRepository {
+  // ignore: close_sinks - test fake lives for the whole test.
   final updates = StreamController<List<ChatThread>>.broadcast(sync: true);
 
   @override

@@ -1,8 +1,6 @@
-import 'package:flutter/foundation.dart';
-
 import 'chat_message.dart';
 
-@immutable
+/// Domain entity: pure Dart (no Flutter import); all fields are final.
 class GiphyMedia {
   const GiphyMedia({
     required this.id,

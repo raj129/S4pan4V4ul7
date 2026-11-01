@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 
 import 'package:photo_vault/features/chat/application/services/chat_backup_service.dart';
 import 'package:photo_vault/features/vault/application/services/pin_validator.dart';
@@ -13,6 +14,7 @@ import 'package:photo_vault/features/vault/domain/repositories/settings_reposito
 import 'package:photo_vault/core/presentation/theme/app_colors.dart';
 import 'package:photo_vault/core/presentation/theme/app_spacing.dart';
 import '../../widgets/pin_reauth_dialog.dart';
+import 'package:photo_vault/core/platform/battery_optimization.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({
@@ -22,6 +24,8 @@ class SettingsScreen extends StatefulWidget {
     required this.pinValidator,
     required this.onSettingsChanged,
     this.chatBackupService,
+    this.onShowLastSeenChanged,
+    this.batteryOptimization = const AndroidBatteryOptimization(),
     super.key,
   });
   final UserMode mode;
@@ -29,6 +33,12 @@ class SettingsScreen extends StatefulWidget {
   final UnlockVaultUseCase unlockVaultUseCase;
   final PinValidator pinValidator;
   final Future<void> Function() onSettingsChanged;
+
+  /// Reports and requests exemption from Android battery optimisation.
+  final BatteryOptimization batteryOptimization;
+
+  /// Applies a "Show last seen" change to live presence (chat), if available.
+  final Future<void> Function(bool show)? onShowLastSeenChanged;
 
   /// Lazily resolves the chat backup service (it touches Firebase), or null
   /// when chat is unavailable (local mode).
@@ -40,17 +50,45 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   bool _autoLockOnBackground = true;
+  bool _showLastSeen = true;
+  bool? _backgroundAllowed;
+
+  Future<void> _loadBackgroundStatus() async {
+    final allowed = await widget.batteryOptimization.isExempt();
+    if (mounted) setState(() => _backgroundAllowed = allowed);
+  }
+
+  Future<void> _requestBackground() async {
+    await ensureBackgroundAllowed(context, service: widget.batteryOptimization);
+    await _loadBackgroundStatus();
+  }
+
   bool _photoSyncEnabled = false;
   bool _wifiOnlyBackup = true;
   bool _externalStorageMirrorEnabled = true;
   bool _driveEncryptedBackupEnabled = false;
   AppThemePalette _themePalette = AppThemePalette.royalIndigo;
   String _themeMode = 'system';
+  String? _version;
 
   @override
   void initState() {
     super.initState();
     _loadSettings();
+    unawaited(_loadAbout());
+    unawaited(_loadBackgroundStatus());
+  }
+
+  Future<void> _loadAbout() async {
+    String version;
+    try {
+      final info = await PackageInfo.fromPlatform();
+      version = '${info.version} (${info.buildNumber})';
+    } catch (_) {
+      version = 'Unknown';
+    }
+    if (!mounted) return;
+    setState(() => _version = version);
   }
 
   Future<void> _loadSettings() async {
@@ -61,6 +99,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
         .isDriveEncryptedBackupEnabled();
     final autoLock = await widget.settingsRepository
         .isAutoLockOnBackgroundEnabled();
+    final showLastSeen = await widget.settingsRepository
+        .isShowLastSeenEnabled();
     final paletteId = await widget.settingsRepository.getThemePaletteId();
     final themeMode = await widget.settingsRepository.getThemeMode();
     if (!mounted) return;
@@ -69,6 +109,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _externalStorageMirrorEnabled = externalMirror;
       _driveEncryptedBackupEnabled = driveBackup;
       _autoLockOnBackground = autoLock;
+      _showLastSeen = showLastSeen;
       _themePalette = AppThemePalette.fromId(paletteId);
       _themeMode = switch (themeMode) {
         'light' || 'dark' => themeMode!,
@@ -340,23 +381,60 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 leading: const Icon(Icons.password_rounded),
                 title: const Text('Change app PIN'),
                 subtitle: const Text(
-                  'Re-authenticate before choosing a new PIN.',
+                  'Enter your current PIN, then choose a new one.',
                 ),
                 trailing: const Icon(Icons.chevron_right_rounded),
-                onTap: () async {
-                  final allowed = await requirePinReauth(
-                    context: context,
-                    unlockVaultUseCase: widget.unlockVaultUseCase,
-                    pinValidator: widget.pinValidator,
-                    actionLabel: 'change your PIN',
-                  );
-                  if (!allowed || !context.mounted) return;
-                  context.push('/settings/change-pin');
+                // No extra re-auth here: step 1 of Change PIN already checks
+                // the current PIN, and asking twice was confusing.
+                onTap: () => unawaited(context.push('/settings/change-pin')),
+              ),
+            ],
+          ),
+          const SectionHeader('Privacy'),
+          SettingsCard(
+            children: [
+              _SettingsSwitch(
+                icon: Icons.visibility_outlined,
+                title: 'Show last seen',
+                subtitle: _showLastSeen
+                    ? 'Contacts can see when you were last online.'
+                    : "Hidden. You also won't see other people's last seen.",
+                value: _showLastSeen,
+                onChanged: (v) async {
+                  setState(() => _showLastSeen = v);
+                  await widget.settingsRepository.setShowLastSeenEnabled(v);
+                  await widget.onShowLastSeenChanged?.call(v);
                 },
               ),
             ],
           ),
           const SectionHeader('Backup & sync'),
+          SettingsCard(
+            children: [
+              ListTile(
+                leading: Icon(
+                  _backgroundAllowed == false
+                      ? Icons.battery_alert_outlined
+                      : Icons.battery_charging_full_outlined,
+                ),
+                title: const Text('Run in background'),
+                subtitle: Text(switch (_backgroundAllowed) {
+                  null => 'Checking…',
+                  true =>
+                    'Allowed. Live location, alerts and backups keep running.',
+                  false =>
+                    'Restricted by battery saver. Tap to allow so background '
+                        'tasks are not stopped.',
+                }),
+                trailing: _backgroundAllowed == false
+                    ? const Icon(Icons.chevron_right_rounded)
+                    : const Icon(Icons.check_circle_outline_rounded),
+                onTap: _backgroundAllowed == false
+                    ? () => unawaited(_requestBackground())
+                    : null,
+              ),
+            ],
+          ),
           SettingsCard(
             children: [
               _SettingsSwitch(
@@ -480,8 +558,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     actionLabel: 'open restore',
                   );
                   if (!allowed || !context.mounted) return;
-                  context.push('/restore');
+                  unawaited(context.push('/restore'));
                 },
+              ),
+            ],
+          ),
+          const SectionHeader('About'),
+          SettingsCard(
+            children: [
+              ListTile(
+                key: const Key('settings-version-tile'),
+                leading: const Icon(Icons.info_outline_rounded),
+                title: const Text('Version'),
+                subtitle: Text(_version ?? '…'),
               ),
             ],
           ),

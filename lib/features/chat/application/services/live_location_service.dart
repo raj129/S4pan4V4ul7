@@ -1,13 +1,25 @@
 import 'dart:async';
 import 'dart:math';
 
-import 'package:geolocator/geolocator.dart';
 import 'package:uuid/uuid.dart';
+
+import '../../../../core/location/app_location.dart';
+import '../../../../core/location/location_source.dart';
 
 import '../../domain/entities/live_location.dart';
 import '../../domain/repositories/live_location_repository.dart';
+import 'device_battery.dart';
 
 typedef LiveLocationUpdates = Stream<LiveLocationPoint> Function();
+
+/// Tells the partner the sharer's battery is low. Sent once per session.
+typedef LowBatteryNotifier =
+    Future<void> Function({
+      required String threadId,
+      required String senderId,
+      required String recipientUid,
+      required int level,
+    });
 
 /// Owns a single active Android live-location session and its GPS subscription.
 class LiveLocationService {
@@ -15,14 +27,20 @@ class LiveLocationService {
     required LiveLocationRepository repository,
     LiveLocationUpdates? locationUpdates,
     DateTime Function()? clock,
+    BatteryReader? battery,
+    LowBatteryNotifier? onLowBattery,
   }) : _repository = repository,
        _locationUpdates =
            locationUpdates ?? LiveLocationService._geolocatorUpdates,
-       _clock = clock ?? DateTime.now;
+       _clock = clock ?? DateTime.now,
+       _battery = battery,
+       _onLowBattery = onLowBattery;
 
   final LiveLocationRepository _repository;
   final LiveLocationUpdates _locationUpdates;
   final DateTime Function() _clock;
+  final BatteryReader? _battery;
+  final LowBatteryNotifier? _onLowBattery;
   final _uuid = const Uuid();
 
   Timer? _sessionExpiryTimer;
@@ -32,8 +50,10 @@ class LiveLocationService {
   DateTime? _activeStartedAt;
   String? _activeThreadId;
   String? _activeUserId;
+  String? _activeRecipientUid;
   String? _activeSessionId;
   DateTime? _activeExpiresAt;
+  bool _lowBatteryNotified = false;
   bool _writeInFlight = false;
   bool _disposed = false;
 
@@ -56,11 +76,15 @@ class LiveLocationService {
   static const Duration maxSessionDuration = Duration(hours: 8);
   static const Duration writeTimeout = Duration(seconds: 20);
 
+  /// Battery percentage at or below which the partner is told (when not charging).
+  static const int lowBatteryThreshold = 15;
+
   Future<String> startSharing({
     required String threadId,
     required String userId,
     required Duration duration,
     required LiveLocationPoint initialPoint,
+    String? recipientUid,
   }) async {
     if (_disposed) throw StateError('LiveLocationService is disposed.');
     if (duration <= Duration.zero || duration > maxSessionDuration) {
@@ -75,12 +99,19 @@ class LiveLocationService {
     final now = _clock().toUtc();
     final expiresAt = now.add(duration);
     final sessionId = _uuid.v4();
+    _lowBatteryNotified = false;
+    final firstPoint = await _withBattery(
+      initialPoint,
+      threadId: threadId,
+      userId: userId,
+      recipientUid: recipientUid,
+    );
     final startWrite = _repository.startSession(
       sessionId: sessionId,
       threadId: threadId,
       userId: userId,
       duration: duration,
-      initialPoint: initialPoint,
+      initialPoint: firstPoint,
     );
     try {
       await startWrite.timeout(writeTimeout);
@@ -103,12 +134,13 @@ class LiveLocationService {
 
     _activeThreadId = threadId;
     _activeUserId = userId;
+    _activeRecipientUid = recipientUid;
     _activeSessionId = sessionId;
     _activeStartedAt = now;
     _activeExpiresAt = expiresAt;
-    _lastPublishedPoint = initialPoint;
+    _lastPublishedPoint = firstPoint;
     _lastPublishedAt = now;
-    _emitActiveSession(initialPoint);
+    _emitActiveSession(firstPoint);
 
     _sessionExpiryTimer = Timer(duration, () {
       unawaited(_stopAfterExpiry());
@@ -174,22 +206,62 @@ class LiveLocationService {
 
     _writeInFlight = true;
     try {
+      final enriched = await _withBattery(
+        point,
+        threadId: threadId,
+        userId: userId,
+        recipientUid: _activeRecipientUid,
+      );
       await _repository
           .updateLocation(
             sessionId: sessionId,
             threadId: threadId,
             userId: userId,
-            point: point,
+            point: enriched,
           )
           .timeout(writeTimeout);
-      _lastPublishedPoint = point;
+      _lastPublishedPoint = enriched;
       _lastPublishedAt = _clock().toUtc();
-      _emitActiveSession(point);
+      _emitActiveSession(enriched);
     } catch (error) {
       _reportError(error);
     } finally {
       _writeInFlight = false;
     }
+  }
+
+  /// Adds the battery level to [point] and sends the one-time low-battery
+  /// notice when it first drops to the threshold while not charging.
+  Future<LiveLocationPoint> _withBattery(
+    LiveLocationPoint point, {
+    required String threadId,
+    required String userId,
+    required String? recipientUid,
+  }) async {
+    final reader = _battery;
+    if (reader == null) return point;
+    final status = await reader.read();
+    if (status == null) return point;
+
+    final low = !status.charging && status.level <= lowBatteryThreshold;
+    final notify = _onLowBattery;
+    if (!low) {
+      _lowBatteryNotified = false;
+    } else if (!_lowBatteryNotified && notify != null && recipientUid != null) {
+      _lowBatteryNotified = true;
+      try {
+        await notify(
+          threadId: threadId,
+          senderId: userId,
+          recipientUid: recipientUid,
+          level: status.level,
+        );
+      } catch (error) {
+        _lowBatteryNotified = false;
+        _reportError(error);
+      }
+    }
+    return point.withBattery(level: status.level, charging: status.charging);
   }
 
   Future<void> stopSharing() async {
@@ -224,6 +296,7 @@ class LiveLocationService {
   void _clearActiveSession() {
     _activeThreadId = null;
     _activeUserId = null;
+    _activeRecipientUid = null;
     _activeSessionId = null;
     _activeStartedAt = null;
     _activeExpiresAt = null;
@@ -261,29 +334,24 @@ class LiveLocationService {
   }
 
   static Stream<LiveLocationPoint> _geolocatorUpdates() {
-    return Geolocator.getPositionStream(
-      locationSettings: AndroidSettings(
-        accuracy: LocationAccuracy.high,
-        distanceFilter: minDisplacementMeters.round(),
-        intervalDuration: minWriteInterval,
-        foregroundNotificationConfig: const ForegroundNotificationConfig(
-          notificationTitle: 'Calculator',
-          notificationText: 'Syncing in background',
-          notificationChannelName: 'Calculator notifications',
-          enableWakeLock: true,
-          setOngoing: true,
-        ),
-      ),
-    ).map(
-      (position) => LiveLocationPoint(
-        latitude: position.latitude,
-        longitude: position.longitude,
-        accuracy: position.accuracy,
-        heading: position.heading,
-        speed: position.speed,
-        timestamp: position.timestamp.toUtc(),
-      ),
-    );
+    return AppLocation.instance
+        .updates(
+          LocationUpdateConfig(
+            distanceFilterMeters: minDisplacementMeters.round(),
+            interval: minWriteInterval,
+            backgroundNotification: true,
+          ),
+        )
+        .map(
+          (fix) => LiveLocationPoint(
+            latitude: fix.latitude,
+            longitude: fix.longitude,
+            accuracy: fix.accuracy,
+            heading: fix.heading,
+            speed: fix.speed,
+            timestamp: fix.timestamp.toUtc(),
+          ),
+        );
   }
 
   double _calculateDistance(

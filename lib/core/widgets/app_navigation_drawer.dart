@@ -9,8 +9,34 @@ String? navigationPathForDestination(int index) => switch (index) {
   3 => '/files',
   4 => '/notes',
   5 => '/settings',
+  6 => '/settings/developer',
+  7 => '/chat/my-locations',
   _ => null,
 };
+
+/// Destinations that open above the current tab instead of replacing it.
+bool isPushedDestination(int index) => index == 6 || index == 7;
+
+/// Tells the drawer, wherever it is hosted, which optional entries apply.
+/// Evaluated when the drawer is built, i.e. each time it is opened.
+class AppDrawerScope extends InheritedWidget {
+  const AppDrawerScope({
+    super.key,
+    required this.hasMyLocations,
+    required super.child,
+  });
+
+  final bool Function() hasMyLocations;
+
+  static bool myLocationsAvailable(BuildContext context) =>
+      context
+          .getInheritedWidgetOfExactType<AppDrawerScope>()
+          ?.hasMyLocations() ??
+      false;
+
+  @override
+  bool updateShouldNotify(AppDrawerScope oldWidget) => false;
+}
 
 /// The app's single navigation drawer UI.
 ///
@@ -22,6 +48,7 @@ class AppNavigationDrawer extends StatelessWidget {
     super.key,
     required this.selectedIndex,
     required this.onDestinationSelected,
+    this.showMyLocations,
   });
 
   /// Index of the currently active top-level destination (Chat, Photos,
@@ -29,6 +56,10 @@ class AppNavigationDrawer extends StatelessWidget {
   final int selectedIndex;
 
   final ValueChanged<int> onDestinationSelected;
+
+  /// Overrides [AppDrawerScope]; saved places and arrival alerts need chat
+  /// sign-in on Android.
+  final bool? showMyLocations;
 
   @override
   Widget build(BuildContext context) {
@@ -122,6 +153,31 @@ class AppNavigationDrawer extends StatelessWidget {
           selectedIcon: Icon(Icons.settings),
           label: Text('Settings'),
         ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(
+            AppSpacing.xl,
+            AppSpacing.lg,
+            AppSpacing.xl,
+            AppSpacing.sm,
+          ),
+          child: Text(
+            'Location',
+            style: theme.textTheme.titleSmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+        ),
+        const NavigationDrawerDestination(
+          icon: Icon(Icons.location_searching_outlined),
+          selectedIcon: Icon(Icons.location_searching),
+          label: Text('Mock location'),
+        ),
+        if (showMyLocations ?? AppDrawerScope.myLocationsAvailable(context))
+          const NavigationDrawerDestination(
+            icon: Icon(Icons.pin_drop_outlined),
+            selectedIcon: Icon(Icons.pin_drop),
+            label: Text('My locations'),
+          ),
       ],
     );
   }

@@ -19,6 +19,8 @@ The sharing action and map are intentionally unavailable on Windows. The Windows
 
 ## Pins, routes and arrival alerts
 
-- **Pin / Route** (attach sheet, or type `/pin`): drop a pin or choose a start and destination. The payload is encrypted as the message body. Routes are drawn from the Google Directions API; enable it and set `GOOGLE_DIRECTIONS_API_KEY` in `.api_keys.json` (a server-side key, not restricted to Android apps). Without it a route is a straight line.
+- **Pin / Route** (attach sheet, or type `/pin`): drop a pin or choose a start and destination. The payload is encrypted as the message body. Routes are drawn from the Google Routes API using `GOOGLE_MAPS_ANDROID_API_KEY`; enable the Routes API on that key. Without it a route is a straight line.
+- **Place search** (Android only): the map picker shows a search box when the map is configured. It uses `GOOGLE_MAPS_ANDROID_API_KEY`; enable the Places API (New) on that key.
+- **Key security:** this key ships inside the APK. Remove its Android app restriction only if you accept that, and restrict it to Maps SDK for Android, Routes API, and Places API (New), with quotas and a budget alert.
 - **Arrival alert** (attach sheet, or type `/arrive`): add several places for the current chat. When the device comes within 100 m of a place, an encrypted "I have reached <place>" message is sent once to the chat partner. Alerts are stored in secure storage on the device, run while the location foreground service is allowed (**Allow all the time** recommended), and are cleared on sign-out.
 - Any of these messages, including live locations, can be replied to by swiping or from the long-press menu.

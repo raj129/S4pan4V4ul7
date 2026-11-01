@@ -13,6 +13,7 @@ import '../../application/media/media_send_status.dart';
 import '../screens/chat_image_viewer_screen.dart';
 import 'attachment_download_progress.dart';
 import 'attachment_upload_progress.dart';
+import 'chat_media_sizes.dart';
 
 export '../../application/media/chat_media_loader.dart';
 
@@ -218,10 +219,16 @@ class _ChatMediaPreviewState extends State<ChatMediaPreview> {
     final meta = widget.message.mediaMeta;
     // Reserve the final size up front using the clear-text dimensions, so the
     // bubble does not jump when the decrypted image arrives.
-    const width = 220.0;
-    final height = widget.message.mediaType == MessageType.sticker
+    final isSticker = widget.message.mediaType == MessageType.sticker;
+    final width = isSticker
+        ? ChatMediaSizes.sticker
+        : ChatMediaSizes.mediaWidth;
+    final height = isSticker
         ? width
-        : (width / (meta?.aspectRatio ?? 4 / 3)).clamp(80.0, 320.0);
+        : (width / (meta?.aspectRatio ?? 4 / 3)).clamp(
+            ChatMediaSizes.mediaMinHeight,
+            ChatMediaSizes.mediaMaxHeight,
+          );
 
     return GestureDetector(
       onTap: widget.onTap,

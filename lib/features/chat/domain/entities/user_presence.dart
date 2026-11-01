@@ -8,16 +8,20 @@ import 'package:equatable/equatable.dart';
 /// would have to change on that day. Keeping it in its own value object means
 /// the swap touches only the repository binding.
 class UserPresence extends Equatable {
-  const UserPresence({required this.isOnline, required this.lastSeen});
+  const UserPresence({required this.isOnline, this.lastSeen});
 
   final bool isOnline;
-  final DateTime lastSeen;
+
+  /// When the user was last active, or null when unknown or hidden by either
+  /// side's "Show last seen" privacy setting.
+  final DateTime? lastSeen;
 
   /// Fallback for a user who has never published presence.
-  static final UserPresence offline = UserPresence(
-    isOnline: false,
-    lastSeen: DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
-  );
+  static const UserPresence offline = UserPresence(isOnline: false);
+
+  /// This presence with the last-seen time removed (online state is kept).
+  UserPresence withoutLastSeen() =>
+      lastSeen == null ? this : UserPresence(isOnline: isOnline);
 
   @override
   List<Object?> get props => [isOnline, lastSeen];

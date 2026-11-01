@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:photo_vault/features/chat/application/media/android_chat_downloads.dart';
@@ -32,24 +34,24 @@ void main() {
     );
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, (call) async {
-      calls.add(call.method);
-      if (call.method == 'list') {
-        return [
-          {
-            'uid': uid,
-            'threadId': 'alice_bob',
-            'storagePath': path,
-            'state': state,
-            'processedBytes': 3,
-            'totalBytes': 3,
-          },
-        ];
-      }
-      if (call.method == 'read') return Uint8List.fromList([1, 2, 3]);
-      if (call.method == 'resume') state = 'completed';
-      if (call.method == 'cancel') state = 'cancelled';
-      return null;
-    });
+          calls.add(call.method);
+          if (call.method == 'list') {
+            return [
+              {
+                'uid': uid,
+                'threadId': 'alice_bob',
+                'storagePath': path,
+                'state': state,
+                'processedBytes': 3,
+                'totalBytes': 3,
+              },
+            ];
+          }
+          if (call.method == 'read') return Uint8List.fromList([1, 2, 3]);
+          if (call.method == 'resume') state = 'completed';
+          if (call.method == 'cancel') state = 'cancelled';
+          return null;
+        });
   });
   tearDown(() {
     downloads.dispose();
@@ -59,7 +61,7 @@ void main() {
 
   test(
     'simultaneous consumers share acquisition but own separate buffers',
-        () async {
+    () async {
       final first = downloads.acquire(
         uid: uid,
         threadId: 'alice_bob',
@@ -84,23 +86,19 @@ void main() {
 
   test(
     'paused acquisition waits for explicit resume and retains progress',
-        () async {
+    () async {
       state = 'paused';
       var resolved = false;
       final result = downloads.acquire(
         uid: uid,
         threadId: 'alice_bob',
         storagePath: path,
-      )
-        ..then((_) => resolved = true);
+      );
+      unawaited(result.then((_) => resolved = true));
       await Future<void>.delayed(const Duration(milliseconds: 30));
       expect(resolved, isFalse);
-      expect(downloads
-          .job(path)
-          ?.state, MediaUploadLifecycle.paused);
-      expect(downloads
-          .job(path)
-          ?.processedBytes, 3);
+      expect(downloads.job(path)?.state, MediaUploadLifecycle.paused);
+      expect(downloads.job(path)?.processedBytes, 3);
       await downloads.command(path, 'resume');
       expect(await result, [1, 2, 3]);
     },
@@ -143,27 +141,25 @@ void main() {
 
   test('malformed offsets and states are rejected', () {
     expect(
-          () =>
-          AndroidDownloadJob.fromMap({
-            'uid': 'alice',
-            'threadId': 'alice_bob',
-            'storagePath': path,
-            'state': 'uploading',
-            'processedBytes': 4,
-            'totalBytes': 3,
-          }),
+      () => AndroidDownloadJob.fromMap({
+        'uid': 'alice',
+        'threadId': 'alice_bob',
+        'storagePath': path,
+        'state': 'uploading',
+        'processedBytes': 4,
+        'totalBytes': 3,
+      }),
       throwsFormatException,
     );
     expect(
-          () =>
-          AndroidDownloadJob.fromMap({
-            'uid': 'alice',
-            'threadId': 'alice_bob',
-            'storagePath': path,
-            'state': 'unknown',
-            'processedBytes': 0,
-            'totalBytes': 3,
-          }),
+      () => AndroidDownloadJob.fromMap({
+        'uid': 'alice',
+        'threadId': 'alice_bob',
+        'storagePath': path,
+        'state': 'unknown',
+        'processedBytes': 0,
+        'totalBytes': 3,
+      }),
       throwsFormatException,
     );
   });
@@ -188,7 +184,7 @@ void main() {
 
   test(
     'clearing and reusing the same account fences previous acquisitions',
-        () async {
+    () async {
       state = 'paused';
       final old = downloads.acquire(
         uid: uid,

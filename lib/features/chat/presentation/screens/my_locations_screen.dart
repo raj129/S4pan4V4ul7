@@ -5,12 +5,12 @@ import 'package:flutter/material.dart';
 import '../../application/services/arrival_alert_service.dart';
 import '../../application/services/saved_places_service.dart';
 import '../../domain/entities/arrival_alert.dart';
+import '../widgets/arrival_place_sheets.dart';
 import '../../domain/entities/chat_user.dart';
 import '../../domain/entities/geo_share.dart';
 import '../../domain/entities/saved_place.dart';
 import '../state/thread_list_cubit.dart';
 import '../widgets/arrival_permissions.dart';
-import 'location_picker_screen.dart';
 
 typedef SendGeoShare =
     Future<void> Function({
@@ -76,9 +76,7 @@ class _MyLocationsScreenState extends State<MyLocationsScreen> {
 
   void _loadAlerts() {
     if (!mounted) return;
-    setState(
-      () => _alerts = widget.arrivalService.alertsOwnedBy(widget.myUid),
-    );
+    setState(() => _alerts = widget.arrivalService.alertsOwnedBy(widget.myUid));
   }
 
   void _snack(String text) {
@@ -87,21 +85,11 @@ class _MyLocationsScreenState extends State<MyLocationsScreen> {
   }
 
   Future<void> _addPlace() async {
-    final share = await Navigator.of(context).push<GeoShare>(
-      MaterialPageRoute(
-        builder: (_) => const LocationPickerScreen(
-          allowRoute: false,
-          requireLabel: true,
-          title: 'Add place',
-          confirmLabel: 'Save place',
-        ),
-      ),
-    );
-    if (share == null) return;
-    await widget.placesService.add(
+    await addSavedPlace(
+      context,
+      places: widget.placesService,
       ownerUid: widget.myUid,
-      label: share.label,
-      point: share.point,
+      existing: _places,
     );
   }
 
@@ -169,17 +157,34 @@ class _MyLocationsScreenState extends State<MyLocationsScreen> {
   Future<void> _notifyOnArrival(SavedPlace place) async {
     final target = await _pickContact('Tell on arrival at "${place.label}"');
     if (target == null || !mounted) return;
-    if (!await ensureArrivalPermissions(context)) return;
+    if (!await ensureArrivalPermissions(context) || !mounted) return;
     await widget.arrivalService.add(
       ownerUid: widget.myUid,
       threadId: target.thread.threadId,
       recipientUid: target.otherUser.uid,
       label: place.label,
       point: place.point,
+      radiusMeters: place.radiusMeters,
+      placeId: place.id,
     );
+    final error = widget.arrivalService.fenceError;
     _snack(
-      '${widget.nameOf(target.otherUser)} will be told when you reach '
-      '${place.label}.',
+      error == null
+          ? '${widget.nameOf(target.otherUser)} will be told when you reach '
+                '${place.label}.'
+          : 'Saved, but not active: $error',
+    );
+  }
+
+  Future<void> _editPlace(SavedPlace place) async {
+    await editSavedPlace(
+      context,
+      places: widget.placesService,
+      place: place,
+      others: [
+        for (final p in _places)
+          if (p.id != place.id) p,
+      ],
     );
   }
 
@@ -220,9 +225,16 @@ class _MyLocationsScreenState extends State<MyLocationsScreen> {
             ),
           for (final place in _places)
             ListTile(
-              leading: Icon(Icons.place_rounded, color: cs.primary),
+              leading: CircleAvatar(
+                radius: 10,
+                backgroundColor: Color(place.tagColor ?? 0xFF757575),
+              ),
               title: Text(place.label),
-              subtitle: const Text('Tap to send now'),
+              subtitle: Text(
+                '${place.tagName ?? 'No tag'} - ${place.radiusMeters.round()} m'
+                '${place.visitCount > 0 ? ' - visited ${place.visitCount}x' : ''}'
+                '${place.temporary ? ' - temporary' : ''}',
+              ),
               onTap: () => _sendNow(place),
               trailing: PopupMenuButton<String>(
                 onSelected: (value) {
@@ -231,6 +243,8 @@ class _MyLocationsScreenState extends State<MyLocationsScreen> {
                       unawaited(_sendNow(place));
                     case 'arrive':
                       unawaited(_notifyOnArrival(place));
+                    case 'edit':
+                      unawaited(_editPlace(place));
                     case 'delete':
                       unawaited(widget.placesService.remove(place.id));
                   }
@@ -241,6 +255,7 @@ class _MyLocationsScreenState extends State<MyLocationsScreen> {
                     value: 'arrive',
                     child: Text('Tell on arrival'),
                   ),
+                  PopupMenuItem(value: 'edit', child: Text('Radius and tag')),
                   PopupMenuItem(value: 'delete', child: Text('Delete')),
                 ],
               ),
@@ -262,7 +277,10 @@ class _MyLocationsScreenState extends State<MyLocationsScreen> {
                 title: Text(alert.label),
                 subtitle: Text(
                   alert.isArmed
-                      ? 'Will tell ${_recipientName(alert)} on arrival'
+                      ? (widget.arrivalService.fenceError != null
+                            ? 'Not active: ${widget.arrivalService.fenceError}'
+                            : 'Will tell ${_recipientName(alert)} within '
+                                  '${alert.radiusMeters.round()} m')
                       : 'Reached - ${_recipientName(alert)} was told',
                 ),
                 trailing: Row(
@@ -275,7 +293,7 @@ class _MyLocationsScreenState extends State<MyLocationsScreen> {
                         onPressed: () => widget.arrivalService.rearm(alert.id),
                       ),
                     IconButton(
-                      tooltip: 'Remove',
+                      tooltip: 'Cancel alert',
                       icon: const Icon(Icons.delete_outline_rounded),
                       onPressed: () => widget.arrivalService.remove(alert.id),
                     ),

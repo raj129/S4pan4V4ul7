@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io' show Platform;
 
 import 'package:flutter/foundation.dart' show defaultTargetPlatform;
 import 'package:flutter/material.dart';
@@ -10,7 +11,9 @@ import './app_session.dart';
 import './external_activity_guard.dart';
 import './android_chat_viewer_guard.dart';
 import '../di/app_dependencies.dart';
+import '../location/presentation/mock_location_banner.dart';
 import '../routing/app_router.dart';
+import '../widgets/app_navigation_drawer.dart';
 import '../../features/vault/presentation/state/onboarding_cubit.dart';
 import '../presentation/theme/app_colors.dart';
 import '../presentation/theme/app_theme.dart';
@@ -62,7 +65,20 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _initShareIntentHandling();
-    unawaited(_deps.initialize());
+    // Database/storage setup failing must not be silent: report it (to
+    // Crashlytics in release via FlutterError.onError) instead of leaving the
+    // app running against a half-initialised store.
+    unawaited(
+      _deps.initialize().catchError((Object error, StackTrace stack) {
+        FlutterError.reportError(
+          FlutterErrorDetails(
+            exception: error,
+            stack: stack,
+            library: 'app initialisation',
+          ),
+        );
+      }),
+    );
     unawaited(_hydrateSessionSettings());
   }
 
@@ -112,7 +128,8 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
     ReceiveSharingIntent.instance
         .getInitialMedia()
         .then(_handleSharedFiles)
-        .catchError((_) {});
+        .catchError((_) {})
+        .ignore();
   }
 
   Future<void> _handleSharedFiles(List<SharedMediaFile> files) async {
@@ -134,7 +151,7 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
       if (!mounted) return;
     }
     _router.go('/lock?returnTo=%2Fimport%2Fshare-intent');
-    ReceiveSharingIntent.instance.reset();
+    unawaited(ReceiveSharingIntent.instance.reset());
   }
 
   @override
@@ -187,6 +204,18 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
       darkTheme: AppTheme.forPalette(_themePalette, Brightness.dark),
       themeMode: _themeMode,
       routerConfig: _router,
+      builder: (context, child) => AppDrawerScope(
+        hasMyLocations: () =>
+            Platform.isAndroid &&
+            _deps.chatDependencies.authService.currentUid != null,
+        child: MockLocationBanner(
+          controller: _deps.location.mock,
+          visibilityListenable: _session,
+          isVisible: () => _session.isUnlocked,
+          onOpen: () => _router.push('/settings/developer'),
+          child: child ?? const SizedBox.shrink(),
+        ),
+      ),
     );
   }
 }

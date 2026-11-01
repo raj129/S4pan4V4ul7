@@ -46,7 +46,12 @@ class BaseScreenShell extends StatelessWidget {
               onDestinationSelected: (index) {
                 Navigator.of(context).pop();
                 final path = navigationPathForDestination(index);
-                if (path != null) context.go(path);
+                if (path == null) return;
+                if (isPushedDestination(index)) {
+                  context.push(path);
+                } else {
+                  context.go(path);
+                }
               },
             )
           : null,

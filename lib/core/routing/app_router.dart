@@ -15,6 +15,7 @@ import '../../features/chat/presentation/app/chat_app.dart';
 import '../app/main_scaffold.dart';
 import '../presentation/features/utility_shell/utility_shell.dart';
 import '../../features/chat/presentation/screens/new_chat_screen.dart';
+import '../../features/chat/presentation/screens/my_locations_route.dart';
 import '../../features/chat/presentation/screens/profile_screen.dart';
 import '../../features/chat/presentation/screens/thread_screen.dart';
 import '../../features/chat/domain/entities/chat_user.dart';
@@ -39,6 +40,7 @@ import '../../features/vault/presentation/state/onboarding_cubit.dart';
 import '../../features/vault/presentation/state/onboarding_state.dart';
 import '../app/app_session.dart';
 import '../di/app_dependencies.dart';
+import '../location/presentation/developer_options_screen.dart';
 
 /// Builds the app's [GoRouter] configuration.
 ///
@@ -174,6 +176,9 @@ void _onOnboardingStateChanged(
   required AppSessionState session,
 }) {
   if (state is! OnboardingVaultCreated) return;
+  // The PIN was just created and confirmed; asking for it again on the lock
+  // screen was the "enter it three times" confusion.
+  session.unlock();
   session.mode = state.mode;
   unawaited(deps.settingsRepository.saveUserMode(state.mode));
   unawaited(deps.settingsRepository.setCalculatorOnboardingCompleted(true));
@@ -255,6 +260,11 @@ GoRoute _chatRoute(AppDependencies deps, AppSessionState session) {
       userMode: session.mode,
     ),
     routes: [
+      GoRoute(
+        path: 'my-locations',
+        builder: (context, state) =>
+            MyLocationsRoute(dependencies: deps.chatDependencies),
+      ),
       GoRoute(
         path: 'profile',
         builder: (context, state) {
@@ -363,8 +373,12 @@ GoRoute _chatRoute(AppDependencies deps, AppSessionState session) {
             arrivalAlertService: Platform.isAndroid
                 ? deps.chatDependencies.arrivalAlertService
                 : null,
+            savedPlacesService: Platform.isAndroid
+                ? deps.chatDependencies.savedPlacesService
+                : null,
             notesRepository: deps.chatDependencies.notesRepository,
             chatDraftRepository: deps.chatDependencies.draftRepository,
+            stickerPackFactory: deps.chatDependencies.stickerPackFor,
           );
           final providedCubit = args.activeThreadCubit;
           Widget withThreadList(Widget child) {
@@ -481,6 +495,14 @@ GoRoute _settingsRoute(
       pinValidator: deps.pinValidator,
       onSettingsChanged: onSettingsChanged,
       chatBackupService: () => deps.chatDependencies.backupService,
+      onShowLastSeenChanged: (show) async {
+        try {
+          await deps.chatDependencies.presenceService.setShareLastSeen(show);
+        } catch (_) {
+          // Chat unavailable (local mode / offline): the stored setting is
+          // applied when chat next starts.
+        }
+      },
     ),
     routes: [
       GoRoute(
@@ -496,6 +518,14 @@ GoRoute _settingsRoute(
               newPin: newPin,
             );
           },
+        ),
+      ),
+      GoRoute(
+        path: 'developer',
+        builder: (context, state) => DeveloperOptionsScreen(
+          location: deps.location,
+          routes: deps.trafficRouteService,
+          settingsRepository: deps.settingsRepository,
         ),
       ),
     ],

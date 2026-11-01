@@ -273,82 +273,66 @@ void main() {
   });
 
   group('portability', () {
-    test(
-      'a wrapped key restores history on another device',
-      () async {
-        // Device 1 sets up a conversation and writes a message.
-        await crypto.getOrCreatePublicKey();
-        final other = ChatCryptoService(storage: _FakeSecureStorage());
-        final otherPub = await other.getOrCreatePublicKey();
-        await crypto.deriveAndStoreThreadKey(
-          threadId: 't1',
-          otherPublicKeyB64: otherPub,
-        );
-        final ciphertext = await crypto.encryptMessage(
-          threadId: 't1',
-          plaintext: 'old history',
-        );
+    test('a wrapped key restores history on another device', () async {
+      // Device 1 sets up a conversation and writes a message.
+      await crypto.getOrCreatePublicKey();
+      final other = ChatCryptoService(storage: _FakeSecureStorage());
+      final otherPub = await other.getOrCreatePublicKey();
+      await crypto.deriveAndStoreThreadKey(
+        threadId: 't1',
+        otherPublicKeyB64: otherPub,
+      );
+      final ciphertext = await crypto.encryptMessage(
+        threadId: 't1',
+        plaintext: 'old history',
+      );
 
-        final wrapped = await crypto.exportWrappedIdentityKey('1234');
+      final wrapped = await crypto.exportWrappedIdentityKey('1234');
 
-        // Device 2: nothing but the Gmail-backed blob and the PIN.
-        final restored = ChatCryptoService(storage: _FakeSecureStorage());
-        await restored.importWrappedIdentityKey(
-          wrapped: _cheapen(wrapped),
-          pin: '1234',
-        );
-        await restored.deriveAndStoreThreadKey(
-          threadId: 't1',
-          otherPublicKeyB64: otherPub,
-        );
+      // Device 2: nothing but the Gmail-backed blob and the PIN.
+      final restored = ChatCryptoService(storage: _FakeSecureStorage());
+      await restored.importWrappedIdentityKey(
+        wrapped: _cheapen(wrapped),
+        pin: '1234',
+      );
+      await restored.deriveAndStoreThreadKey(
+        threadId: 't1',
+        otherPublicKeyB64: otherPub,
+      );
 
-        expect(
-          await restored.decryptMessage(
-            threadId: 't1',
-            encryptedB64: ciphertext,
-          ),
-          'old history',
-        );
-      },
-      timeout: const Timeout(Duration(minutes: 3)),
-    );
+      expect(
+        await restored.decryptMessage(threadId: 't1', encryptedB64: ciphertext),
+        'old history',
+      );
+    }, timeout: const Timeout(Duration(minutes: 3)));
 
-    test(
-      'the wrong PIN is rejected rather than yielding garbage',
-      () async {
-        await crypto.getOrCreatePublicKey();
-        final wrapped = await crypto.exportWrappedIdentityKey('1234');
+    test('the wrong PIN is rejected rather than yielding garbage', () async {
+      await crypto.getOrCreatePublicKey();
+      final wrapped = await crypto.exportWrappedIdentityKey('1234');
 
-        final restored = ChatCryptoService(storage: _FakeSecureStorage());
-        expect(
-          () =>
-              restored.importWrappedIdentityKey(wrapped: wrapped, pin: '9999'),
-          throwsA(isA<WrongPinException>()),
-        );
-      },
-      timeout: const Timeout(Duration(minutes: 3)),
-    );
+      final restored = ChatCryptoService(storage: _FakeSecureStorage());
+      expect(
+        () => restored.importWrappedIdentityKey(wrapped: wrapped, pin: '9999'),
+        throwsA(isA<WrongPinException>()),
+      );
+    }, timeout: const Timeout(Duration(minutes: 3)));
 
-    test(
-      'importing clears stale thread keys',
-      () async {
-        await crypto.getOrCreatePublicKey();
-        final other = ChatCryptoService(storage: _FakeSecureStorage());
-        await crypto.deriveAndStoreThreadKey(
-          threadId: 't1',
-          otherPublicKeyB64: await other.getOrCreatePublicKey(),
-        );
-        expect(storage.values.containsKey('chat_thread_key_t1'), isTrue);
+    test('importing clears stale thread keys', () async {
+      await crypto.getOrCreatePublicKey();
+      final other = ChatCryptoService(storage: _FakeSecureStorage());
+      await crypto.deriveAndStoreThreadKey(
+        threadId: 't1',
+        otherPublicKeyB64: await other.getOrCreatePublicKey(),
+      );
+      expect(storage.values.containsKey('chat_thread_key_t1'), isTrue);
 
-        final wrapped = await crypto.exportWrappedIdentityKey('1234');
-        await crypto.importWrappedIdentityKey(wrapped: wrapped, pin: '1234');
+      final wrapped = await crypto.exportWrappedIdentityKey('1234');
+      await crypto.importWrappedIdentityKey(wrapped: wrapped, pin: '1234');
 
-        // Keys derived from the previous identity would decrypt nothing, so they
-        // must not survive the import.
-        expect(storage.values.containsKey('chat_thread_key_t1'), isFalse);
-      },
-      timeout: const Timeout(Duration(minutes: 3)),
-    );
+      // Keys derived from the previous identity would decrypt nothing, so they
+      // must not survive the import.
+      expect(storage.values.containsKey('chat_thread_key_t1'), isFalse);
+    }, timeout: const Timeout(Duration(minutes: 3)));
 
     test('uses a high PBKDF2 iteration count', () {
       // The wrapped blob is stored in Firestore and a PIN is low entropy, so a

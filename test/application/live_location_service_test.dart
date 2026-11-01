@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:photo_vault/features/chat/application/services/device_battery.dart';
 import 'package:photo_vault/features/chat/application/services/live_location_service.dart';
 import 'package:photo_vault/features/chat/domain/entities/live_location.dart';
 import 'package:photo_vault/features/chat/domain/repositories/live_location_repository.dart';
@@ -146,6 +147,95 @@ void main() {
     expect(session.isLive, isFalse);
     expect(session.currentPoint, equals(firstPoint));
   });
+
+  group('battery', () {
+    test('adds battery to published points and notifies partner once when low', () async {
+      final notices = <(String, String, String, int)>[];
+      final battery = _FakeBattery(const BatteryStatus(level: 14, charging: false));
+      final lowService = LiveLocationService(
+        repository: repository,
+        locationUpdates: () => positions.stream,
+        clock: () => now,
+        battery: battery,
+        onLowBattery: ({
+          required threadId,
+          required senderId,
+          required recipientUid,
+          required level,
+        }) async {
+          notices.add((threadId, senderId, recipientUid, level));
+        },
+      );
+      addTearDown(lowService.dispose);
+
+      await lowService.startSharing(
+        threadId: 'alice_bob',
+        userId: 'alice',
+        duration: const Duration(minutes: 15),
+        initialPoint: firstPoint,
+        recipientUid: 'bob',
+      );
+      expect(repository.started.single.initialPoint.batteryLevel, 14);
+      expect(repository.started.single.initialPoint.charging, isFalse);
+
+      now = now.add(const Duration(seconds: 11));
+      await lowService.onNewLocation(
+        LiveLocationPoint(
+          latitude: firstPoint.latitude + 0.0002,
+          longitude: firstPoint.longitude,
+          accuracy: 6,
+          timestamp: now,
+        ),
+      );
+      expect(notices, [('alice_bob', 'alice', 'bob', 14)]);
+
+      battery.status = const BatteryStatus(level: 13, charging: false);
+      now = now.add(const Duration(seconds: 11));
+      await lowService.onNewLocation(
+        LiveLocationPoint(
+          latitude: firstPoint.latitude + 0.0004,
+          longitude: firstPoint.longitude,
+          accuracy: 6,
+          timestamp: now,
+        ),
+      );
+      expect(notices, hasLength(1));
+
+      battery.status = const BatteryStatus(level: 13, charging: true);
+      now = now.add(const Duration(seconds: 11));
+      await lowService.onNewLocation(
+        LiveLocationPoint(
+          latitude: firstPoint.latitude + 0.0006,
+          longitude: firstPoint.longitude,
+          accuracy: 6,
+          timestamp: now,
+        ),
+      );
+      battery.status = const BatteryStatus(level: 12, charging: false);
+      now = now.add(const Duration(seconds: 11));
+      await lowService.onNewLocation(
+        LiveLocationPoint(
+          latitude: firstPoint.latitude + 0.0008,
+          longitude: firstPoint.longitude,
+          accuracy: 6,
+          timestamp: now,
+        ),
+      );
+      expect(notices, hasLength(2));
+      expect(repository.updated.last.batteryLevel, 12);
+
+      await lowService.stopSharing();
+    });
+  });
+}
+
+class _FakeBattery implements BatteryReader {
+  _FakeBattery(this.status);
+
+  BatteryStatus? status;
+
+  @override
+  Future<BatteryStatus?> read() async => status;
 }
 
 class _FakeLiveLocationRepository implements LiveLocationRepository {

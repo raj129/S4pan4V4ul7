@@ -8,6 +8,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:workmanager/workmanager.dart';
 
@@ -15,11 +16,18 @@ import '../crypto/chat_crypto_service.dart';
 import '../../data/repositories/drift_message_cache_repository.dart';
 import 'package:photo_vault/core/data/repositories/firebase_auth_repository.dart';
 import '../../data/repositories/firestore_message_repository.dart';
+import '../../data/repositories/firestore_thread_repository.dart';
 import '../../data/repositories/google_drive_chat_backup_store.dart';
 import '../../data/repositories/local_chat_backup_store.dart';
 import 'package:photo_vault/firebase_options.dart';
 import 'package:photo_vault/core/storage/local_db/vault_database.dart';
+import 'package:photo_vault/features/vault/data/repositories/flutter_secure_string_kv.dart';
+import '../../domain/entities/geo_share.dart';
+import 'arrival_alert_service.dart';
+import 'arrival_geofences.dart';
 import 'chat_backup_service.dart';
+import 'geo_share_sender.dart';
+import 'saved_places_service.dart';
 import '../media/chat_media_cache.dart';
 import 'chat_receive_service.dart';
 import '../media/android_chat_downloads.dart';
@@ -32,10 +40,17 @@ const googleServerClientId =
 const _nightlyTaskName = 'photo_vault.chat_backup.nightly';
 const _receiveTaskName = 'photo_vault.chat_receive';
 
+/// Sent by the native geofence receiver (`ArrivalSendScheduler.TASK`).
+const arrivalSendTaskName = 'arrival_send';
+
 /// Target local time of the nightly backup.
 const _backupHour = 2;
 
 /// Background isolate entry point for workmanager.
+///
+/// Every task is bounded by [_taskBudget]: Android kills workers after ~10
+/// minutes, and a worker killed mid-run is rescheduled with a penalty, so it is
+/// better to give up cleanly and let the backoff retry.
 @pragma('vm:entry-point')
 void chatBackupCallbackDispatcher() {
   Workmanager().executeTask((task, inputData) async {
@@ -46,28 +61,91 @@ void chatBackupCallbackDispatcher() {
       if (uid is! String || thread is! String || message is! String) {
         return true;
       }
-      return runBackgroundChatReceive(uid, thread, message);
+      try {
+        return await runBackgroundChatReceive(
+          uid,
+          thread,
+          message,
+        ).timeout(_taskBudget);
+      } on TimeoutException {
+        return false;
+      }
+    }
+    if (task == arrivalSendTaskName) {
+      try {
+        return await runBackgroundArrivalSend().timeout(_taskBudget);
+      } on TimeoutException {
+        return false;
+      }
     }
     if (task != _nightlyTaskName) return true;
     try {
-      await runBackgroundChatBackup();
+      await runBackgroundChatBackup().timeout(_taskBudget);
+      return true;
     } catch (e) {
       debugPrint('Nightly chat backup failed: $e');
+      // Ask WorkManager to retry with backoff instead of waiting a whole day;
+      // backupIfDue makes a retry after a later success a no-op.
+      return false;
     }
-    // Always report success: a failed run is simply retried the next night,
-    // and the app backs up on open when a run was missed.
-    return true;
   });
+}
+
+/// Upper bound for one background task, safely under Android's 10 minutes.
+const _taskBudget = Duration(minutes: 8);
+
+/// Firebase init in a cold background isolate can hang on a bad network.
+Future<void> _ensureFirebase() async {
+  if (Firebase.apps.isNotEmpty) return;
+  await Firebase.initializeApp(
+    options: DefaultFirebaseOptions.currentPlatform,
+  ).timeout(const Duration(seconds: 20));
+}
+
+/// Sends queued arrival messages without the UI, so no unlock is needed.
+/// Returns false to let WorkManager retry (no session yet, network down).
+Future<bool> runBackgroundArrivalSend() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await _ensureFirebase();
+  final uid = FirebaseAuth.instance.currentUser?.uid;
+  if (uid == null) return false;
+
+  final crypto = ChatCryptoService();
+  try {
+    await crypto.requireAccount(uid);
+  } catch (_) {
+    return false;
+  }
+  final messages = FirestoreMessageRepository();
+  final threads = FirestoreThreadRepository();
+  final service = ArrivalAlertService(
+    store: FlutterSecureStringKv(const FlutterSecureStorage()),
+    sender: (alert) => sendGeoShareMessage(
+      crypto: crypto,
+      messages: messages,
+      threads: threads,
+      threadId: alert.threadId,
+      senderId: alert.ownerUid,
+      recipientUid: alert.recipientUid,
+      share: GeoShare.arrival(point: alert.point, label: alert.label),
+    ),
+    geofences: ChannelArrivalGeofences(),
+    places: SavedPlacesService(
+      store: FlutterSecureStringKv(const FlutterSecureStorage()),
+    ),
+  );
+  try {
+    return await service.processPendingArrivals();
+  } finally {
+    service.dispose();
+    crypto.clearKeyCache();
+  }
 }
 
 /// Performs one backup outside the UI (own Firebase + database instances).
 Future<void> runBackgroundChatBackup() async {
   WidgetsFlutterBinding.ensureInitialized();
-  if (Firebase.apps.isEmpty) {
-    await Firebase.initializeApp(
-      options: DefaultFirebaseOptions.currentPlatform,
-    );
-  }
+  await _ensureFirebase();
   final uid = FirebaseAuth.instance.currentUser?.uid;
   if (uid == null) return;
   try {
@@ -113,9 +191,12 @@ Future<void> scheduleNightlyChatBackup() async {
       networkType: NetworkType.notRequired,
       requiresBatteryNotLow: true,
     ),
-    // Keep the existing schedule so every app launch does not push the next
-    // run a day further out.
-    existingWorkPolicy: ExistingPeriodicWorkPolicy.keep,
+    backoffPolicy: BackoffPolicy.exponential,
+    backoffPolicyDelay: const Duration(minutes: 15),
+    // `update` applies new constraints/backoff to an existing registration
+    // while preserving its timing, so app launches never push the next run
+    // a day further out.
+    existingWorkPolicy: ExistingPeriodicWorkPolicy.update,
   );
 }
 
@@ -150,11 +231,7 @@ Future<bool> runBackgroundChatReceive(
   String messageId,
 ) async {
   WidgetsFlutterBinding.ensureInitialized();
-  if (Firebase.apps.isEmpty) {
-    await Firebase.initializeApp(
-      options: DefaultFirebaseOptions.currentPlatform,
-    );
-  }
+  await _ensureFirebase();
   if (FirebaseAuth.instance.currentUser?.uid != uid) return true;
   final db = VaultDatabase();
   final cache = DriftMessageCacheRepository(db);

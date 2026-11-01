@@ -93,6 +93,7 @@ dependencies:
     path: packages/android_chat_downloads
   geolocator: ^14.0.1
   google_maps_flutter: ^2.18.1
+  package_info_plus: ^10.2.2
 
 dev_dependencies:
   flutter_test:

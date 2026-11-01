@@ -231,11 +231,13 @@ class _SharedNoteBubbleState extends State<SharedNoteBubble> {
                         child: Text(
                           item.text,
                           style: theme.textTheme.bodySmall?.copyWith(
-                            decoration:
-                                item.isDone ? TextDecoration.lineThrough : null,
+                            decoration: item.isDone
+                                ? TextDecoration.lineThrough
+                                : null,
                             color: item.isDone
-                                ? theme.colorScheme.onSurfaceVariant
-                                      .withValues(alpha: 0.6)
+                                ? theme.colorScheme.onSurfaceVariant.withValues(
+                                    alpha: 0.6,
+                                  )
                                 : theme.colorScheme.onSurface,
                           ),
                           maxLines: 1,
@@ -259,9 +261,7 @@ class _SharedNoteBubbleState extends State<SharedNoteBubble> {
             ] else ...[
               const SizedBox(height: AppSpacing.xs),
               Text(
-                note.content.isNotEmpty
-                    ? note.content
-                    : 'Tap to write note…',
+                note.content.isNotEmpty ? note.content : 'Tap to write note…',
                 style: theme.textTheme.bodySmall?.copyWith(
                   color: theme.colorScheme.onSurfaceVariant,
                 ),

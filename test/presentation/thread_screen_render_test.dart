@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:photo_vault/features/chat/data/repositories/local_sticker_pack_repository.dart';
 import 'package:photo_vault/core/integrations/chat_vault_bridge.dart';
 import 'package:photo_vault/features/chat/application/crypto/chat_crypto_service.dart';
 import 'package:photo_vault/features/chat/domain/entities/chat_message.dart';
@@ -51,6 +52,7 @@ class _Crypto implements ChatCryptoService {
 }
 
 class _Messages implements MessageRepository {
+  // ignore: close_sinks - test fake lives for the whole test.
   final live = StreamController<List<ChatMessage>>.broadcast();
 
   @override
@@ -272,6 +274,8 @@ void main() {
             vaultBridge: unused,
             onLock: () => locked = true,
             chatDraftRepository: drafts,
+            stickerPackFactory: (uid) =>
+                LocalStickerPackRepository(userId: uid),
           ),
         ),
       ),
@@ -376,6 +380,8 @@ void main() {
             vaultBridge: unused,
             onLock: () => locked = true,
             chatDraftRepository: drafts,
+            stickerPackFactory: (uid) =>
+                LocalStickerPackRepository(userId: uid),
           ),
         ),
       ),

@@ -196,9 +196,9 @@ void main() {
             (widget.decoration! as BoxDecoration).border != null,
       );
       expect(outlinedBubble, findsOneWidget);
-      final decoration = tester
-          .widget<AnimatedContainer>(outlinedBubble)
-          .decoration! as BoxDecoration;
+      final decoration =
+          tester.widget<AnimatedContainer>(outlinedBubble).decoration!
+              as BoxDecoration;
       expect(decoration.color, Colors.transparent);
       expect(decoration.border, isNotNull);
       expect(

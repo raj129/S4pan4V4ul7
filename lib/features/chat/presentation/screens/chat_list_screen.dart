@@ -1,4 +1,7 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
@@ -6,9 +9,6 @@ import 'package:intl/intl.dart';
 import '../../application/services/chat_notification_service.dart';
 import '../../application/media/chat_share_inbox.dart';
 import '../../application/services/profile_service.dart';
-import '../../application/services/arrival_alert_service.dart';
-import '../../application/services/saved_places_service.dart';
-import 'my_locations_screen.dart';
 import '../../domain/entities/chat_user.dart';
 import 'package:photo_vault/core/widgets/main_scaffold_scope.dart';
 import 'package:photo_vault/core/widgets/app_state_views.dart';
@@ -25,25 +25,12 @@ import 'thread_screen.dart';
 
 /// Main chat list: all conversations for the signed-in user.
 class ChatListScreen extends StatefulWidget {
-  const ChatListScreen({
-    super.key,
-    required this.myUid,
-    this.profileService,
-    this.placesService,
-    this.arrivalService,
-    this.sendGeoShare,
-  });
+  const ChatListScreen({super.key, required this.myUid, this.profileService});
 
   final String myUid;
 
   /// Own profile and contact nicknames; without it real names are shown.
   final ProfileService? profileService;
-
-  /// Saved places and arrival alerts; the "My locations" action only shows
-  /// when all three are provided (Android).
-  final SavedPlacesService? placesService;
-  final ArrivalAlertService? arrivalService;
-  final SendGeoShare? sendGeoShare;
 
   @override
   State<ChatListScreen> createState() => _ChatListScreenState();
@@ -119,29 +106,6 @@ class _ChatListScreenState extends State<ChatListScreen> {
     );
   }
 
-  void _openMyLocations() {
-    final places = widget.placesService;
-    final arrivals = widget.arrivalService;
-    final send = widget.sendGeoShare;
-    if (places == null || arrivals == null || send == null) return;
-    final cubit = context.read<ThreadListCubit>();
-    Navigator.of(context).push<void>(
-      MaterialPageRoute(
-        builder: (_) => MyLocationsScreen(
-          myUid: widget.myUid,
-          placesService: places,
-          arrivalService: arrivals,
-          sendGeoShare: send,
-          contacts: () => switch (cubit.state) {
-            ThreadListLoaded(:final items) => items,
-            _ => const [],
-          },
-          nameOf: (user) => _profile?.nameFor(user) ?? user.displayName,
-        ),
-      ),
-    );
-  }
-
   Widget _buildScaffold(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
@@ -190,14 +154,6 @@ class _ChatListScreenState extends State<ChatListScreen> {
               tooltip: 'Search',
               onPressed: () => setState(() => _isSearching = true),
             ),
-            if (widget.placesService != null &&
-                widget.arrivalService != null &&
-                widget.sendGeoShare != null)
-              IconButton(
-                icon: const Icon(Icons.pin_drop_outlined),
-                tooltip: 'My locations',
-                onPressed: _openMyLocations,
-              ),
             if (_profile != null)
               IconButton(
                 icon: const Icon(Icons.account_circle_outlined),
@@ -324,6 +280,16 @@ class _ChatListScreenState extends State<ChatListScreen> {
                       subtitle: _unreadOnly && _searchQuery.isEmpty
                           ? 'You have no unread conversations.'
                           : 'No conversations match "$_searchQuery".',
+                      actionLabel: _searchQuery.isEmpty
+                          ? 'Show all chats'
+                          : 'Clear search',
+                      actionIcon: _searchQuery.isEmpty
+                          ? Icons.forum_outlined
+                          : Icons.clear_rounded,
+                      onAction: () {
+                        _searchController.clear();
+                        setState(() => _unreadOnly = false);
+                      },
                     )
                   : ListView.builder(
                       padding: const EdgeInsets.fromLTRB(
@@ -606,7 +572,10 @@ class _ThreadTile extends StatelessWidget {
           ),
           child: Icon(Icons.delete_outline_rounded, color: cs.onErrorContainer),
         ),
-        confirmDismiss: (_) => onConfirmDelete(),
+        confirmDismiss: (_) {
+          unawaited(HapticFeedback.mediumImpact());
+          return onConfirmDelete();
+        },
         onDismissed: (_) => onDelete(),
         child: Material(
           color: hasUnread
@@ -614,79 +583,93 @@ class _ThreadTile extends StatelessWidget {
               : Colors.transparent,
           borderRadius: radius,
           clipBehavior: Clip.antiAlias,
-          child: InkWell(
+          child: Semantics(
+            // One coherent announcement per row instead of reading the avatar,
+            // name, time, preview and badge as separate fragments.
+            button: true,
+            label: [
+              name,
+              if (isOnline) 'online',
+              if (hasUnread) '$unread unread',
+              lastMessage,
+              timeLabel,
+            ].where((s) => s.isNotEmpty).join(', '),
+            excludeSemantics: true,
             onTap: onTap,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(
-                horizontal: AppSpacing.sm,
-                vertical: AppSpacing.sm + 2,
-              ),
-              child: Row(
-                children: [
-                  _Avatar(user: user, name: name, isOnline: isOnline),
-                  const SizedBox(width: AppSpacing.md),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Row(
-                          children: [
-                            Expanded(
-                              child: Text(
-                                name,
-                                overflow: TextOverflow.ellipsis,
-                                style: theme.textTheme.titleMedium?.copyWith(
-                                  fontSize: 16,
-                                  fontWeight: hasUnread
-                                      ? FontWeight.w700
-                                      : FontWeight.w600,
+            child: InkWell(
+              onTap: onTap,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: AppSpacing.sm,
+                  vertical: AppSpacing.sm + 2,
+                ),
+                child: Row(
+                  children: [
+                    _Avatar(user: user, name: name, isOnline: isOnline),
+                    const SizedBox(width: AppSpacing.md),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  name,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: theme.textTheme.titleMedium?.copyWith(
+                                    fontSize: 16,
+                                    fontWeight: hasUnread
+                                        ? FontWeight.w700
+                                        : FontWeight.w600,
+                                  ),
                                 ),
                               ),
-                            ),
-                            const SizedBox(width: AppSpacing.sm),
-                            Text(
-                              timeLabel,
-                              style: theme.textTheme.labelSmall?.copyWith(
-                                color: hasUnread
-                                    ? cs.primary
-                                    : cs.onSurfaceVariant,
-                                fontWeight: hasUnread
-                                    ? FontWeight.w700
-                                    : FontWeight.w500,
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 3),
-                        Row(
-                          children: [
-                            Expanded(
-                              child: Text(
-                                lastMessage,
-                                overflow: TextOverflow.ellipsis,
-                                maxLines: 1,
-                                style: theme.textTheme.bodyMedium?.copyWith(
-                                  fontSize: 14,
+                              const SizedBox(width: AppSpacing.sm),
+                              Text(
+                                timeLabel,
+                                style: theme.textTheme.labelSmall?.copyWith(
                                   color: hasUnread
-                                      ? cs.onSurface
+                                      ? cs.primary
                                       : cs.onSurfaceVariant,
                                   fontWeight: hasUnread
-                                      ? FontWeight.w600
-                                      : FontWeight.w400,
+                                      ? FontWeight.w700
+                                      : FontWeight.w500,
                                 ),
                               ),
-                            ),
-                            if (hasUnread) ...[
-                              const SizedBox(width: AppSpacing.sm),
-                              _UnreadBadge(count: unread),
                             ],
-                          ],
-                        ),
-                      ],
+                          ),
+                          const SizedBox(height: 3),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  lastMessage,
+                                  overflow: TextOverflow.ellipsis,
+                                  maxLines: 1,
+                                  style: theme.textTheme.bodyMedium?.copyWith(
+                                    fontSize: 14,
+                                    color: hasUnread
+                                        ? cs.onSurface
+                                        : cs.onSurfaceVariant,
+                                    fontWeight: hasUnread
+                                        ? FontWeight.w600
+                                        : FontWeight.w400,
+                                  ),
+                                ),
+                              ),
+                              if (hasUnread) ...[
+                                const SizedBox(width: AppSpacing.sm),
+                                _UnreadBadge(count: unread),
+                              ],
+                            ],
+                          ),
+                        ],
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
           ),

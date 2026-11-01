@@ -133,10 +133,21 @@ service cloud.firestore {
 
     // Presence lives outside the user document so that ChatUser stays pure
     // identity. Readable by any signed-in user (the online dot), writable only
-    // by its owner.
+    // by its owner, and only with the expected shape. When the owner hides
+    // their last seen, an offline document must not carry a timestamp.
     match /presence/{uid} {
       allow read: if isSignedIn();
-      allow write: if isSelf(uid);
+      allow write: if isSelf(uid) && validPresence(uid, request.resource.data);
+    }
+
+    function validPresence(uid, d) {
+      return d.keys().hasOnly(['uid', 'isOnline', 'lastSeen', 'showLastSeen'])
+        && d.uid == uid
+        && d.isOnline is bool
+        && (!('lastSeen' in d) || d.lastSeen is int)
+        && (!('showLastSeen' in d) || d.showLastSeen is bool)
+        && !(('showLastSeen' in d) && d.showLastSeen == false
+             && d.isOnline == false && ('lastSeen' in d));
     }
 
     // ── Threads ──────────────────────────────────────────────────────────────
@@ -158,12 +169,13 @@ service cloud.firestore {
                                      request.resource.data.participantIds[0]
                     );
 
-      // Participants may update lastMessage / unreadCounts, but may not
-      // rewrite the participant list to add or remove people.
+      // Participants may update only the preview and unread counters, never
+      // the participant list, id or creation time (which would let one side
+      // re-point or forge the thread).
       allow update: if isSignedIn()
                     && request.auth.uid in resource.data.participantIds
-                    && request.resource.data.participantIds ==
-                       resource.data.participantIds;
+                    && request.resource.data.diff(resource.data).affectedKeys()
+                         .hasOnly(['lastMessage', 'lastMessageAt', 'unreadCounts']);
 
       allow delete: if isSignedIn()
                     && request.auth.uid in resource.data.participantIds;
@@ -205,9 +217,21 @@ service cloud.firestore {
       }
 
       // ── Typing indicator ───────────────────────────────────────────────────
+      // Only the `typing` doc exists; each participant may set only their own
+      // boolean, so nobody can make the other person appear to be typing.
 
       match /meta/{docId} {
-        allow read, write: if isThreadParticipant(threadId);
+        allow read: if isThreadParticipant(threadId);
+        allow create: if isThreadParticipant(threadId)
+                      && docId == 'typing'
+                      && request.resource.data.keys().hasOnly([request.auth.uid])
+                      && request.resource.data[request.auth.uid] is bool;
+        allow update: if isThreadParticipant(threadId)
+                      && docId == 'typing'
+                      && request.resource.data.diff(resource.data).affectedKeys()
+                           .hasOnly([request.auth.uid])
+                      && request.resource.data[request.auth.uid] is bool;
+        allow delete: if isThreadParticipant(threadId);
       }
 
       // ── Live location ──────────────────────────────────────────────────────

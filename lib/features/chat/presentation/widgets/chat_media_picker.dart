@@ -6,7 +6,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
 import '../../application/services/giphy_media_service.dart';
-import '../../data/repositories/local_sticker_pack_repository.dart';
+import '../../domain/repositories/sticker_pack_repository.dart';
 import '../../domain/entities/chat_message.dart';
 import '../../domain/entities/giphy_media.dart';
 import '../../domain/entities/local_sticker.dart';
@@ -37,7 +37,7 @@ class ChatMediaPickerSheetController {
 
 Future<void> showChatMediaPickerSheet(
   BuildContext context, {
-  required LocalStickerPackRepository stickerPack,
+  required StickerPackRepository stickerPack,
   ChatMediaPickerSheetController? controller,
   required Widget Function(double height) buildEmojiPicker,
   required Widget composer,
@@ -93,7 +93,7 @@ class _DraggableChatMediaPickerSheet extends StatefulWidget {
     required this.onBackspace,
   });
 
-  final LocalStickerPackRepository stickerPack;
+  final StickerPackRepository stickerPack;
   final Widget Function(double height) buildEmojiPicker;
   final Widget composer;
   final Future<void> Function(
@@ -166,7 +166,7 @@ class ChatMediaPickerPanel extends StatefulWidget {
     super.key,
   });
 
-  final LocalStickerPackRepository stickerPack;
+  final StickerPackRepository stickerPack;
   final Widget Function(double height) buildEmojiPicker;
   final Future<void> Function(
     Uint8List bytes,
@@ -466,7 +466,7 @@ class _ChatMediaPickerPanelState extends State<ChatMediaPickerPanel> {
       if (!mounted) return;
       if (size == null ||
           size < 1 ||
-          size > LocalStickerPackRepository.maxStickerBytes) {
+          size > StickerPackRepository.maxStickerBytes) {
         throw StateError('Choose a sticker no larger than 4 MB.');
       }
       final extension = file.extension?.toLowerCase();
@@ -476,7 +476,7 @@ class _ChatMediaPickerPanelState extends State<ChatMediaPickerPanel> {
       final bytes = await file.readAsBytes();
       try {
         if (!mounted) return;
-        if (bytes.length > LocalStickerPackRepository.maxStickerBytes) {
+        if (bytes.length > StickerPackRepository.maxStickerBytes) {
           throw StateError('Choose a sticker no larger than 4 MB.');
         }
         await widget.stickerPack.addSticker(
@@ -1052,7 +1052,7 @@ class _LocalStickerTile extends StatefulWidget {
   });
 
   final LocalSticker sticker;
-  final LocalStickerPackRepository repository;
+  final StickerPackRepository repository;
   final bool busy;
   final VoidCallback onTap;
   final VoidCallback onRemove;

@@ -35,6 +35,11 @@ class _MainScaffoldState extends State<MainScaffold> {
   void _onDestinationSelected(int index) {
     final path = navigationPathForDestination(index);
     if (path == null) return;
+    if (isPushedDestination(index)) {
+      Navigator.of(context).pop();
+      context.push(path);
+      return;
+    }
     if (index == 5) {
       Navigator.of(context).pop();
       context.go(path);

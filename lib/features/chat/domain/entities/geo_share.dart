@@ -38,6 +38,7 @@ class GeoShare extends Equatable {
     this.path = const [],
     this.distanceMeters,
     this.durationSeconds,
+    this.mode,
   });
 
   const GeoShare.pin({required GeoPoint point, String label = ''})
@@ -53,6 +54,7 @@ class GeoShare extends Equatable {
     List<GeoPoint> path = const [],
     double? distanceMeters,
     int? durationSeconds,
+    String? mode,
   }) : this(
          kind: GeoShareKind.route,
          point: origin,
@@ -61,6 +63,7 @@ class GeoShare extends Equatable {
          path: path,
          distanceMeters: distanceMeters,
          durationSeconds: durationSeconds,
+         mode: mode,
        );
 
   final GeoShareKind kind;
@@ -72,6 +75,10 @@ class GeoShare extends Equatable {
   final List<GeoPoint> path;
   final double? distanceMeters;
   final int? durationSeconds;
+
+  /// Transport mode the route was planned for: `drive`, `walk` or `cycle`.
+  /// Optional, so messages from older versions still decode.
+  final String? mode;
 
   bool get isRoute => kind == GeoShareKind.route && destination != null;
 
@@ -91,6 +98,7 @@ class GeoShare extends Equatable {
     if (path.isNotEmpty) 'r': [for (final p in path) p.toJson()],
     if (distanceMeters != null) 'm': distanceMeters,
     if (durationSeconds != null) 's': durationSeconds,
+    if (mode != null) 't': mode,
   });
 
   /// Returns null when [text] is not a valid geo payload.
@@ -117,6 +125,7 @@ class GeoShare extends Equatable {
         ],
         distanceMeters: (json['m'] as num?)?.toDouble(),
         durationSeconds: (json['s'] as num?)?.toInt(),
+        mode: json['t'] as String?,
       );
     } catch (_) {
       return null;
@@ -132,5 +141,6 @@ class GeoShare extends Equatable {
     path,
     distanceMeters,
     durationSeconds,
+    mode,
   ];
 }

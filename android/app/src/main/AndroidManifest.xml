@@ -9,6 +9,9 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+    <!-- Lets the app ask (via the system dialog) to be exempt from battery
+         optimisation so live location / alerts are not frozen by Doze. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
@@ -17,6 +20,10 @@
     <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
     <uses-permission android:name="android.permission.READ_CONTACTS" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Lets the hidden Developer options feed a simulated position to other apps
+         once this app is chosen as "Select mock location app". -->
+    <uses-permission android:name="android.permission.ACCESS_MOCK_LOCATION"
+        tools:ignore="MockLocation,ProtectedPermissions" />
     <!-- Merged in by open_filex but unused: documents are opened from app cache. -->
     <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" tools:node="remove" />
     
@@ -35,6 +42,11 @@
             android:value="${GIPHY_API_KEY}" />
         <service android:name=".ChatUploadService"
             android:exported="false" android:foregroundServiceType="dataSync" />
+        <service android:name=".MockLocationService"
+            android:exported="false" android:foregroundServiceType="location" />
+        <!-- Geofence enter events for arrival alerts; not exported. -->
+        <receiver android:name=".ArrivalGeofenceReceiver"
+            android:exported="false" />
         <service android:name="androidx.work.impl.foreground.SystemForegroundService"
             android:foregroundServiceType="dataSync" tools:node="merge" />
         <activity

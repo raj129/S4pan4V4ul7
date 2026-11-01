@@ -76,7 +76,7 @@ void main() {
     );
 
     blocTest<OnboardingCubit, OnboardingState>(
-      'confirm mismatch emits PinInvalid',
+      'confirm mismatch stays on the confirm step with an error',
       build: _makeCubit,
       act: (cubit) {
         cubit.selectLocalMode();
@@ -87,8 +87,45 @@ void main() {
         const OnboardingModeSelectedLocal(),
         const OnboardingPinEntry(mode: UserMode.localOnly),
         const OnboardingPinConfirm(mode: UserMode.localOnly),
-        isA<OnboardingPinInvalid>(),
+        isA<OnboardingPinConfirm>().having(
+          (s) => s.errorMessage,
+          'errorMessage',
+          isNotNull,
+        ),
       ],
+    );
+
+    blocTest<OnboardingCubit, OnboardingState>(
+      'retrying the confirmation after a mismatch creates the vault',
+      build: _makeCubit,
+      act: (cubit) async {
+        cubit.selectLocalMode();
+        cubit.pinEntered(UserMode.localOnly, '8472');
+        await cubit.pinConfirmed(UserMode.localOnly, '8473');
+        await cubit.pinConfirmed(UserMode.localOnly, '8472');
+      },
+      skip: 4,
+      expect: () => [
+        isA<OnboardingCreatingVault>(),
+        isA<OnboardingCreatingVault>(),
+        isA<OnboardingCreatingVault>(),
+        isA<OnboardingVaultCreated>(),
+      ],
+    );
+
+    blocTest<OnboardingCubit, OnboardingState>(
+      'restartPinEntry returns to step 1 and forgets the first PIN',
+      build: _makeCubit,
+      act: (cubit) async {
+        cubit.selectLocalMode();
+        cubit.pinEntered(UserMode.localOnly, '8472');
+        cubit.restartPinEntry(UserMode.localOnly);
+        await cubit.pinConfirmed(UserMode.localOnly, '8472');
+      },
+      skip: 3,
+      expect: () => [const OnboardingPinEntry(mode: UserMode.localOnly)],
+      // No first PIN any more, so confirming must not create a vault.
+      verify: (cubit) => expect(cubit.state, isA<OnboardingPinEntry>()),
     );
 
     blocTest<OnboardingCubit, OnboardingState>(

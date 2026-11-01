@@ -1,6 +1,4 @@
-import 'package:flutter/foundation.dart';
-
-@immutable
+/// Domain entity: pure Dart (no Flutter import); all fields are final.
 class LocalSticker {
   const LocalSticker({
     required this.id,

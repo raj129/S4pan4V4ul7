@@ -35,7 +35,7 @@ Future<void> main() async {
         .initialize(serverClientId: googleServerClientId)
         .timeout(const Duration(seconds: 5));
   } catch (e, stack) {
-    FirebaseCrashlytics.instance.recordError(e, stack);
+    unawaited(FirebaseCrashlytics.instance.recordError(e, stack));
   }
 
   LicenseRegistry.addLicense(() async* {

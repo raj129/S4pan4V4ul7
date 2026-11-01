@@ -92,6 +92,16 @@ class PersistentSettingsRepository implements SettingsRepository {
       _kv.write(StorageKeys.autoLockOnBackground, enabled.toString());
 
   @override
+  Future<bool> isShowLastSeenEnabled() async {
+    final raw = await _kv.read(StorageKeys.showLastSeen);
+    return raw == null ? true : raw == 'true';
+  }
+
+  @override
+  Future<void> setShowLastSeenEnabled(bool enabled) =>
+      _kv.write(StorageKeys.showLastSeen, enabled.toString());
+
+  @override
   Future<String?> getThemePaletteId() => _kv.read(StorageKeys.themePalette);
 
   @override
@@ -104,4 +114,12 @@ class PersistentSettingsRepository implements SettingsRepository {
   @override
   Future<void> setThemeMode(String mode) =>
       _kv.write(StorageKeys.themeMode, mode);
+
+  @override
+  Future<String?> getMockLocationPrefs() =>
+      _kv.read(StorageKeys.mockLocationPrefs);
+
+  @override
+  Future<void> setMockLocationPrefs(String json) =>
+      _kv.write(StorageKeys.mockLocationPrefs, json);
 }

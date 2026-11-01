@@ -33,8 +33,61 @@ class ChangePinUseCase {
   final CryptoService _cryptoService;
   final VaultSession _vaultSession;
 
+  /// Returns whether [pin] unlocks the active vault, without changing anything.
+  ///
+  /// Lets the change-PIN flow reject a wrong current PIN at step 1 instead of
+  /// after the user has also typed and confirmed a new one.
+  Future<bool> verifyOldPin(String pin) async {
+    final vaultId = await _vaultRepository.getActiveVaultId();
+    if (vaultId == null) throw ChangePinException('No active vault found.');
+    List<int>? vmk;
+    try {
+      vmk = await _unwrapVmk(vaultId, pin);
+      return vmk.isNotEmpty;
+    } on ChangePinException {
+      rethrow;
+    } catch (_) {
+      return false;
+    } finally {
+      _zero(vmk);
+    }
+  }
+
+  static void _zero(List<int>? bytes) {
+    // Some KDF/crypto outputs are unmodifiable views; zeroing is best-effort.
+    try {
+      bytes?.fillRange(0, bytes.length, 0);
+    } catch (_) {}
+  }
+
+  Future<List<int>> _unwrapVmk(String vaultId, String pin) async {
+    final wrappedRecord = await _secureStorageRepository.loadWrappedVmk(
+      vaultId,
+    );
+    if (wrappedRecord == null) {
+      throw ChangePinException('Vault key material missing.');
+    }
+    final salt = base64Decode(wrappedRecord['salt']!);
+    final derivedKey = await _kdfService.deriveKey(pin, salt);
+    try {
+      final wrapped = WrappedKey(
+        keyId: vaultId,
+        wrappedBytes: base64Decode(wrappedRecord['wrappedVmk']!),
+        nonce: base64Decode(wrappedRecord['nonce']!),
+        mac: base64Decode(wrappedRecord['mac']!),
+        encryptionVersion: int.parse(wrappedRecord['encVersion']!),
+      );
+      return await _cryptoService.unwrapKey(
+        wrapped,
+        derivedKey,
+        aad: utf8.encode('$vaultId:vmk:v1'),
+      );
+    } finally {
+      _zero(derivedKey);
+    }
+  }
+
   Future<void> execute({required String oldPin, required String newPin}) async {
-    List<int>? oldDerivedKey;
     List<int>? vmk;
     List<int>? newDerivedKey;
 
@@ -43,30 +96,12 @@ class ChangePinUseCase {
       if (vaultId == null) throw ChangePinException('No active vault found.');
 
       // 1. Verify old PIN and get VMK
-      final wrappedRecord = await _secureStorageRepository.loadWrappedVmk(
-        vaultId,
-      );
-      if (wrappedRecord == null) {
-        throw ChangePinException('Vault key material missing.');
-      }
-
-      final salt = base64Decode(wrappedRecord['salt']!);
-      oldDerivedKey = await _kdfService.deriveKey(oldPin, salt);
-
-      final wrapped = WrappedKey(
-        keyId: vaultId,
-        wrappedBytes: base64Decode(wrappedRecord['wrappedVmk']!),
-        nonce: base64Decode(wrappedRecord['nonce']!),
-        mac: base64Decode(wrappedRecord['mac']!),
-        encryptionVersion: int.parse(wrappedRecord['encVersion']!),
-      );
-
-      final aad = utf8.encode('$vaultId:vmk:v1');
-      vmk = await _cryptoService.unwrapKey(wrapped, oldDerivedKey, aad: aad);
+      vmk = await _unwrapVmk(vaultId, oldPin);
 
       if (vmk.isEmpty) {
         throw ChangePinException('Incorrect old PIN.');
       }
+      final aad = utf8.encode('$vaultId:vmk:v1');
 
       // 2. Wrap VMK with new PIN
       final newSalt = _kdfService.generateSalt();
@@ -96,9 +131,6 @@ class ChangePinUseCase {
       throw ChangePinException('Failed to change PIN: $e');
     } finally {
       // Best-effort zeroing
-      try {
-        oldDerivedKey?.fillRange(0, oldDerivedKey.length, 0);
-      } catch (_) {}
       try {
         vmk?.fillRange(0, vmk.length, 0);
       } catch (_) {}

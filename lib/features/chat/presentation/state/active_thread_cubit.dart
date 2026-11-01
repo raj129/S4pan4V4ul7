@@ -29,6 +29,7 @@ import '../../domain/repositories/typing_repository.dart';
 import '../../domain/repositories/user_repository.dart';
 import '../../application/crypto/chat_crypto_service.dart';
 import '../../application/media/media_send_status.dart';
+import 'delegates/thread_history_index.dart';
 import 'delegates/thread_search_delegate.dart';
 import 'delegates/thread_upload_coordinator.dart';
 
@@ -65,6 +66,7 @@ class ActiveThreadLoaded extends ActiveThreadState {
     required this.messages,
     required this.otherIsTyping,
     this.otherIsOnline = false,
+    this.otherLastSeen,
     this.isOffline = false,
     this.hasMore = true,
     this.loadingOlder = false,
@@ -89,6 +91,10 @@ class ActiveThreadLoaded extends ActiveThreadState {
   /// Sourced from [PresenceRepository], not from [otherUser] — presence is
   /// deliberately not part of the user entity.
   final bool otherIsOnline;
+
+  /// When the other user was last active; null when unknown or hidden by
+  /// either side's "Show last seen" setting.
+  final DateTime? otherLastSeen;
   final bool isOffline;
   final bool hasMore;
   final bool loadingOlder;
@@ -154,6 +160,8 @@ class ActiveThreadLoaded extends ActiveThreadState {
     List<ChatMessage>? messages,
     bool? otherIsTyping,
     bool? otherIsOnline,
+    DateTime? otherLastSeen,
+    bool clearOtherLastSeen = false,
     bool? isOffline,
     bool? hasMore,
     bool? loadingOlder,
@@ -179,6 +187,9 @@ class ActiveThreadLoaded extends ActiveThreadState {
     messages: messages ?? this.messages,
     otherIsTyping: otherIsTyping ?? this.otherIsTyping,
     otherIsOnline: otherIsOnline ?? this.otherIsOnline,
+    otherLastSeen: clearOtherLastSeen
+        ? null
+        : (otherLastSeen ?? this.otherLastSeen),
     isOffline: isOffline ?? this.isOffline,
     hasMore: hasMore ?? this.hasMore,
     loadingOlder: loadingOlder ?? this.loadingOlder,
@@ -207,6 +218,7 @@ class ActiveThreadLoaded extends ActiveThreadState {
     messages,
     otherIsTyping,
     otherIsOnline,
+    otherLastSeen,
     isOffline,
     hasMore,
     loadingOlder,
@@ -340,6 +352,9 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
   final PresenceRepository presenceRepository;
   final MediaRepository mediaRepository;
   final MessageCacheRepository messageCache;
+
+  /// History lookups for the scrollbar and jump-to-date.
+  late final ThreadHistoryIndex _history = ThreadHistoryIndex(messageCache);
   final OutboxRepository outbox;
   final ChatCryptoService cryptoService;
   final String myUid;
@@ -577,9 +592,11 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
       () => threadRepository.resetUnread(threadId: thread.threadId, uid: myUid),
     );
 
-    _messageSub?.cancel();
-    _typingSub?.cancel();
-    _presenceSub?.cancel();
+    // Not awaited: the new thread must start listening immediately; the
+    // previous subscriptions are generation-guarded.
+    unawaited(_messageSub?.cancel());
+    unawaited(_typingSub?.cancel());
+    unawaited(_presenceSub?.cancel());
     _openTimeoutTimer?.cancel();
 
     // Belt-and-braces: if neither the cache nor the live stream produces a
@@ -653,7 +670,13 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
     _presenceSub = presenceRepository.watch(otherUser.uid).listen((presence) {
       final current = state;
       if (current is ActiveThreadLoaded) {
-        emit(current.copyWith(otherIsOnline: presence.isOnline));
+        emit(
+          current.copyWith(
+            otherIsOnline: presence.isOnline,
+            otherLastSeen: presence.lastSeen,
+            clearOtherLastSeen: presence.lastSeen == null,
+          ),
+        );
       }
     });
 
@@ -1337,14 +1360,13 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
     final threadId = _currentThreadId;
     if (threadId == null) return;
     try {
-      final total = await messageCache.count(threadId);
-      if (total == 0) return;
-      final offset = (fraction.clamp(0.0, 1.0) * (total - 1)).round();
-      if (offset >= total - _pageSize) {
+      final hit = await _history.atFraction(threadId, fraction);
+      if (hit == null) return;
+      if (hit.offset >= hit.total - _pageSize) {
         await jumpToLatest();
         return;
       }
-      final target = await messageCache.loadAtOffset(threadId, offset);
+      final target = hit.message;
       if (target != null) await jumpToMessage(target.messageId);
     } catch (_) {}
   }
@@ -1352,16 +1374,19 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
   /// Where [message] sits in the cached history, 0 (first) .. 1 (latest),
   /// for positioning the scrollbar thumb.
   Future<double?> positionOf(ChatMessage message) async {
+    final rank = await historyRankOf(message);
+    if (rank == null) return null;
+    if (rank.total <= 1) return 1;
+    return (rank.older / (rank.total - 1)).clamp(0.0, 1.0);
+  }
+
+  /// How many cached messages are older than [message], and how many there
+  /// are in total. Fetched once per loaded window so the scrollbar can then
+  /// place its thumb synchronously on every scroll frame.
+  Future<({int older, int total})?> historyRankOf(ChatMessage message) async {
     final threadId = _currentThreadId;
     if (threadId == null) return null;
-    try {
-      final total = await messageCache.count(threadId);
-      if (total <= 1) return 1;
-      final older = await messageCache.count(threadId, before: message.sentAt);
-      return (older / (total - 1)).clamp(0.0, 1.0);
-    } catch (_) {
-      return null;
-    }
+    return _history.rankOf(threadId, message);
   }
 
   /// Send time of the message at [fraction] of the cached history, for the
@@ -1369,25 +1394,14 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
   Future<DateTime?> dateAtFraction(double fraction) async {
     final threadId = _currentThreadId;
     if (threadId == null) return null;
-    try {
-      final total = await messageCache.count(threadId);
-      if (total == 0) return null;
-      final offset = (fraction.clamp(0.0, 1.0) * (total - 1)).round();
-      return (await messageCache.loadAtOffset(threadId, offset))?.sentAt;
-    } catch (_) {
-      return null;
-    }
+    return (await _history.atFraction(threadId, fraction))?.message?.sentAt;
   }
 
   /// The date range of the cached history, for the jump-to-date picker.
   Future<(DateTime, DateTime)?> historyBounds() async {
     final threadId = _currentThreadId;
     if (threadId == null) return null;
-    try {
-      return await messageCache.timeBounds(threadId);
-    } catch (_) {
-      return null;
-    }
+    return _history.bounds(threadId);
   }
 
   /// Leave a detached window and return to the live conversation.
@@ -2148,14 +2162,16 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
   @override
   Future<void> close() async {
     WidgetsBinding.instance.removeObserver(this);
-    _messageSub?.cancel();
-    _typingSub?.cancel();
-    _presenceSub?.cancel();
+    // Not awaited: a source stream's cancel may never complete (e.g. an
+    // async* generator parked on an await), which would stall close().
+    unawaited(_messageSub?.cancel());
+    unawaited(_typingSub?.cancel());
+    unawaited(_presenceSub?.cancel());
     _typingDebounce?.cancel();
     _searchDelegate.dispose();
     _openGeneration++;
     _openTimeoutTimer?.cancel();
-    _connectivitySub?.cancel();
+    unawaited(_connectivitySub?.cancel());
     await _uploadCoordinator.dispose();
     if (_currentThreadId != null) {
       await typingRepository.setTyping(

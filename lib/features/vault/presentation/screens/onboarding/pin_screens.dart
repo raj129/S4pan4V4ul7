@@ -7,7 +7,9 @@ import 'package:photo_vault/features/vault/domain/entities/user_mode.dart';
 import '../../state/onboarding_cubit.dart';
 import '../../state/onboarding_state.dart';
 import 'package:photo_vault/core/presentation/theme/app_spacing.dart';
+import '../../widgets/pin/pin_flow_body.dart';
 import '../../widgets/pin/pin_pad.dart';
+import '../../widgets/pin/pin_step_indicator.dart';
 
 /// Screen 4: Create PIN screen.
 ///
@@ -77,9 +79,12 @@ class _CreatePinScreenState extends State<CreatePinScreen> {
             });
           }
           return _PinEntryLayout(
+            step: 1,
             icon: Icons.lock_outline_rounded,
             title: 'Create your vault PIN',
-            subtitle: 'This PIN is separate from your device PIN.',
+            subtitle:
+                'Pick a 4-digit PIN. It unlocks the app and your chat '
+                'history. It is separate from your phone PIN.',
             filledCount: _digits.length,
             total: _pinLength,
             errorMessage: errorMsg,
@@ -144,23 +149,25 @@ class _ConfirmPinScreenState extends State<ConfirmPinScreen> {
       appBar: AppBar(title: const Text('Confirm PIN')),
       body: BlocBuilder<OnboardingCubit, OnboardingState>(
         builder: (context, state) {
-          final String? errorMsg = state is OnboardingPinInvalid
-              ? state.message
+          final errorMsg = state is OnboardingPinConfirm
+              ? state.errorMessage
               : null;
-          if (state is OnboardingPinInvalid && _digits.isNotEmpty) {
-            WidgetsBinding.instance.addPostFrameCallback((_) {
-              if (mounted) setState(_digits.clear);
-            });
-          }
           return _PinEntryLayout(
+            step: 2,
             icon: Icons.verified_user_outlined,
             title: 'Confirm your vault PIN',
-            subtitle: 'Enter the same 4-digit PIN again.',
+            subtitle: 'Enter the same 4-digit PIN once more.',
             filledCount: _digits.length,
             total: _pinLength,
             errorMessage: errorMsg,
             onDigit: _onDigitTap,
             onDelete: _onDelete,
+            footer: TextButton.icon(
+              onPressed: () =>
+                  context.read<OnboardingCubit>().restartPinEntry(widget.mode),
+              icon: const Icon(Icons.restart_alt_rounded),
+              label: const Text('Start over with a different PIN'),
+            ),
           );
         },
       ),
@@ -170,6 +177,7 @@ class _ConfirmPinScreenState extends State<ConfirmPinScreen> {
 
 class _PinEntryLayout extends StatelessWidget {
   const _PinEntryLayout({
+    required this.step,
     required this.icon,
     required this.title,
     required this.subtitle,
@@ -178,8 +186,10 @@ class _PinEntryLayout extends StatelessWidget {
     required this.onDigit,
     required this.onDelete,
     this.errorMessage,
+    this.footer,
   });
 
+  final int step;
   final IconData icon;
   final String title;
   final String subtitle;
@@ -188,48 +198,54 @@ class _PinEntryLayout extends StatelessWidget {
   final ValueChanged<int> onDigit;
   final VoidCallback onDelete;
   final String? errorMessage;
+  final Widget? footer;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return SafeArea(
-      child: Padding(
-        padding: AppSpacing.page,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            const SizedBox(height: AppSpacing.xxl),
-            _PinHero(icon: icon, title: title, subtitle: subtitle),
-            const SizedBox(height: AppSpacing.xxl),
-            PinDotRow(
-              filledCount: filledCount,
-              total: total,
-              hasError: errorMessage != null,
-            ),
-            AnimatedSwitcher(
-              duration: AppDuration.fast,
-              child: errorMessage == null
-                  ? const SizedBox(height: AppSpacing.xl)
-                  : Padding(
-                      key: ValueKey(errorMessage),
-                      padding: const EdgeInsets.only(top: AppSpacing.lg),
-                      child: InfoBanner(
-                        message: errorMessage!,
-                        tone: InfoBannerTone.error,
-                      ),
-                    ),
-            ),
-            const Spacer(),
-            PinPad(onDigit: onDigit, onDelete: onDelete),
-            Text(
-              'Digits are hidden and never shown on screen.',
-              textAlign: TextAlign.center,
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
+      child: PinFlowBody(
+        child: Padding(
+          padding: AppSpacing.page,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const SizedBox(height: AppSpacing.lg),
+              PinStepIndicator(current: step, total: 2),
+              const SizedBox(height: AppSpacing.xl),
+              _PinHero(icon: icon, title: title, subtitle: subtitle),
+              const SizedBox(height: AppSpacing.xxl),
+              PinDotRow(
+                filledCount: filledCount,
+                total: total,
+                hasError: errorMessage != null,
               ),
-            ),
-            const SizedBox(height: AppSpacing.lg),
-          ],
+              AnimatedSwitcher(
+                duration: AppDuration.fast,
+                child: errorMessage == null
+                    ? const SizedBox(height: AppSpacing.xl)
+                    : Padding(
+                        key: ValueKey(errorMessage),
+                        padding: const EdgeInsets.only(top: AppSpacing.lg),
+                        child: InfoBanner(
+                          message: errorMessage!,
+                          tone: InfoBannerTone.error,
+                        ),
+                      ),
+              ),
+              const Spacer(),
+              ?footer,
+              PinPad(onDigit: onDigit, onDelete: onDelete),
+              Text(
+                'Digits are hidden and never shown on screen.',
+                textAlign: TextAlign.center,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+              const SizedBox(height: AppSpacing.lg),
+            ],
+          ),
         ),
       ),
     );
@@ -263,11 +279,7 @@ class _PinHero extends StatelessWidget {
               width: 1.5,
             ),
           ),
-          child: Icon(
-            icon,
-            size: 34,
-            color: theme.colorScheme.primary,
-          ),
+          child: Icon(icon, size: 34, color: theme.colorScheme.primary),
         ),
         const SizedBox(height: AppSpacing.xl),
         Text(

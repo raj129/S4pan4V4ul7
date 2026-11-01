@@ -147,6 +147,8 @@ class _ChatAppState extends State<ChatApp> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    unawaited(_deps.arrivalAlertService?.refreshArrivals());
+    unawaited(_deps.savedPlacesService?.purgeExpired());
     if (widget.userMode == UserMode.localOnly) {
       _chatAuthCubit.markUnauthenticated();
     } else {
@@ -157,14 +159,21 @@ class _ChatAppState extends State<ChatApp> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     // Not awaited: presence writes are only acknowledged once online.
+    // `inactive` is deliberately ignored: it fires for the notification shade,
+    // permission dialogs and the app switcher, and treating those as leaving
+    // made presence flicker offline/online and restart the heartbeat.
     if (state == AppLifecycleState.paused ||
-        state == AppLifecycleState.hidden ||
-        state == AppLifecycleState.inactive) {
-      unawaited(_deps.presenceService.deactivate().catchError((_) {}));
+        state == AppLifecycleState.hidden) {
+      unawaited(_deps.presenceService.deactivate().catchError(_logPresence));
     } else if (state == AppLifecycleState.resumed) {
-      unawaited(_deps.presenceService.activate().catchError((_) {}));
+      unawaited(_deps.presenceService.activate().catchError(_logPresence));
+      // Delivers arrival messages queued by geofences while the app was closed.
+      unawaited(_deps.arrivalAlertService?.refreshArrivals());
     }
   }
+
+  static void _logPresence(Object error) =>
+      debugPrint('Presence update failed (will retry on next change): $error');
 
   @override
   void dispose() {
@@ -326,9 +335,6 @@ class _ChatAppState extends State<ChatApp> with WidgetsBindingObserver {
                   child: ChatListScreen(
                     myUid: currentUser.uid,
                     profileService: _deps.profileService,
-                    placesService: _deps.savedPlacesService,
-                    arrivalService: _deps.arrivalAlertService,
-                    sendGeoShare: _deps.sendGeoShare,
                   ),
                 ),
               );

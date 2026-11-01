@@ -10,6 +10,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../domain/entities/local_sticker.dart';
+import '../../domain/repositories/sticker_pack_repository.dart';
 
 abstract interface class StickerKeyStore {
   Future<String?> read(String key);
@@ -27,7 +28,7 @@ class _FlutterSecureStickerKeyStore implements StickerKeyStore {
       _storage.write(key: key, value: value);
 }
 
-class LocalStickerPackRepository {
+class LocalStickerPackRepository implements StickerPackRepository {
   LocalStickerPackRepository({
     required String userId,
     Directory? rootDirectory,
@@ -36,7 +37,7 @@ class LocalStickerPackRepository {
        _rootDirectory = rootDirectory,
        _keyStore = keyStore ?? _FlutterSecureStickerKeyStore();
 
-  static const maxStickerBytes = 4 * 1024 * 1024;
+  static const maxStickerBytes = StickerPackRepository.maxStickerBytes;
   static const maxPackBytes = 32 * 1024 * 1024;
   static const maxStickers = 100;
   static const _maxManifestBytes = 128 * 1024;
@@ -50,12 +51,14 @@ class LocalStickerPackRepository {
   final AesGcm _cipher = AesGcm.with256bits();
   final Uuid _uuid = const Uuid();
 
+  @override
   Future<List<LocalSticker>> list() => _serialized(() async {
     final manifest = await _readManifest();
     manifest.sort((a, b) => b.addedAt.compareTo(a.addedAt));
     return List.unmodifiable(manifest);
   });
 
+  @override
   Future<Uint8List> readBytes(LocalSticker sticker) => _serialized(() async {
     final path = await _directory();
     if (sticker.fileName != '${sticker.id}.enc') {
@@ -82,6 +85,7 @@ class LocalStickerPackRepository {
     return Uint8List.fromList(plaintext);
   });
 
+  @override
   Future<LocalSticker> addSticker({
     required List<int> bytes,
     required String extension,
@@ -149,6 +153,7 @@ class LocalStickerPackRepository {
     }
   });
 
+  @override
   Future<void> remove(LocalSticker sticker) => _serialized(() async {
     final directory = await _directory();
     if (sticker.fileName != '${sticker.id}.enc') {
@@ -258,7 +263,9 @@ class LocalStickerPackRepository {
           result.completeError(error, stackTrace);
         } finally {
           release.complete();
-          if (identical(_queues[_userKey], current)) _queues.remove(_userKey);
+          if (identical(_queues[_userKey], current)) {
+            unawaited(_queues.remove(_userKey));
+          }
         }
       }),
     );

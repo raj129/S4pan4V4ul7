@@ -72,6 +72,16 @@ class InMemorySettingsRepository implements SettingsRepository {
     _autoLockOnBackground = enabled;
   }
 
+  bool _showLastSeen = true;
+
+  @override
+  Future<bool> isShowLastSeenEnabled() async => _showLastSeen;
+
+  @override
+  Future<void> setShowLastSeenEnabled(bool enabled) async {
+    _showLastSeen = enabled;
+  }
+
   @override
   Future<String?> getThemePaletteId() async => _themePaletteId;
 
@@ -86,5 +96,15 @@ class InMemorySettingsRepository implements SettingsRepository {
   @override
   Future<void> setThemeMode(String mode) async {
     _themeMode = mode;
+  }
+
+  String? _mockLocationPrefs;
+
+  @override
+  Future<String?> getMockLocationPrefs() async => _mockLocationPrefs;
+
+  @override
+  Future<void> setMockLocationPrefs(String json) async {
+    _mockLocationPrefs = json;
   }
 }

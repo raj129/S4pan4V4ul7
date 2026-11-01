@@ -8,7 +8,11 @@ import '../screens/geo_share_map_screen.dart';
 
 /// Card for a shared pin, route or arrival message.
 class GeoShareBubble extends StatelessWidget {
-  const GeoShareBubble({super.key, required this.message, required this.isMine});
+  const GeoShareBubble({
+    super.key,
+    required this.message,
+    required this.isMine,
+  });
 
   final ChatMessage message;
   final bool isMine;
@@ -46,8 +50,7 @@ class GeoShareBubble extends StatelessWidget {
     };
     final details = [
       if (share.distanceMeters != null) formatDistance(share.distanceMeters!),
-      if (share.durationSeconds != null)
-        formatDuration(share.durationSeconds!),
+      if (share.durationSeconds != null) formatDuration(share.durationSeconds!),
     ].join(' · ');
 
     return Material(

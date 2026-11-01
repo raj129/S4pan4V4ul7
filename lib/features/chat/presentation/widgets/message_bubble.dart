@@ -21,6 +21,7 @@ import 'package:photo_vault/core/presentation/theme/chat_theme.dart';
 import 'animated_emoji.dart';
 import 'chat_bubble_shape.dart';
 import 'chat_media_preview.dart';
+import 'chat_media_sizes.dart';
 import 'chat_audio_player.dart';
 import 'attachment_download_progress.dart';
 import 'live_location_bubble.dart';
@@ -201,9 +202,7 @@ class MessageBubble extends StatelessWidget {
                 message.liveLocationSessionId!,
               ),
       ),
-      MessageType.pin ||
-      MessageType.route ||
-      MessageType.arrival => Material(
+      MessageType.pin || MessageType.route || MessageType.arrival => Material(
         color: bgColor,
         borderRadius: AppRadius.all(AppRadius.sm),
         child: GeoShareBubble(message: message, isMine: isMine),
@@ -711,6 +710,7 @@ class _BubbleContent extends StatelessWidget {
                 ? AnimatedEmojiText(
                     text: text,
                     playbackId: message.messageId,
+                    size: ChatMediaSizes.emoji,
                     onLongPress: onLongPress,
                   )
                 : _MessageText(
@@ -1102,7 +1102,7 @@ class _MetaRow extends StatelessWidget {
             child: Text('edited', style: AppTypography.bubbleMeta(faded)),
           ),
         Text(
-          DateFormat.jm().format(message.sentAt.toLocal()),
+          _bubbleTimeFormat.format(message.sentAt.toLocal()),
           style: AppTypography.bubbleMeta(faded),
         ),
         if (isMine) ...[
@@ -1403,6 +1403,14 @@ class _ReplySwipeBackground extends StatelessWidget {
   }
 }
 
+/// Shared across rows: building a [DateFormat] parses its pattern, which is
+/// measurable when hundreds of bubbles build during a fast scroll.
+final DateFormat _bubbleTimeFormat = DateFormat.jm();
+
+/// Compiled once; matching every row's text against a fresh [RegExp] showed
+/// up in scroll profiles.
+final RegExp _urlPattern = RegExp(r'(https?:\/\/[^\s]+)', caseSensitive: false);
+
 class _MessageText extends StatelessWidget {
   const _MessageText({
     required this.text,
@@ -1441,17 +1449,25 @@ class _MessageText extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final baseStyle = bare
+        ? const TextStyle(fontSize: ChatMediaSizes.emojiFontSize, height: 1.1)
+        : theme.textTheme.bodyLarge?.copyWith(color: color);
+    final hasQuery = highlightQuery.trim().isNotEmpty;
+    // Fast path for the common case: no link, no search highlight.
+    if (!hasQuery && !text.contains('http')) {
+      return Text(text, style: baseStyle);
+    }
     final cs = theme.colorScheme;
     final highlight = TextStyle(
       backgroundColor: cs.tertiary.withValues(alpha: 0.35),
       fontWeight: FontWeight.w700,
     );
     // Word-prefix ranges, matching exactly what the search index matched.
-    final ranges = highlightQuery.trim().isEmpty
+    final ranges = !hasQuery
         ? const <(int, int)>[]
         : ChatSearchTokenizer.highlightRanges(text, highlightQuery);
     final spans = <InlineSpan>[];
-    final regex = RegExp(r'(https?:\/\/[^\s]+)', caseSensitive: false);
+    final regex = _urlPattern;
     var start = 0;
     for (final match in regex.allMatches(text)) {
       if (match.start > start) {
@@ -1472,7 +1488,10 @@ class _MessageText extends StatelessWidget {
               raw,
               style:
                   (bare
-                          ? const TextStyle(fontSize: 44, height: 1.1)
+                          ? const TextStyle(
+                              fontSize: ChatMediaSizes.emojiFontSize,
+                              height: 1.1,
+                            )
                           : theme.textTheme.bodyLarge)
                       ?.copyWith(
                         color: color,
@@ -1499,9 +1518,7 @@ class _MessageText extends StatelessWidget {
     // "Copy message").
     return Text.rich(
       TextSpan(
-        style: bare
-            ? const TextStyle(fontSize: 44, height: 1.1)
-            : theme.textTheme.bodyLarge?.copyWith(color: color),
+        style: baseStyle,
         children: spans.isEmpty ? [TextSpan(text: text)] : spans,
       ),
     );

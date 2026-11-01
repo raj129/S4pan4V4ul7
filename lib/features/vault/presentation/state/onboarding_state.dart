@@ -63,14 +63,22 @@ final class OnboardingPinEntry extends OnboardingState {
 
 /// User is re-entering PIN for confirmation.
 final class OnboardingPinConfirm extends OnboardingState {
-  const OnboardingPinConfirm({required this.mode, this.digitCount = 0});
+  const OnboardingPinConfirm({
+    required this.mode,
+    this.digitCount = 0,
+    this.errorMessage,
+  });
   final UserMode mode;
   final int digitCount;
+
+  /// Set when the previous confirmation attempt did not match. The user stays
+  /// on the confirm step instead of being bounced back to the first one.
+  final String? errorMessage;
   @override
-  List<Object?> get props => [mode, digitCount];
+  List<Object?> get props => [mode, digitCount, errorMessage];
 }
 
-/// PIN confirmation failed (mismatch or weak PIN detected).
+/// The first PIN was rejected by the validator (e.g. too weak).
 final class OnboardingPinInvalid extends OnboardingState {
   const OnboardingPinInvalid({required this.mode, required this.message});
   final UserMode mode;

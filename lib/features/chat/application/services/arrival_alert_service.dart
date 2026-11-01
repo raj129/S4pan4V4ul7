@@ -1,48 +1,57 @@
 import 'dart:async';
-import 'dart:math';
 
-import 'package:geolocator/geolocator.dart';
+import 'package:flutter/services.dart';
 import 'package:uuid/uuid.dart';
 
+import '../../../../core/location/geo_fix.dart';
 import '../../../vault/data/repositories/storage_string_kv.dart';
 import '../../domain/entities/arrival_alert.dart';
 import '../../domain/entities/geo_share.dart';
-
-typedef ArrivalLocationUpdates = Stream<GeoPoint> Function();
+import 'arrival_geofences.dart';
+import 'saved_places_service.dart';
 
 /// Sends the arrival chat message for a triggered alert.
 typedef ArrivalMessageSender = Future<void> Function(ArrivalAlert alert);
 
-/// Watches the device position and, when the user reaches a saved place,
-/// posts an arrival message to the chat partner exactly once.
+/// Sends arrival messages when the device reaches a saved place.
+///
+/// Every armed alert is registered as an OS geofence as soon as it is saved,
+/// so no app-side GPS polling is needed. When an enter event arrives, the
+/// queued device coordinate is matched locally against all armed alerts, and
+/// each alert whose radius contains it is sent once.
 class ArrivalAlertService {
   ArrivalAlertService({
     required StorageStringKv store,
     required ArrivalMessageSender sender,
-    ArrivalLocationUpdates? locationUpdates,
+    ArrivalGeofences? geofences,
+    SavedPlacesService? places,
   }) : _store = store,
        _sender = sender,
-       _locationUpdates = locationUpdates ?? _geolocatorUpdates;
+       _geofences = geofences,
+       _places = places;
 
   static const storageKey = 'chat.arrival_alerts.v1';
 
   final StorageStringKv _store;
   final ArrivalMessageSender _sender;
-  final ArrivalLocationUpdates _locationUpdates;
+  final ArrivalGeofences? _geofences;
+  final SavedPlacesService? _places;
   final _uuid = const Uuid();
 
   List<ArrivalAlert> _alerts = const [];
-  StreamSubscription<GeoPoint>? _subscription;
   bool _loaded = false;
-  bool _processing = false;
   bool _disposed = false;
+  String? _fenceError;
 
   final _changes = StreamController<List<ArrivalAlert>>.broadcast();
   final _errors = StreamController<Object>.broadcast();
 
   Stream<List<ArrivalAlert>> get changes => _changes.stream;
   Stream<Object> get errors => _errors.stream;
-  bool get isWatching => _subscription != null;
+
+  /// Why the last geofence registration failed, or null when it succeeded.
+  /// Shown on armed alerts so the user knows they will not fire.
+  String? get fenceError => _fenceError;
 
   /// Every alert owned by [uid], across all chats.
   List<ArrivalAlert> alertsOwnedBy(String uid) => [
@@ -56,14 +65,14 @@ class ArrivalAlertService {
       if (a.ownerUid == uid && a.threadId == threadId) a,
   ];
 
-  /// Loads saved alerts and resumes watching if any are still armed.
+  /// Loads saved alerts and registers their geofences.
   Future<void> restore() async {
     if (!_loaded) {
       _alerts = ArrivalAlert.decodeList(await _store.read(storageKey));
       _loaded = true;
       _changes.add(_alerts);
     }
-    _syncWatching();
+    await _syncFences();
   }
 
   Future<ArrivalAlert> add({
@@ -73,6 +82,7 @@ class ArrivalAlertService {
     required String label,
     required GeoPoint point,
     double radiusMeters = ArrivalAlert.defaultRadiusMeters,
+    String? placeId,
   }) async {
     await restore();
     final alert = ArrivalAlert(
@@ -83,21 +93,26 @@ class ArrivalAlertService {
       label: label.trim(),
       point: point,
       radiusMeters: radiusMeters,
+      placeId: placeId,
     );
     _alerts = [..._alerts, alert];
     await _persist();
-    _syncWatching();
+    await _syncFences();
     return alert;
   }
 
+  /// Cancels an alert. A temporary place it was made from is deleted too.
   Future<void> remove(String id) async {
     await restore();
+    final removed = _alerts.where((a) => a.id == id);
+    final placeId = removed.isEmpty ? null : removed.single.placeId;
     _alerts = [
       for (final a in _alerts)
         if (a.id != id) a,
     ];
     await _persist();
-    _syncWatching();
+    await _syncFences();
+    if (placeId != null) await _places?.removeIfTemporary(placeId);
   }
 
   /// Re-arms a place that has already fired.
@@ -105,58 +120,127 @@ class ArrivalAlertService {
     await restore();
     _alerts = [
       for (final a in _alerts)
-        if (a.id == id)
-          a.copyWith(
-            status: ArrivalAlertStatus.armed,
-            insideSinceCreation: true,
-          )
-        else
-          a,
+        if (a.id == id) a.copyWith(status: ArrivalAlertStatus.armed) else a,
     ];
     await _persist();
-    _syncWatching();
+    await _syncFences();
   }
 
-  /// Handles one position fix. Public so tests can drive it directly.
-  Future<void> onLocation(GeoPoint position) async {
-    if (_processing || _disposed) return;
-    _processing = true;
-    try {
-      var changed = false;
-      for (final alert in List.of(_alerts)) {
-        if (!alert.isArmed) continue;
-        final inside =
-            distanceMeters(position, alert.point) <= alert.radiusMeters;
-        if (!inside) {
-          if (alert.insideSinceCreation) {
-            _replace(alert.copyWith(insideSinceCreation: false));
-            changed = true;
-          }
-          continue;
-        }
-        // Armed while already at the place: wait until the user leaves.
-        if (alert.insideSinceCreation) continue;
+  /// Registers saved places, then delivers arrivals queued while the app was closed.
+  Future<bool> refreshArrivals() async {
+    await restore();
+    return processPendingArrivals();
+  }
 
-        // Mark first so a slow send or a crash can never send twice.
-        _replace(alert.copyWith(status: ArrivalAlertStatus.triggered));
-        await _persist();
-        try {
-          await _sender(alert);
-        } catch (error) {
-          _replace(alert);
-          changed = true;
-          if (!_errors.isClosed) _errors.add(error);
-          continue;
-        }
-        changed = true;
-      }
-      if (changed) {
-        await _persist();
-        _syncWatching();
-      }
-    } finally {
-      _processing = false;
+  /// Events older than this are dropped, so a send that can never succeed
+  /// (lost alert, permanently signed out) does not retry forever.
+  static const Duration maxEventAge = Duration(hours: 24);
+
+  /// Handles every queued enter event. An event is acked once it is handled:
+  /// sent, obsolete, or too old. A failed send stays queued for the next run.
+  /// Returns false when some event is still pending after a failure.
+  Future<bool> processPendingArrivals() async {
+    final geofences = _geofences;
+    if (geofences == null || _disposed) return true;
+    // Another isolate (the background worker) may have changed the alerts.
+    _alerts = ArrivalAlert.decodeList(await _store.read(storageKey));
+    _loaded = true;
+    final List<ArrivalGeofenceEvent> events;
+    try {
+      events = await geofences.peekPending();
+    } catch (error) {
+      if (!_errors.isClosed) _errors.add(error);
+      return false;
     }
+
+    final handled = <String>[];
+    var allHandled = true;
+    final now = DateTime.now();
+    for (final event in events) {
+      if (now.difference(event.enqueuedAt) > maxEventAge) {
+        handled.add(event.eid);
+        continue;
+      }
+      var sent = true;
+      final placeIds = <String>[];
+      for (final id in _matchingAlertIds(event)) {
+        final placeId = _placeIdOf(id);
+        if (!await _fire(id)) {
+          sent = false;
+        } else if (placeId != null) {
+          placeIds.add(placeId);
+        }
+      }
+      if (sent) {
+        for (final placeId in placeIds) {
+          await _places?.recordVisit(placeId);
+        }
+        handled.add(event.eid);
+      } else {
+        allHandled = false;
+      }
+    }
+
+    if (handled.isNotEmpty) {
+      try {
+        await geofences.ackPending(handled);
+      } catch (error) {
+        if (!_errors.isClosed) _errors.add(error);
+        allHandled = false;
+      }
+    }
+    return allHandled;
+  }
+
+  /// The alert the OS reported, plus every armed alert whose radius contains
+  /// the device coordinate from the event.
+  List<String> _matchingAlertIds(ArrivalGeofenceEvent event) {
+    final ids = <String>{event.alertId};
+    final lat = event.latitude;
+    final lng = event.longitude;
+    if (lat != null && lng != null) {
+      final at = GeoCoord(lat, lng);
+      for (final alert in _alerts) {
+        if (!alert.isArmed) continue;
+        final centre = GeoCoord(alert.point.latitude, alert.point.longitude);
+        if (at.distanceTo(centre) <= alert.radiusMeters) ids.add(alert.id);
+      }
+    }
+    return ids.toList();
+  }
+
+  String? _placeIdOf(String alertId) {
+    for (final a in _alerts) {
+      if (a.id == alertId) return a.placeId;
+    }
+    return null;
+  }
+
+  /// Sends the alert once. Returns false only when the send failed, in which
+  /// case the alert is re-armed so a later run can retry it.
+  Future<bool> _fire(String alertId) async {
+    if (_disposed) return true;
+    final matches = _alerts.where((a) => a.id == alertId && a.isArmed);
+    if (matches.isEmpty) return true;
+    final alert = matches.single;
+
+    // Mark first so a slow send or a crash can never send twice.
+    _replace(alert.copyWith(status: ArrivalAlertStatus.triggered));
+    await _persist();
+    await _syncFences();
+    try {
+      await _sender(alert);
+    } catch (error) {
+      _replace(alert);
+      await _persist();
+      await _syncFences();
+      if (!_errors.isClosed) _errors.add(error);
+      return false;
+    }
+    // A temporary place has served its purpose once its alert has fired.
+    final placeId = alert.placeId;
+    if (placeId != null) await _places?.removeIfTemporary(placeId);
+    return true;
   }
 
   void _replace(ArrivalAlert updated) {
@@ -171,70 +255,56 @@ class ArrivalAlertService {
     if (!_changes.isClosed) _changes.add(_alerts);
   }
 
-  void _syncWatching() {
-    if (_disposed) return;
-    final hasArmed = _alerts.any((a) => a.isArmed);
-    if (hasArmed && _subscription == null) {
-      _subscription = _locationUpdates().listen(
-        (point) => unawaited(onLocation(point)),
-        onError: (Object error, StackTrace _) {
-          if (!_errors.isClosed) _errors.add(error);
-        },
-      );
-    } else if (!hasArmed && _subscription != null) {
-      unawaited(_subscription!.cancel());
-      _subscription = null;
+  /// Registers one geofence per armed alert. A failed registration is kept in
+  /// [fenceError] and republished so the UI can show it.
+  Future<void> _syncFences() async {
+    final geofences = _geofences;
+    if (geofences == null || _disposed) return;
+    final fences = [
+      for (final a in _alerts)
+        if (a.isArmed)
+          ArrivalFence(
+            id: a.id,
+            latitude: a.point.latitude,
+            longitude: a.point.longitude,
+            radiusMeters: a.radiusMeters,
+          ),
+    ];
+    try {
+      await geofences.sync(fences);
+      _setFenceError(null);
+    } catch (error) {
+      _setFenceError(_describe(error));
+      if (!_errors.isClosed) _errors.add(error);
     }
+  }
+
+  void _setFenceError(String? message) {
+    if (_fenceError == message) return;
+    _fenceError = message;
+    if (!_changes.isClosed) _changes.add(_alerts);
+  }
+
+  static String _describe(Object error) {
+    if (error is PlatformException && error.message != null) {
+      return error.message!;
+    }
+    return 'Could not arm this place. Check location permission is "Allow all the time".';
   }
 
   /// Stops watching and forgets alerts, used when signing out or locking.
   Future<void> clear() async {
-    await _subscription?.cancel();
-    _subscription = null;
     _alerts = const [];
     _loaded = false;
     await _store.delete(storageKey);
+    await _syncFences();
     if (!_changes.isClosed) _changes.add(_alerts);
   }
 
   void dispose() {
     if (_disposed) return;
     _disposed = true;
-    unawaited(_subscription?.cancel());
-    _subscription = null;
     _changes.close();
     _errors.close();
-  }
-
-  static Stream<GeoPoint> _geolocatorUpdates() {
-    return Geolocator.getPositionStream(
-      locationSettings: AndroidSettings(
-        accuracy: LocationAccuracy.high,
-        distanceFilter: 25,
-        intervalDuration: const Duration(seconds: 15),
-        foregroundNotificationConfig: const ForegroundNotificationConfig(
-          notificationTitle: 'Calculator',
-          notificationText: 'Syncing in background',
-          notificationChannelName: 'Calculator notifications',
-          enableWakeLock: true,
-          setOngoing: true,
-        ),
-      ),
-    ).map((p) => GeoPoint(p.latitude, p.longitude));
-  }
-
-  /// Great-circle distance in metres.
-  static double distanceMeters(GeoPoint a, GeoPoint b) {
-    const earthRadius = 6371000.0;
-    double rad(double d) => d * pi / 180;
-    final dLat = rad(b.latitude - a.latitude);
-    final dLon = rad(b.longitude - a.longitude);
-    final h =
-        sin(dLat / 2) * sin(dLat / 2) +
-        cos(rad(a.latitude)) *
-            cos(rad(b.latitude)) *
-            sin(dLon / 2) *
-            sin(dLon / 2);
-    return earthRadius * 2 * atan2(sqrt(h), sqrt(1 - h));
   }
 }

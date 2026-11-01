@@ -52,11 +52,13 @@ class FirestorePresenceRepository implements PresenceRepository {
 
   Timer? _heartbeatTimer;
   String? _heartbeatUid;
+  bool _shareLastSeen = true;
 
   @override
-  Future<void> setOnline(String uid) async {
+  Future<void> setOnline(String uid, {bool shareLastSeen = true}) async {
     _heartbeatTimer?.cancel();
     _heartbeatUid = uid;
+    _shareLastSeen = shareLastSeen;
     // Armed before the first write, whose acknowledgement never arrives while
     // offline; otherwise the heartbeat would not start until reconnection.
     _heartbeatTimer = Timer.periodic(_heartbeatInterval, (_) {
@@ -70,18 +72,26 @@ class FirestorePresenceRepository implements PresenceRepository {
   }
 
   @override
-  Future<void> setOffline(String uid) async {
+  Future<void> setOffline(String uid, {bool shareLastSeen = true}) async {
     _heartbeatTimer?.cancel();
     _heartbeatTimer = null;
     _heartbeatUid = null;
+    _shareLastSeen = shareLastSeen;
     await _publish(uid, isOnline: false);
   }
 
   Future<void> _publish(String uid, {required bool isOnline}) {
+    // While online the timestamp doubles as the heartbeat and is required for
+    // staleness detection. When last seen is hidden it is deleted on going
+    // offline, so the stored document never reveals when the user left.
+    final keepTimestamp = isOnline || _shareLastSeen;
     return _presence.doc(uid).set({
       'uid': uid,
       'isOnline': isOnline,
-      'lastSeen': DateTime.now().toUtc().millisecondsSinceEpoch,
+      'showLastSeen': _shareLastSeen,
+      'lastSeen': keepTimestamp
+          ? DateTime.now().toUtc().millisecondsSinceEpoch
+          : FieldValue.delete(),
     }, SetOptions(merge: true));
   }
 
@@ -104,6 +114,7 @@ class FirestorePresenceRepository implements PresenceRepository {
     final raw = <String, _RawPresence>{};
     final subs = <StreamSubscription<QuerySnapshot<Map<String, dynamic>>>>[];
     Timer? ticker;
+    // ignore: close_sinks - returned as the stream; closed by its subscriber.
     late StreamController<Map<String, UserPresence>> controller;
 
     void publish() {
@@ -156,21 +167,36 @@ class FirestorePresenceRepository implements PresenceRepository {
 
 /// The stored document, before the staleness window is applied.
 class _RawPresence {
-  const _RawPresence({required this.claimsOnline, required this.lastSeen});
+  const _RawPresence({
+    required this.claimsOnline,
+    required this.lastSeen,
+    required this.showLastSeen,
+  });
 
   final bool claimsOnline;
-  final DateTime lastSeen;
+  final DateTime? lastSeen;
+  final bool showLastSeen;
 
-  factory _RawPresence.fromMap(Map<String, dynamic> data) => _RawPresence(
-    claimsOnline: data['isOnline'] as bool? ?? false,
-    lastSeen: DateTime.fromMillisecondsSinceEpoch(
-      (data['lastSeen'] as int?) ?? 0,
-      isUtc: true,
-    ),
-  );
+  factory _RawPresence.fromMap(Map<String, dynamic> data) {
+    final ms = data['lastSeen'] as int?;
+    return _RawPresence(
+      claimsOnline: data['isOnline'] as bool? ?? false,
+      lastSeen: ms == null
+          ? null
+          : DateTime.fromMillisecondsSinceEpoch(ms, isUtc: true),
+      // Documents written before the setting existed count as shared.
+      showLastSeen: data['showLastSeen'] as bool? ?? true,
+    );
+  }
 
-  UserPresence resolve(DateTime now, Duration staleAfter) => UserPresence(
-    isOnline: claimsOnline && now.difference(lastSeen) < staleAfter,
-    lastSeen: lastSeen,
-  );
+  UserPresence resolve(DateTime now, Duration staleAfter) {
+    final seen = lastSeen;
+    return UserPresence(
+      isOnline:
+          claimsOnline && seen != null && now.difference(seen) < staleAfter,
+      // A crashed client that hid last seen may leave its final heartbeat
+      // behind; never surface it.
+      lastSeen: showLastSeen ? seen : null,
+    );
+  }
 }

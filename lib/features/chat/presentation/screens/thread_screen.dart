@@ -12,10 +12,11 @@ import 'package:file_picker/file_picker.dart';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show ScrollDirection;
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:geolocator/geolocator.dart';
 import 'package:go_router/go_router.dart';
+import 'package:photo_vault/core/location/app_location.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 import 'package:uuid/uuid.dart';
@@ -25,14 +26,17 @@ import 'package:permission_handler/permission_handler.dart';
 
 import '../../application/services/live_location_service.dart';
 import '../../application/services/arrival_alert_service.dart';
+import '../../application/services/saved_places_service.dart';
 import '../../domain/entities/geo_share.dart';
 import 'arrival_alerts_screen.dart';
+import '../widgets/arrival_permissions.dart';
+import '../widgets/arrival_place_sheets.dart';
 import 'location_picker_screen.dart';
 import '../../application/services/chat_notification_service.dart';
 import 'package:photo_vault/core/integrations/chat_vault_bridge.dart';
 import '../../application/media/image_compressor.dart';
 import '../../application/services/profile_service.dart';
-import '../../data/repositories/local_sticker_pack_repository.dart';
+import '../../domain/repositories/sticker_pack_repository.dart';
 import '../../domain/entities/chat_message.dart';
 import '../../domain/entities/message_metadata.dart';
 import '../../domain/entities/chat_thread.dart';
@@ -61,6 +65,10 @@ import '../widgets/message_bubble.dart';
 import '../widgets/user_avatar.dart';
 import '../widgets/typing_indicator.dart';
 import '../widgets/vault_picker_sheet.dart';
+import '../formatting/last_seen_formatter.dart';
+import 'thread_timeline.dart';
+import 'package:photo_vault/core/platform/battery_optimization.dart';
+import '../../application/media/media_send_status.dart';
 import '../widgets/chat_audio_recorder.dart';
 import '../widgets/chat_media_picker.dart';
 import 'chat_saved_attachments_screen.dart';
@@ -128,8 +136,10 @@ class ThreadScreen extends StatefulWidget {
     this.liveLocationRepository,
     this.liveLocationService,
     this.arrivalAlertService,
+    this.savedPlacesService,
     this.notesRepository,
     this.chatDraftRepository,
+    required this.stickerPackFactory,
   });
 
   final ChatThread thread;
@@ -155,8 +165,13 @@ class ThreadScreen extends StatefulWidget {
   final LiveLocationRepository? liveLocationRepository;
   final LiveLocationService? liveLocationService;
   final ArrivalAlertService? arrivalAlertService;
+  final SavedPlacesService? savedPlacesService;
   final NotesRepository? notesRepository;
   final ChatDraftRepository? chatDraftRepository;
+
+  /// Builds the signed-in user's sticker pack. Injected so this screen
+  /// depends on the [StickerPackRepository] abstraction, not its storage.
+  final StickerPackRepository Function(String userId) stickerPackFactory;
 
   @override
   State<ThreadScreen> createState() => _ThreadScreenState();
@@ -196,7 +211,7 @@ class _ThreadScreenState extends State<ThreadScreen>
   bool _capturingCamera = false;
   final Set<String> _cameraShown = {};
   String? _stickerPackUserId;
-  LocalStickerPackRepository? _stickerPackRepository;
+  StickerPackRepository? _stickerPackRepository;
 
   bool get _isEditing => _editingMessage != null;
 
@@ -204,7 +219,7 @@ class _ThreadScreenState extends State<ThreadScreen>
   String? _highlightedId;
 
   /// Rows most recently rendered, so a message id can be mapped to an index.
-  List<_ThreadItem> _items = const [];
+  List<ThreadItem> _items = const [];
   List<ChatMessage>? _cachedVisibleMessages;
 
   /// Drives the send button's reveal without rebuilding the whole composer on
@@ -216,8 +231,22 @@ class _ThreadScreenState extends State<ThreadScreen>
   final _scrollbarVisible = ValueNotifier<bool>(false);
   final _showJumpToLatest = ValueNotifier<bool>(false);
   Timer? _scrollbarHide;
-  Timer? _positionThrottle;
   Timer? _readThrottle;
+
+  /// For each row in [_items], how many message rows precede it. Lets the
+  /// scrollbar map a visible row to a history rank without any I/O.
+  List<int> _messageOrdinals = const [];
+
+  /// History rank of the newest loaded message, fetched once per window.
+  String? _rankAnchorId;
+  ({int older, int total})? _rankAnchor;
+
+  /// True while the user's finger (or the fling it started) drives the list;
+  /// anchor corrections are skipped then because they kill the momentum.
+  bool _userScrolling = false;
+
+  bool _scrollbarJumpInFlight = false;
+  double? _queuedScrollbarJump;
   StreamSubscription<Object>? _liveLocationErrorSubscription;
   StreamSubscription<Object>? _arrivalErrorSubscription;
 
@@ -557,7 +586,7 @@ class _ThreadScreenState extends State<ThreadScreen>
     _scrollbarHide = Timer(const Duration(milliseconds: 1500), () {
       if (mounted) _scrollbarVisible.value = false;
     });
-    _scheduleHistoryPosition((nearest + furthest) ~/ 2);
+    _updateThumb(nearest, furthest);
     // Throttle read-receipt marking during rapid scrolling to prevent frame drops.
     if (!(_readThrottle?.isActive ?? false)) {
       _readThrottle = Timer(const Duration(milliseconds: 300), () {
@@ -566,21 +595,80 @@ class _ThreadScreenState extends State<ThreadScreen>
     }
   }
 
-  /// Refresh the scrollbar thumb from the message around [index], throttled
-  /// because it is a (cheap, indexed) database count.
-  void _scheduleHistoryPosition(int index) {
-    if (_positionThrottle?.isActive ?? false) return;
-    _positionThrottle = Timer(const Duration(milliseconds: 250), () async {
-      if (!mounted || _items.isEmpty) return;
-      ChatMessage? msg;
-      for (var i = index.clamp(0, _items.length - 1); i < _items.length; i++) {
-        msg = _items[i].message;
-        if (msg != null) break;
+  /// Places the scrollbar thumb for the rows currently on screen.
+  ///
+  /// Synchronous: the rank of the newest loaded message is fetched once per
+  /// window ([_refreshRankAnchor]); every other row's rank follows from its
+  /// position in the window, so the thumb tracks the list frame by frame.
+  void _updateThumb(int nearest, int furthest) {
+    final anchor = _rankAnchor;
+    if (anchor == null || _messageOrdinals.isEmpty) return;
+    final mid = ((nearest + furthest) ~/ 2).clamp(
+      0,
+      _messageOrdinals.length - 1,
+    );
+    final rank = anchor.older - _messageOrdinals[mid];
+    final fraction = anchor.total <= 1
+        ? 1.0
+        : (rank / (anchor.total - 1)).clamp(0.0, 1.0);
+    if (_historyPosition.value != fraction) _historyPosition.value = fraction;
+  }
+
+  /// Re-fetches the history rank of the newest loaded message when the loaded
+  /// window changes (one indexed count query, not one per scroll frame).
+  Future<void> _refreshRankAnchor() async {
+    ChatMessage? newest;
+    for (final item in _items) {
+      if (item.message != null) {
+        newest = item.message;
+        break;
       }
-      if (msg == null) return;
-      final pos = await context.read<ActiveThreadCubit>().positionOf(msg);
-      if (mounted && pos != null) _historyPosition.value = pos;
-    });
+    }
+    if (newest == null || newest.messageId == _rankAnchorId) return;
+    final id = newest.messageId;
+    _rankAnchorId = id;
+    final rank = await context.read<ActiveThreadCubit>().historyRankOf(newest);
+    if (!mounted || _rankAnchorId != id || rank == null) return;
+    _rankAnchor = rank;
+    final positions = _itemPositions.itemPositions.value;
+    if (positions.isEmpty) return;
+    final indexes = positions.map((p) => p.index);
+    _updateThumb(
+      indexes.reduce((a, b) => a < b ? a : b),
+      indexes.reduce((a, b) => a > b ? a : b),
+    );
+  }
+
+  /// Jumps for the scrollbar, one at a time: while a window is loading only
+  /// the latest requested position is kept, so a fast drag never queues up a
+  /// backlog of database loads.
+  void _jumpFromScrollbar(double fraction) {
+    if (_scrollbarJumpInFlight) {
+      _queuedScrollbarJump = fraction;
+      return;
+    }
+    _scrollbarJumpInFlight = true;
+    unawaited(
+      context.read<ActiveThreadCubit>().jumpToFraction(fraction).whenComplete(
+        () {
+          _scrollbarJumpInFlight = false;
+          final next = _queuedScrollbarJump;
+          _queuedScrollbarJump = null;
+          if (next != null && mounted) _jumpFromScrollbar(next);
+        },
+      ),
+    );
+  }
+
+  bool _onScrollNotification(ScrollNotification n) {
+    if (n is ScrollStartNotification && n.dragDetails != null) {
+      _userScrolling = true;
+    } else if (n is UserScrollNotification) {
+      _userScrolling = n.direction != ScrollDirection.idle;
+    } else if (n is ScrollEndNotification) {
+      _userScrolling = false;
+    }
+    return false;
   }
 
   void _onProfileChanged() {
@@ -636,7 +724,6 @@ class _ThreadScreenState extends State<ThreadScreen>
     _textCtrl.removeListener(_onTextControllerChanged);
     _itemPositions.itemPositions.removeListener(_onScroll);
     _scrollbarHide?.cancel();
-    _positionThrottle?.cancel();
     _readThrottle?.cancel();
     unawaited(_liveLocationErrorSubscription?.cancel());
     unawaited(_arrivalErrorSubscription?.cancel());
@@ -765,9 +852,8 @@ class _ThreadScreenState extends State<ThreadScreen>
                               dateAt: context
                                   .read<ActiveThreadCubit>()
                                   .dateAtFraction,
-                              onJump: context
-                                  .read<ActiveThreadCubit>()
-                                  .jumpToFraction,
+                              onDragPreview: _jumpFromScrollbar,
+                              onJump: _jumpFromScrollbar,
                             ),
                           ),
                           _buildLoadingNewer(),
@@ -955,13 +1041,31 @@ class _ThreadScreenState extends State<ThreadScreen>
         ),
       ],
       title: BlocBuilder<ActiveThreadCubit, ActiveThreadState>(
+        // The header only depends on presence; skipping message-window
+        // updates keeps it out of the per-message rebuild path.
+        buildWhen: (a, b) =>
+            a.runtimeType != b.runtimeType ||
+            (a is ActiveThreadLoaded &&
+                b is ActiveThreadLoaded &&
+                (a.otherIsOnline != b.otherIsOnline ||
+                    a.otherIsTyping != b.otherIsTyping ||
+                    a.otherLastSeen != b.otherLastSeen)),
         builder: (context, state) {
-          final online = state is ActiveThreadLoaded
-              ? state.otherIsOnline
-              : false;
+          final loaded = state is ActiveThreadLoaded ? state : null;
+          final online = loaded?.otherIsOnline ?? false;
+          final typing = loaded?.otherIsTyping ?? false;
+          final lastSeen = loaded?.otherLastSeen;
+          final statusText = typing
+              ? 'typing…'
+              : online
+              ? 'Online'
+              : (lastSeen != null && lastSeen.millisecondsSinceEpoch > 0
+                    ? formatLastSeen(lastSeen)
+                    : 'Offline');
           final theme = Theme.of(context);
           final semantic = context.semantic;
           final presence = online ? semantic.online : semantic.offline;
+          final statusColor = typing ? theme.colorScheme.primary : presence;
           final header = Row(
             children: [
               _PresenceAvatar(
@@ -988,11 +1092,16 @@ class _ThreadScreenState extends State<ThreadScreen>
                       duration: AppDuration.normal,
                       style:
                           theme.textTheme.labelSmall?.copyWith(
-                            color: presence,
+                            color: statusColor,
                             fontWeight: FontWeight.w500,
+                            fontStyle: typing ? FontStyle.italic : null,
                           ) ??
-                          TextStyle(color: presence),
-                      child: Text(online ? 'Online' : 'Offline'),
+                          TextStyle(color: statusColor),
+                      child: Text(
+                        statusText,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
                     ),
                   ],
                 ),
@@ -1065,7 +1174,6 @@ class _ThreadScreenState extends State<ThreadScreen>
         }
         return !identical(prev.messages, next.messages) ||
             prev.isOffline != next.isOffline ||
-            prev.uploadProgress != next.uploadProgress ||
             prev.currentMatchId != next.currentMatchId ||
             prev.searchQuery != next.searchQuery ||
             !identical(prev.searchMatchIds, next.searchMatchIds) ||
@@ -1077,7 +1185,17 @@ class _ThreadScreenState extends State<ThreadScreen>
           return const LoadingView(message: 'Decrypting messages…');
         }
         if (state is ActiveThreadError) {
-          return ErrorView(message: state.message);
+          return ErrorView(
+            title: "Couldn't open this chat",
+            message: state.message,
+            retryLabel: 'Try again',
+            onRetry: () => unawaited(
+              context.read<ActiveThreadCubit>().openThread(
+                thread: widget.thread,
+                otherUser: widget.otherUser,
+              ),
+            ),
+          );
         }
         if (state is! ActiveThreadLoaded) return const SizedBox.shrink();
 
@@ -1098,185 +1216,158 @@ class _ThreadScreenState extends State<ThreadScreen>
         final myUid = cubit.myUid;
 
         final showPagingSpinner = state.hasMore;
-        final List<_ThreadItem> items;
+        final List<ThreadItem> items;
         if (identical(msgs, _cachedVisibleMessages) && _items.isNotEmpty) {
           items = _items;
         } else {
-          items = _buildThreadItems(msgs, withDayDividers: true);
+          final timeline = ThreadTimeline.build(msgs);
+          items = timeline.items;
           _items = items;
           _cachedVisibleMessages = msgs;
+          _messageOrdinals = timeline.messageOrdinals;
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) unawaited(_refreshRankAnchor());
+          });
         }
         _renderedDetached = state.isDetached;
         final matchIds = state.searchMatchIds.isEmpty
             ? const <String>{}
             : state.searchMatchIds.toSet();
 
-        return ScrollablePositionedList.builder(
-          itemScrollController: _itemScrollCtrl,
-          itemPositionsListener: _itemPositions,
-          reverse: true,
-          padding: const EdgeInsets.symmetric(
-            horizontal: AppSpacing.sm,
-            vertical: AppSpacing.sm,
-          ),
-          itemCount: items.length + (showPagingSpinner ? 1 : 0),
-          itemBuilder: (context, i) {
-            if (i == items.length) {
-              return const Padding(
-                padding: EdgeInsets.all(AppSpacing.sm),
-                child: Center(
-                  child: SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2),
+        return NotificationListener<ScrollNotification>(
+          onNotification: _onScrollNotification,
+          child: ScrollablePositionedList.builder(
+            itemScrollController: _itemScrollCtrl,
+            itemPositionsListener: _itemPositions,
+            reverse: true,
+            padding: const EdgeInsets.symmetric(
+              horizontal: AppSpacing.sm,
+              vertical: AppSpacing.sm,
+            ),
+            itemCount: items.length + (showPagingSpinner ? 1 : 0),
+            itemBuilder: (context, i) {
+              if (i == items.length) {
+                return const Padding(
+                  padding: EdgeInsets.all(AppSpacing.sm),
+                  child: Center(
+                    child: SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
                   ),
+                );
+              }
+
+              final item = items[i];
+              if (item.divider != null) {
+                return ChatDayDivider(
+                  key: ValueKey('day-${item.divider!.toIso8601String()}'),
+                  date: item.divider!,
+                );
+              }
+
+              final msg = item.message!;
+              final isMine = msg.senderId == myUid;
+              // Upload progress ticks many times a second; selecting it per row
+              // means only that bubble rebuilds, not the whole list builder.
+              return BlocSelector<
+                ActiveThreadCubit,
+                ActiveThreadState,
+                MediaSendStatus?
+              >(
+                key: ValueKey(msg.messageId),
+                selector: (s) => s is ActiveThreadLoaded
+                    ? s.uploadProgress[msg.messageId]
+                    : null,
+                builder: (context, sendStatus) => MessageBubble(
+                  key: ValueKey('bubble-${msg.messageId}'),
+                  message: msg,
+                  isMine: isMine,
+                  myUid: myUid,
+                  otherUid: widget.otherUser.uid,
+                  isOffline: state.isOffline,
+                  mediaLoader: widget.mediaLoader,
+                  liveLocationRepository: widget.liveLocationRepository,
+                  notesRepository: widget.notesRepository,
+                  onStopLiveLocation: _stopLiveLocation,
+                  sendStatus: sendStatus,
+                  onPauseUpload: () => cubit.pauseUpload(msg.messageId),
+                  onResumeUpload: () => cubit.resumeUpload(msg.messageId),
+                  onCancelUpload: sendStatus == null
+                      ? null
+                      : () async {
+                          unawaited(HapticFeedback.selectionClick());
+                          await cubit.cancelUpload(msg.messageId);
+                        },
+                  isHighlighted:
+                      _highlightedId == msg.messageId ||
+                      state.currentMatchId == msg.messageId,
+                  highlightQuery: matchIds.contains(msg.messageId)
+                      ? state.searchQuery
+                      : '',
+                  isFirstInGroup: item.isFirstInGroup,
+                  isLastInGroup: item.isLastInGroup,
+                  onReply: () {
+                    cubit.setReplyTarget(msg);
+                    _inputFocus.requestFocus();
+                  },
+                  onReact: (emoji) => cubit.toggleReaction(msg, emoji),
+                  // Always wired up for own, non-media messages — eligibility
+                  // (30-minute / edited-before-read rule) is checked once,
+                  // centrally, inside `_promptEdit`, so both the long-press menu
+                  // entry and the Signal-style double-tap give the same
+                  // accept/reject behaviour instead of silently disappearing.
+                  onEdit:
+                      isMine &&
+                          !msg.isMedia &&
+                          msg.mediaType != MessageType.liveLocation &&
+                          !msg.isGeoShare &&
+                          cubit.canEditMessage(msg)
+                      ? () => _promptEdit(msg)
+                      : null,
+                  onCopy:
+                      msg.localDecryptedText?.trim().isNotEmpty == true &&
+                          !msg.isGeoShare
+                      ? () => _copyMessage(msg.localDecryptedText!)
+                      : null,
+                  canReplyFromLeftToRight: true,
+                  onTapQuote: _jumpToMessage,
+                  onSaveToVault: msg.isMedia && msg.senderId != cubit.myUid
+                      ? () => _saveToVault(msg)
+                      : null,
+                  onSaveAsSticker:
+                      msg.mediaRef != null &&
+                          sendStatus == null &&
+                          const {
+                            MessageType.image,
+                            MessageType.gif,
+                            MessageType.sticker,
+                          }.contains(msg.mediaType)
+                      ? () => unawaited(_saveAsSticker(msg, cubit))
+                      : null,
+                  onForward:
+                      msg.mediaType == MessageType.liveLocation ||
+                          msg.isGeoShare
+                      ? null
+                      : () => _promptForward(msg),
+                  onRetry: msg.status == MessageStatus.failed
+                      ? () => cubit.retryMessage(msg.messageId)
+                      : null,
+                  onDiscard: msg.status == MessageStatus.failed
+                      ? () => cubit.discardMessage(msg.messageId)
+                      : null,
+                  onDeleteForMe: () => _confirmDeleteForMe(msg),
+                  onDeleteForEveryone: isMine
+                      ? () => _confirmDeleteForEveryone(msg)
+                      : null,
                 ),
               );
-            }
-
-            final item = items[i];
-            if (item.divider != null) {
-              return ChatDayDivider(date: item.divider!);
-            }
-
-            final msg = item.message!;
-            final isMine = msg.senderId == myUid;
-            return MessageBubble(
-              key: ValueKey(msg.messageId),
-              message: msg,
-              isMine: isMine,
-              myUid: myUid,
-              otherUid: widget.otherUser.uid,
-              isOffline: state.isOffline,
-              mediaLoader: widget.mediaLoader,
-              liveLocationRepository: widget.liveLocationRepository,
-              notesRepository: widget.notesRepository,
-              onStopLiveLocation: _stopLiveLocation,
-              sendStatus: state.uploadProgress[msg.messageId],
-              onPauseUpload: () => cubit.pauseUpload(msg.messageId),
-              onResumeUpload: () => cubit.resumeUpload(msg.messageId),
-              onCancelUpload: state.uploadProgress[msg.messageId] == null
-                  ? null
-                  : () async {
-                      HapticFeedback.selectionClick();
-                      await cubit.cancelUpload(msg.messageId);
-                    },
-              isHighlighted:
-                  _highlightedId == msg.messageId ||
-                  state.currentMatchId == msg.messageId,
-              highlightQuery: matchIds.contains(msg.messageId)
-                  ? state.searchQuery
-                  : '',
-              isFirstInGroup: item.isFirstInGroup,
-              isLastInGroup: item.isLastInGroup,
-              onReply: () {
-                cubit.setReplyTarget(msg);
-                _inputFocus.requestFocus();
-              },
-              onReact: (emoji) => cubit.toggleReaction(msg, emoji),
-              // Always wired up for own, non-media messages — eligibility
-              // (30-minute / edited-before-read rule) is checked once,
-              // centrally, inside `_promptEdit`, so both the long-press menu
-              // entry and the Signal-style double-tap give the same
-              // accept/reject behaviour instead of silently disappearing.
-              onEdit:
-                  isMine &&
-                      !msg.isMedia &&
-                      msg.mediaType != MessageType.liveLocation &&
-                      !msg.isGeoShare &&
-                      cubit.canEditMessage(msg)
-                  ? () => _promptEdit(msg)
-                  : null,
-              onCopy:
-                  msg.localDecryptedText?.trim().isNotEmpty == true &&
-                      !msg.isGeoShare
-                  ? () => _copyMessage(msg.localDecryptedText!)
-                  : null,
-              canReplyFromLeftToRight: true,
-              onTapQuote: _jumpToMessage,
-              onSaveToVault: msg.isMedia && msg.senderId != cubit.myUid
-                  ? () => _saveToVault(msg)
-                  : null,
-              onSaveAsSticker:
-                  msg.mediaRef != null &&
-                      state.uploadProgress[msg.messageId] == null &&
-                      const {
-                        MessageType.image,
-                        MessageType.gif,
-                        MessageType.sticker,
-                      }.contains(msg.mediaType)
-                  ? () => unawaited(_saveAsSticker(msg, cubit))
-                  : null,
-              onForward:
-                  msg.mediaType == MessageType.liveLocation || msg.isGeoShare
-                  ? null
-                  : () => _promptForward(msg),
-              onRetry: msg.status == MessageStatus.failed
-                  ? () => cubit.retryMessage(msg.messageId)
-                  : null,
-              onDiscard: msg.status == MessageStatus.failed
-                  ? () => cubit.discardMessage(msg.messageId)
-                  : null,
-              onDeleteForMe: () => _confirmDeleteForMe(msg),
-              onDeleteForEveryone: isMine
-                  ? () => _confirmDeleteForEveryone(msg)
-                  : null,
-            );
-          },
+            },
+          ),
         );
       },
     );
-  }
-
-  /// Longest gap between two messages from the same sender that still reads as
-  /// one continuous run.
-  static const _groupWindow = Duration(minutes: 5);
-
-  /// Flatten [msgs] into renderable rows, newest first to match `reverse: true`.
-  ///
-  /// Because the list is reversed, `index + 1` is the *older* neighbour and
-  /// `index - 1` is the *newer* one — grouping and day dividers both read in
-  /// that direction.
-  List<_ThreadItem> _buildThreadItems(
-    List<ChatMessage> msgs, {
-    required bool withDayDividers,
-  }) {
-    final items = <_ThreadItem>[];
-
-    for (var i = 0; i < msgs.length; i++) {
-      final msg = msgs[i];
-      final older = i + 1 < msgs.length ? msgs[i + 1] : null;
-      final newer = i > 0 ? msgs[i - 1] : null;
-
-      final startsDay = older == null || !_sameDay(older.sentAt, msg.sentAt);
-
-      items.add(
-        _ThreadItem.message(
-          msg,
-          // A day divider always breaks a run.
-          isFirstInGroup: startsDay || !_sameRun(older, msg),
-          isLastInGroup: !_sameRun(msg, newer),
-        ),
-      );
-
-      // Appended *after* the message so the reversed list draws it above.
-      if (withDayDividers && startsDay) {
-        items.add(_ThreadItem.divider(msg.sentAt));
-      }
-    }
-
-    return items;
-  }
-
-  static bool _sameDay(DateTime a, DateTime b) =>
-      a.year == b.year && a.month == b.month && a.day == b.day;
-
-  /// Whether [earlier] and [later] belong to the same visual run.
-  static bool _sameRun(ChatMessage? earlier, ChatMessage? later) {
-    if (earlier == null || later == null) return false;
-    if (earlier.senderId != later.senderId) return false;
-    if (!_sameDay(earlier.sentAt, later.sentAt)) return false;
-    return later.sentAt.difference(earlier.sentAt).abs() <= _groupWindow;
   }
 
   /// Scroll to a quoted message and flash it, loading it (with its
@@ -1306,7 +1397,8 @@ class _ThreadScreenState extends State<ThreadScreen>
     if (!_itemScrollCtrl.isAttached || _items.isEmpty) return;
     final positions = _itemPositions.itemPositions.value;
     final nearBottom =
-        positions.isNotEmpty && positions.any((p) => p.index > 0 && p.index < 8);
+        positions.isNotEmpty &&
+        positions.any((p) => p.index > 0 && p.index < 8);
     if (nearBottom) {
       _itemScrollCtrl.scrollTo(
         index: 0,
@@ -1351,6 +1443,8 @@ class _ThreadScreenState extends State<ThreadScreen>
   /// dropped below it (newer paging, trimming, arrivals while scrolled up).
   void _keepAnchor() {
     if (!_itemScrollCtrl.isAttached) return;
+    // A jumpTo mid-fling stops the fling dead, which reads as lag.
+    if (_userScrolling) return;
     final positions = _itemPositions.itemPositions.value.toList()
       ..sort((a, b) => a.index.compareTo(b.index));
     if (positions.isEmpty) return;
@@ -2317,8 +2411,11 @@ class _ThreadScreenState extends State<ThreadScreen>
   /// Handles `/arrive` and `/pin` typed in the composer. Returns true when
   /// the text was a command and must not be sent as a message.
   bool _runLocationCommand(String text) {
-    final command = text.toLowerCase();
-    if (command != '/arrive' && command != '/pin' && command != '/route') {
+    final command = text.trim().toLowerCase();
+    if (command != '/arrive' &&
+        command != '/arrive cancel' &&
+        command != '/pin' &&
+        command != '/route') {
       return false;
     }
     if (!Platform.isAndroid) return false;
@@ -2327,11 +2424,79 @@ class _ThreadScreenState extends State<ThreadScreen>
     _suppressDraftChanges = false;
     final cubit = context.read<ActiveThreadCubit>();
     if (command == '/arrive') {
-      unawaited(_openArrivalAlerts(cubit, startByAdding: true));
+      unawaited(_arriveFromPlace(cubit));
+    } else if (command == '/arrive cancel') {
+      unawaited(_cancelArrivalAlerts(cubit));
     } else {
       unawaited(_sharePinOrRoute(cubit));
     }
     return true;
+  }
+
+  /// `/arrive`: pick a saved place (or a new one) to alert on arrival.
+  Future<void> _arriveFromPlace(ActiveThreadCubit cubit) async {
+    final service = widget.arrivalAlertService;
+    final places = widget.savedPlacesService;
+    if (service == null || places == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Arrival alerts are unavailable on this device.'),
+        ),
+      );
+      return;
+    }
+    if (!await ensureArrivalPermissions(context) || !mounted) return;
+    final mine = await places.placesFor(cubit.myUid);
+    if (!mounted) return;
+    final pick = await pickSavedPlace(context, places: mine);
+    if (pick == null || !mounted) return;
+    if (pick.isNew) {
+      await _openArrivalAlerts(cubit, startByAdding: true);
+      return;
+    }
+    final place = pick.place!;
+    await service.add(
+      ownerUid: cubit.myUid,
+      threadId: widget.thread.threadId,
+      recipientUid: widget.otherUser.uid,
+      label: place.label,
+      point: place.point,
+      radiusMeters: place.radiusMeters,
+      placeId: place.id,
+    );
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          '${_nameOf(widget.otherUser)} will be told when you reach '
+          '${place.label}.',
+        ),
+      ),
+    );
+  }
+
+  /// `/arrive cancel`: cancels every armed arrival alert in this chat.
+  Future<void> _cancelArrivalAlerts(ActiveThreadCubit cubit) async {
+    final service = widget.arrivalAlertService;
+    if (service == null || !mounted) return;
+    final armed = [
+      for (final a in service.alertsFor(cubit.myUid, widget.thread.threadId))
+        if (a.isArmed) a,
+    ];
+    for (final alert in armed) {
+      await service.remove(alert.id);
+    }
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          armed.isEmpty
+              ? 'No arrival alerts to cancel here.'
+              : 'Cancelled ${armed.length} arrival alert'
+                    '${armed.length == 1 ? '' : 's'}.',
+        ),
+      ),
+    );
   }
 
   Future<void> _sharePinOrRoute(ActiveThreadCubit cubit) async {
@@ -2347,7 +2512,8 @@ class _ThreadScreenState extends State<ThreadScreen>
     bool startByAdding = false,
   }) async {
     final service = widget.arrivalAlertService;
-    if (!Platform.isAndroid || service == null) {
+    final places = widget.savedPlacesService;
+    if (!Platform.isAndroid || service == null || places == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Arrival alerts are unavailable on this device.'),
@@ -2359,10 +2525,14 @@ class _ThreadScreenState extends State<ThreadScreen>
       MaterialPageRoute(
         builder: (_) => ArrivalAlertsScreen(
           service: service,
+          places: places,
           ownerUid: cubit.myUid,
           threadId: widget.thread.threadId,
           recipientUid: widget.otherUser.uid,
           recipientName: _nameOf(widget.otherUser),
+          onSendShare: (share) async {
+            await cubit.sendGeoShareMessage(share);
+          },
           startByAdding: startByAdding,
         ),
       ),
@@ -2389,6 +2559,7 @@ class _ThreadScreenState extends State<ThreadScreen>
         text,
         waitForDelivery: false,
       );
+      if (queued) unawaited(HapticFeedback.lightImpact());
       if (queued && shouldClearComposer && _draftGeneration == generation) {
         await _writeDraft('', generation).catchError((Object _) {});
       }
@@ -2517,10 +2688,10 @@ class _ThreadScreenState extends State<ThreadScreen>
     context.read<ActiveThreadCubit>().onTextChanged(updated);
   }
 
-  LocalStickerPackRepository _stickerPackFor(String userId) {
+  StickerPackRepository _stickerPackFor(String userId) {
     if (_stickerPackUserId != userId) {
       _stickerPackUserId = userId;
-      _stickerPackRepository = LocalStickerPackRepository(userId: userId);
+      _stickerPackRepository = widget.stickerPackFactory(userId);
     }
     return _stickerPackRepository!;
   }
@@ -3001,6 +3172,40 @@ class _ThreadScreenState extends State<ThreadScreen>
       if (replace != true || !mounted) return;
     }
 
+    if (AppLocation.instance.isMocking) {
+      final proceed = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          icon: const Icon(Icons.location_disabled_outlined),
+          title: const Text('Mock location is on'),
+          content: const Text(
+            'This chat will receive your simulated position, not your real '
+            'GPS location.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () async {
+                await AppLocation.instance.mock.useRealGps();
+                if (dialogContext.mounted) {
+                  Navigator.pop(dialogContext, true);
+                }
+              },
+              child: const Text('Use real GPS'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: const Text('Share mock'),
+            ),
+          ],
+        ),
+      );
+      if (proceed != true || !mounted) return;
+    }
+
     final duration = await showModalBottomSheet<Duration>(
       context: context,
       showDragHandle: true,
@@ -3044,17 +3249,22 @@ class _ThreadScreenState extends State<ThreadScreen>
     try {
       await _requestLiveLocationPermissions();
       if (!mounted) return;
-      if (!await Geolocator.isLocationServiceEnabled()) {
+      // Sharing must survive the screen turning off; ask once per session
+      // (it never blocks sharing if declined).
+      await ensureBackgroundAllowed(
+        context,
+        reason: 'so your live location keeps updating while the screen is off',
+        onlyOncePerSession: true,
+      );
+      if (!mounted) return;
+      if (!await AppLocation.instance.isServiceEnabled()) {
         throw StateError(
           'Turn on device location services, then try sharing again.',
         );
       }
 
-      final position = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.high,
-          timeLimit: Duration(seconds: 20),
-        ),
+      final position = await AppLocation.instance.current(
+        timeLimit: const Duration(seconds: 20),
       );
       final point = LiveLocationPoint(
         latitude: position.latitude,
@@ -3070,6 +3280,7 @@ class _ThreadScreenState extends State<ThreadScreen>
         userId: cubit.myUid,
         duration: duration,
         initialPoint: point,
+        recipientUid: widget.otherUser.uid,
       );
       if (!await cubit.sendLiveLocationMessage(sessionId: sessionId)) {
         await service.stopSharing();
@@ -3422,24 +3633,6 @@ class _ThreadScreenState extends State<ThreadScreen>
 }
 
 /// One renderable row in the thread list: either a message or a day divider.
-class _ThreadItem {
-  const _ThreadItem.message(
-    ChatMessage this.message, {
-    required this.isFirstInGroup,
-    required this.isLastInGroup,
-  }) : divider = null;
-
-  const _ThreadItem.divider(DateTime this.divider)
-    : message = null,
-      isFirstInGroup = false,
-      isLastInGroup = false;
-
-  final ChatMessage? message;
-  final DateTime? divider;
-  final bool isFirstInGroup;
-  final bool isLastInGroup;
-}
-
 /// App-bar avatar with a crisp presence indicator dot, matching Element X.
 class _PresenceAvatar extends StatelessWidget {
   const _PresenceAvatar({

@@ -50,15 +50,15 @@ class _ImageQualitySheetState extends State<ImageQualitySheet> {
     super.initState();
     _estimates = widget.initialEstimates;
     if (_estimates == null && widget.imageBytes != null) {
-      const ImageCompressor()
-          .estimateAllSizes(widget.imageBytes!)
-          .then((result) {
-            if (mounted) {
-              setState(() {
-                _estimates = result;
-              });
-            }
+      const ImageCompressor().estimateAllSizes(widget.imageBytes!).then((
+        result,
+      ) {
+        if (mounted) {
+          setState(() {
+            _estimates = result;
           });
+        }
+      });
     }
   }
 

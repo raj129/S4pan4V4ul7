@@ -158,7 +158,9 @@ void main() {
       addTearDown(tester.view.resetDevicePixelRatio);
 
       final scaffoldContext = tester.element(find.byType(Scaffold).first);
-      openThreadScreen(scaffoldContext, thread: thread, otherUser: otherUser);
+      unawaited(
+        openThreadScreen(scaffoldContext, thread: thread, otherUser: otherUser),
+      );
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 100));
 

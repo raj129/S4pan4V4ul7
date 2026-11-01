@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../../features/vault/application/services/import_manager.dart';
@@ -34,6 +36,8 @@ import '../../features/vault/domain/repositories/settings_repository.dart';
 import '../../features/vault/domain/repositories/vault_repository.dart';
 import '../../features/vault/domain/repositories/vmk_backup_repository.dart';
 import '../../features/chat/di/chat_dependencies.dart';
+import '../location/app_location.dart';
+import '../location/mock/traffic_route_service.dart';
 
 /// Single composition root for the vault side of the app.
 ///
@@ -172,6 +176,12 @@ class AppDependencies {
   final ExportPhotoUseCase exportPhotoUseCase;
   final ImportManager importManager;
 
+  /// Process-wide location provider (real GPS or mock).
+  AppLocation get location => AppLocation.instance;
+
+  /// Traffic-aware routes for the mock route simulator.
+  late final TrafficRouteService trafficRouteService = TrafficRouteService();
+
   /// Bridge for moving media between the vault and chat.
   ///
   /// Lives on [AppDependencies] rather than [ChatDependencies] because it needs
@@ -186,14 +196,25 @@ class AppDependencies {
   ///
   /// Lazy because every member reaches for Firebase, which is unavailable in
   /// the in-memory test configuration.
-  late final ChatDependencies chat = ChatDependencies(
-    authRepository: authRepository,
-    vaultSession: vaultSession,
-    database: switch (photoRepository) {
-      final PersistentPhotoRepositoryImpl repository => repository.database,
-      _ => null,
-    },
-  );
+  late final ChatDependencies chat = () {
+    final deps = ChatDependencies(
+      authRepository: authRepository,
+      vaultSession: vaultSession,
+      database: switch (photoRepository) {
+        final PersistentPhotoRepositoryImpl repository => repository.database,
+        _ => null,
+      },
+    );
+    // Apply the stored "Show last seen" privacy setting as soon as chat exists,
+    // going through the service so an already-published presence is updated.
+    unawaited(
+      settingsRepository
+          .isShowLastSeenEnabled()
+          .then(deps.presenceService.setShareLastSeen)
+          .catchError((Object _) {}),
+    );
+    return deps;
+  }();
 
   bool _chatInitialised = false;
   ChatDependencies? chatOverride;
