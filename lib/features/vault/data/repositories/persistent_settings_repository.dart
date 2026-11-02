@@ -92,6 +92,56 @@ class PersistentSettingsRepository implements SettingsRepository {
       _kv.write(StorageKeys.autoLockOnBackground, enabled.toString());
 
   @override
+  Future<int> getAutoLockTimeoutSeconds() async {
+    final rawSeconds = await _kv.read(StorageKeys.autoLockTimeoutSeconds);
+    if (rawSeconds != null) {
+      final seconds = int.tryParse(rawSeconds);
+      return SettingsRepository.autoLockTimeoutOptionsSeconds.contains(seconds)
+          ? seconds!
+          : SettingsRepository.defaultAutoLockTimeoutSeconds;
+    }
+
+    final rawMinutes = await _kv.read(StorageKeys.legacyAutoLockTimeoutMinutes);
+    final legacyMinutes = int.tryParse(rawMinutes ?? '');
+    if (![1, 5, 10, 15].contains(legacyMinutes)) {
+      return SettingsRepository.defaultAutoLockTimeoutSeconds;
+    }
+
+    const migratedSeconds = 60;
+    await _kv.write(
+      StorageKeys.autoLockTimeoutSeconds,
+      migratedSeconds.toString(),
+    );
+    return migratedSeconds;
+  }
+
+  @override
+  Future<void> setAutoLockTimeoutSeconds(int seconds) async {
+    if (!SettingsRepository.autoLockTimeoutOptionsSeconds.contains(seconds)) {
+      throw ArgumentError.value(
+        seconds,
+        'seconds',
+        'Unsupported auto-lock timeout.',
+      );
+    }
+    await _kv.write(StorageKeys.autoLockTimeoutSeconds, seconds.toString());
+  }
+
+  @override
+  Future<String> getIncomingChatAlertText() async {
+    final raw = await _kv.read(StorageKeys.incomingChatAlertText);
+    return raw == null
+        ? SettingsRepository.defaultIncomingChatAlertText
+        : raw.trim();
+  }
+
+  @override
+  Future<void> setIncomingChatAlertText(String text) async {
+    final value = text.trim();
+    await _kv.write(StorageKeys.incomingChatAlertText, value);
+  }
+
+  @override
   Future<bool> isShowLastSeenEnabled() async {
     final raw = await _kv.read(StorageKeys.showLastSeen);
     return raw == null ? true : raw == 'true';

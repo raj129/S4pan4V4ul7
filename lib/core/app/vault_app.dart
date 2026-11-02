@@ -15,6 +15,7 @@ import '../location/presentation/mock_location_banner.dart';
 import '../routing/app_router.dart';
 import '../widgets/app_navigation_drawer.dart';
 import '../../features/vault/presentation/state/onboarding_cubit.dart';
+import '../../features/vault/domain/repositories/settings_repository.dart';
 import '../presentation/theme/app_colors.dart';
 import '../presentation/theme/app_theme.dart';
 
@@ -35,8 +36,6 @@ class VaultApp extends StatefulWidget {
 }
 
 class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
-  static const _autoLockDelay = Duration(seconds: 10);
-
   late final AppDependencies _deps = AppDependencies(
     persistentState: widget.persistentState,
   );
@@ -59,6 +58,8 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
   AppThemePalette _themePalette = AppThemePalette.royalIndigo;
   ThemeMode _themeMode = ThemeMode.system;
   bool _autoLockOnBackground = true;
+  int _autoLockTimeoutSeconds =
+      SettingsRepository.defaultAutoLockTimeoutSeconds;
 
   @override
   void initState() {
@@ -94,6 +95,8 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
         .isDriveEncryptedBackupEnabled();
     final autoLockOnBackground = await _deps.settingsRepository
         .isAutoLockOnBackgroundEnabled();
+    final autoLockTimeoutSeconds = await _deps.settingsRepository
+        .getAutoLockTimeoutSeconds();
     final paletteId = await _deps.settingsRepository.getThemePaletteId();
     final rawThemeMode = await _deps.settingsRepository.getThemeMode();
     if (!mounted) return;
@@ -112,11 +115,13 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
     };
     if (_themePalette != nextPalette ||
         _themeMode != nextThemeMode ||
-        _autoLockOnBackground != autoLockOnBackground) {
+        _autoLockOnBackground != autoLockOnBackground ||
+        _autoLockTimeoutSeconds != autoLockTimeoutSeconds) {
       setState(() {
         _themePalette = nextPalette;
         _themeMode = nextThemeMode;
         _autoLockOnBackground = autoLockOnBackground;
+        _autoLockTimeoutSeconds = autoLockTimeoutSeconds;
       });
     }
   }
@@ -166,10 +171,13 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
         return;
       }
       if (ExternalActivityGuard.isActive) return;
-      _backgroundLockTimer = Timer(_autoLockDelay, () {
-        if (ExternalActivityGuard.isActive) return;
-        _lockSession();
-      });
+      _backgroundLockTimer = Timer(
+        Duration(seconds: _autoLockTimeoutSeconds),
+        () {
+          if (ExternalActivityGuard.isActive) return;
+          _lockSession();
+        },
+      );
       return;
     }
     if (state == AppLifecycleState.resumed) {

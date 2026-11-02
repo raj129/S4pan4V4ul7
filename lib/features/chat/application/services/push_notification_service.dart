@@ -5,10 +5,13 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../../domain/repositories/message_repository.dart';
 import 'package:photo_vault/firebase_options.dart';
 import '../../domain/repositories/push_token_repository.dart';
+import 'package:photo_vault/features/vault/data/repositories/storage_keys.dart';
+import 'package:photo_vault/features/vault/domain/repositories/settings_repository.dart';
 import 'chat_notification_service.dart';
 import 'chat_backup_scheduler.dart';
 
@@ -30,6 +33,18 @@ Future<void> handleChatPushInBackground(RemoteMessage message) async {
 
   if (message.data['notify'] != 'false') {
     final notifications = FlutterLocalNotificationsPlugin();
+    var alertBody = SettingsRepository.defaultIncomingChatAlertText;
+    try {
+      const secureStorage = FlutterSecureStorage();
+      final configured = await secureStorage.read(
+        key: StorageKeys.incomingChatAlertText,
+      );
+      if (configured != null) {
+        alertBody = configured.trim();
+      }
+    } catch (error) {
+      debugPrint('Could not read custom notification alert text: $error');
+    }
     await notifications.initialize(
       settings: const InitializationSettings(
         android: AndroidInitializationSettings('@mipmap/ic_launcher'),
@@ -38,7 +53,7 @@ Future<void> handleChatPushInBackground(RemoteMessage message) async {
     await notifications.show(
       id: 0,
       title: 'Calculator',
-      body: 'You have a new alert',
+      body: alertBody,
       notificationDetails: NotificationDetails(
         android: AndroidNotificationDetails(
           ChatNotificationService.channelId,

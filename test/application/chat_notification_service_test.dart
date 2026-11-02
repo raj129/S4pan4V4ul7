@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:photo_vault/features/chat/application/services/chat_notification_service.dart';
 import 'package:photo_vault/features/chat/domain/entities/chat_thread.dart';
 import 'package:photo_vault/features/chat/domain/repositories/thread_repository.dart';
+import 'package:photo_vault/core/testing/repositories/in_memory_settings_repository.dart';
 
 class _ThreadRepository implements ThreadRepository {
   // ignore: close_sinks - test fake lives for the whole test.
@@ -45,20 +46,76 @@ void main() {
       repository.updates.add([_thread('alice_bob', 0)]);
       repository.updates.add([_thread('alice_bob', 1)]);
       repository.updates.add([_thread('alice_bob', 2)]);
+      await Future<void>.delayed(Duration.zero);
 
       expect(notifications, hasLength(1));
       expect(notifications.single.threadId, 'alice_bob');
-      expect(notifications.single.body, 'You have a new alert');
+      expect(notifications.single.body, isEmpty);
 
       now = now.add(const Duration(seconds: 31));
       repository.updates.add([_thread('alice_bob', 3)]);
+      await Future<void>.delayed(Duration.zero);
       expect(notifications, hasLength(2));
-      expect(notifications.last.body, 'You have a new alert');
+      expect(notifications.last.body, isEmpty);
 
       await service.dispose();
       await repository.updates.close();
     },
   );
+
+  test('uses the saved incoming-chat alert text', () async {
+    final repository = _ThreadRepository();
+    final settings = InMemorySettingsRepository();
+    await settings.setIncomingChatAlertText('New message received');
+    final notifications = <String>[];
+    final service = ChatNotificationService(
+      threadRepository: repository,
+      settingsRepository: settings,
+      presentNotification:
+          ({required threadId, required title, required body}) async {
+            notifications.add(body);
+          },
+    );
+
+    await service.start('alice');
+    repository.updates.add([_thread('alice_bob', 0)]);
+    repository.updates.add([_thread('alice_bob', 1)]);
+    await Future<void>.delayed(Duration.zero);
+
+    expect(notifications, ['New message received']);
+
+    await service.dispose();
+    await repository.updates.close();
+  });
+
+  test('keeps a blank body for received and test notifications', () async {
+    final repository = _ThreadRepository();
+    final settings = InMemorySettingsRepository();
+    await settings.setIncomingChatAlertText('');
+    final notifications = <({String threadId, String body})>[];
+    final service = ChatNotificationService(
+      threadRepository: repository,
+      settingsRepository: settings,
+      presentNotification:
+          ({required threadId, required title, required body}) async {
+            notifications.add((threadId: threadId, body: body));
+          },
+    );
+
+    await service.start('alice');
+    repository.updates.add([_thread('alice_bob', 0)]);
+    repository.updates.add([_thread('alice_bob', 1)]);
+    await Future<void>.delayed(Duration.zero);
+    await service.showTestNotification();
+
+    expect(notifications, [
+      (threadId: 'alice_bob', body: ''),
+      (threadId: 'test-notification', body: ''),
+    ]);
+
+    await service.dispose();
+    await repository.updates.close();
+  });
 
   test(
     'keeps notifications independent across different conversations',

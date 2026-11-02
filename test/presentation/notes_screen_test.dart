@@ -170,7 +170,7 @@ void main() {
         ),
         findsOneWidget,
       );
-      expect(find.text('Create'), findsNothing);
+      expect(find.text('Create'), findsOneWidget);
 
       await tester.tap(find.text('Recent'));
       await tester.pumpAndSettle();
@@ -189,6 +189,34 @@ void main() {
       expect(find.byType(NoteEditorScreen), findsNothing);
     },
   );
+
+  testWidgets('chat Create saves a shared note and posts it to the thread', (
+    tester,
+  ) async {
+    final sharedNoteIds = <String>[];
+    await tester.pumpWidget(
+      MaterialApp(
+        home: NotesScreen(
+          notesRepository: repository,
+          currentUserId: 'me',
+          threadId: 'chat-1',
+          onSharedNoteCreated: (noteId) async => sharedNoteIds.add(noteId),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Create'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('New Text Note'));
+    await tester.pumpAndSettle();
+
+    expect(repository.private, isEmpty);
+    expect(repository.shared, hasLength(1));
+    expect(repository.shared.single.threadId, 'chat-1');
+    expect(sharedNoteIds, [repository.shared.single.id]);
+    expect(find.byType(NoteEditorScreen), findsOneWidget);
+  });
 
   testWidgets('private create starts empty and saves before opening editor', (
     tester,

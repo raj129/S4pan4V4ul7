@@ -7,6 +7,12 @@ class StorageKeys {
       'settings.calculator_onboarding_completed';
   static const String appLockOnOpen = 'settings.app_lock_on_open';
   static const String autoLockOnBackground = 'settings.auto_lock_on_background';
+  static const String legacyAutoLockTimeoutMinutes =
+      'settings.auto_lock_timeout_minutes';
+  static const String autoLockTimeoutSeconds =
+      'settings.auto_lock_timeout_seconds';
+  static const String incomingChatAlertText =
+      'settings.incoming_chat_alert_text';
   static const String showLastSeen = 'settings.show_last_seen';
   static const String photoSyncEnabled = 'settings.photo_sync_enabled';
   static const String vmkBackupEnabled = 'settings.vmk_backup_enabled';

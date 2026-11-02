@@ -58,6 +58,7 @@ import '../domain/repositories/notes_repository.dart';
 import '../data/repositories/app_notes_repository.dart';
 import 'package:photo_vault/features/vault/data/repositories/flutter_secure_string_kv.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:photo_vault/features/vault/domain/repositories/settings_repository.dart';
 import '../presentation/widgets/chat_media_preview.dart';
 import 'package:photo_vault/core/storage/local_db/vault_database.dart';
 
@@ -74,6 +75,7 @@ class ChatDependencies {
   ChatDependencies({
     required AuthRepository authRepository,
     required VaultSession vaultSession,
+    SettingsRepository? settingsRepository,
     VaultDatabase? database,
     UserRepository? userRepository,
     ThreadRepository? threadRepository,
@@ -88,6 +90,7 @@ class ChatDependencies {
     PushTokenRepository? pushTokenRepository,
   }) : _authRepository = authRepository,
        _vaultSession = vaultSession,
+       _settingsRepository = settingsRepository,
        _database = database {
     if (pushTokenRepository != null) {
       this.pushTokenRepository = pushTokenRepository;
@@ -157,6 +160,7 @@ class ChatDependencies {
   /// Exposed so the session can authorize Google Drive once up front.
   AuthRepository get authRepository => _authRepository;
   final VaultSession _vaultSession;
+  final SettingsRepository? _settingsRepository;
 
   /// Shared local database, or null in the in-memory test configuration.
   final VaultDatabase? _database;
@@ -327,7 +331,10 @@ class ChatDependencies {
 
   /// Serverless new-message notifications, driven by the thread listener.
   late final ChatNotificationService notificationService =
-      ChatNotificationService(threadRepository: threadRepository);
+      ChatNotificationService(
+        threadRepository: threadRepository,
+        settingsRepository: _settingsRepository,
+      );
 
   late PushTokenRepository pushTokenRepository = FirestorePushTokenRepository();
 

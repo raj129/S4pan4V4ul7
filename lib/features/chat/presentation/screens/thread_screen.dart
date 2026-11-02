@@ -45,8 +45,6 @@ import '../../domain/entities/live_location.dart';
 import '../../domain/repositories/chat_draft_repository.dart';
 import '../../domain/repositories/live_location_repository.dart';
 import '../../domain/repositories/notes_repository.dart';
-import '../../domain/entities/app_note.dart';
-import '../screens/note_editor_screen.dart';
 import '../screens/notes_screen.dart';
 import 'package:photo_vault/features/vault/domain/repositories/settings_repository.dart';
 import 'package:photo_vault/core/widgets/app_state_views.dart';
@@ -2046,18 +2044,14 @@ class _ThreadScreenState extends State<ThreadScreen>
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.end,
           children: [
-            // Element X style circular attachment button on the left of the pill.
-            Material(
-              color: cs.surfaceContainerHigh,
-              shape: const CircleBorder(),
-              clipBehavior: Clip.antiAlias,
-              child: IconButton(
-                icon: const Icon(Icons.add_rounded, size: 22),
-                tooltip: 'Attach',
-                color: cs.onSurfaceVariant,
-                visualDensity: VisualDensity.compact,
-                onPressed: () => _pickMedia(context),
-              ),
+            _ComposerAction(
+              icon: _showEmojiPicker
+                  ? Icons.keyboard_outlined
+                  : Icons.emoji_emotions_outlined,
+              tooltip: _showEmojiPicker
+                  ? 'Keyboard'
+                  : 'Emoji, stickers, and GIFs',
+              onPressed: _toggleEmojiPicker,
             ),
             const SizedBox(width: AppSpacing.xs),
             Expanded(
@@ -2114,13 +2108,9 @@ class _ThreadScreenState extends State<ThreadScreen>
                       ),
                     ),
                     _ComposerAction(
-                      icon: _showEmojiPicker
-                          ? Icons.keyboard_outlined
-                          : Icons.emoji_emotions_outlined,
-                      tooltip: _showEmojiPicker
-                          ? 'Keyboard'
-                          : 'Emoji, stickers, and GIFs',
-                      onPressed: _toggleEmojiPicker,
+                      icon: Icons.add_rounded,
+                      tooltip: 'Attach',
+                      onPressed: () => _pickMedia(context),
                     ),
                   ],
                 ),
@@ -2739,6 +2729,12 @@ class _ThreadScreenState extends State<ThreadScreen>
                 onTap: () => Navigator.pop(sheetContext, 'video'),
               ),
               _AttachmentOption(
+                icon: Icons.video_camera_back_rounded,
+                label: 'Record Video',
+                color: const Color(0xFF00A896),
+                onTap: () => Navigator.pop(sheetContext, 'recordVideo'),
+              ),
+              _AttachmentOption(
                 icon: Icons.insert_drive_file_rounded,
                 label: 'Document',
                 color: const Color(0xFF009688),
@@ -2761,18 +2757,6 @@ class _ThreadScreenState extends State<ThreadScreen>
                 label: 'Notes & Lists',
                 color: const Color(0xFF607D8B),
                 onTap: () => Navigator.pop(sheetContext, 'notes'),
-              ),
-              _AttachmentOption(
-                icon: Icons.checklist_rounded,
-                label: 'Checklist',
-                color: const Color(0xFF00ACC1),
-                onTap: () => Navigator.pop(sheetContext, 'checklist'),
-              ),
-              _AttachmentOption(
-                icon: Icons.note_alt_rounded,
-                label: 'Note',
-                color: const Color(0xFFFFB300),
-                onTap: () => Navigator.pop(sheetContext, 'note'),
               ),
               if (Platform.isAndroid)
                 _AttachmentOption(
@@ -2815,43 +2799,8 @@ class _ThreadScreenState extends State<ThreadScreen>
             notesRepository: repository,
             currentUserId: cubit.myUid,
             threadId: widget.thread.threadId,
-          ),
-        ),
-      );
-      return;
-    }
-    if (choice == 'checklist' || choice == 'note') {
-      final repository = widget.notesRepository;
-      if (repository == null) {
-        messenger.showSnackBar(
-          const SnackBar(content: Text('Notes unavailable at this moment.')),
-        );
-        return;
-      }
-      final noteId = _uuid.v4();
-      final myUid = cubit.myUid;
-      final newNote = AppNote(
-        id: noteId,
-        threadId: widget.thread.threadId,
-        creatorId: myUid,
-        type: choice == 'checklist' ? NoteType.checklist : NoteType.textNote,
-        title: '',
-        content: '',
-        items: const [],
-        createdAt: DateTime.now().toUtc(),
-        updatedAt: DateTime.now().toUtc(),
-      );
-
-      await repository.saveThreadNote(newNote);
-      await cubit.sendSharedNoteMessage(noteId: noteId);
-
-      if (!context.mounted) return;
-      await Navigator.of(context).push(
-        MaterialPageRoute<void>(
-          builder: (_) => NoteEditorScreen(
-            note: newNote,
-            notesRepository: repository,
-            currentUserId: myUid,
+            onSharedNoteCreated: (noteId) =>
+                cubit.sendSharedNoteMessage(noteId: noteId),
           ),
         ),
       );
@@ -2932,6 +2881,51 @@ class _ThreadScreenState extends State<ThreadScreen>
     }
     if (choice == 'camera' && Platform.isAndroid) {
       await _captureExternalCamera(cubit);
+      return;
+    }
+    if (choice == 'recordVideo') {
+      XFile? file;
+      Uint8List? bytes;
+      try {
+        file = await ExternalActivityGuard.run(
+          () => _picker.pickVideo(source: ImageSource.camera),
+        );
+        if (file == null || !mounted || !context.mounted) return;
+
+        final length = await file.length();
+        if (length > ActiveThreadCubit.maxAttachmentBytes) {
+          messenger.showSnackBar(
+            const SnackBar(
+              content: Text('Attachments must be smaller than 64 MB.'),
+            ),
+          );
+          return;
+        }
+        bytes = Uint8List.fromList(await file.readAsBytes());
+        if (!mounted || !context.mounted) return;
+        final quality = await VideoQualitySheet.show(
+          context,
+          originalBytes: bytes.length,
+          selected: VideoQuality.high,
+          videoBytes: bytes,
+        );
+        if (quality == null || !mounted || !context.mounted) return;
+        await cubit.sendMedia(
+          messageId: _uuid.v4(),
+          rawBytes: bytes,
+          type: MessageType.video,
+          videoQuality: quality,
+        );
+      } catch (error) {
+        if (mounted) {
+          messenger.showSnackBar(
+            SnackBar(content: Text('Could not record or send video: $error')),
+          );
+        }
+      } finally {
+        bytes?.fillRange(0, bytes.length, 0);
+        if (file != null) await _deleteOwnedCameraCopy(file);
+      }
       return;
     }
     if (Platform.isAndroid && choice != 'vault') {
