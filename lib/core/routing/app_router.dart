@@ -495,6 +495,8 @@ GoRoute _settingsRoute(
       pinValidator: deps.pinValidator,
       onSettingsChanged: onSettingsChanged,
       chatBackupService: () => deps.chatDependencies.backupService,
+      onTestNotification: () =>
+          deps.chatDependencies.notificationService.showTestNotification(),
       onShowLastSeenChanged: (show) async {
         try {
           await deps.chatDependencies.presenceService.setShareLastSeen(show);

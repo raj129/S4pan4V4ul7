@@ -312,6 +312,18 @@ void main() {
       BorderRadius.circular(18),
     );
     expect(tester.getSize(composerSurface).height, lessThan(200));
+    expect(
+      tester.getCenter(find.byTooltip('Emoji, stickers, and GIFs')).dx,
+      lessThan(tester.getCenter(find.byTooltip('Attach')).dx),
+    );
+    await tester.tap(find.byTooltip('Attach'));
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.text('Record Video'), findsOneWidget);
+    expect(find.text('Notes & Lists'), findsOneWidget);
+    expect(find.text('Checklist'), findsNothing);
+    expect(find.text('Note'), findsNothing);
+    await tester.binding.handlePopRoute();
+    await tester.pump(const Duration(milliseconds: 400));
     expect(tester.takeException(), isNull);
 
     await tester.enterText(find.byType(TextField).last, 'draft in composer');

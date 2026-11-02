@@ -15,11 +15,13 @@ class NotesScreen extends StatefulWidget {
     required this.notesRepository,
     required this.currentUserId,
     this.threadId,
+    this.onSharedNoteCreated,
   });
 
   final NotesRepository notesRepository;
   final String currentUserId;
   final String? threadId;
+  final Future<void> Function(String noteId)? onSharedNoteCreated;
 
   @override
   State<NotesScreen> createState() => _NotesScreenState();
@@ -40,6 +42,7 @@ class _NotesScreenState extends State<NotesScreen> {
   Future<void> _createNewNote(NoteType type) async {
     final newNote = AppNote(
       id: _uuid.v4(),
+      threadId: widget.threadId,
       creatorId: widget.currentUserId,
       type: type,
       title: '',
@@ -50,7 +53,11 @@ class _NotesScreenState extends State<NotesScreen> {
     );
 
     try {
-      await widget.notesRepository.savePrivateNote(newNote);
+      if (newNote.isShared) {
+        await widget.notesRepository.saveThreadNote(newNote);
+      } else {
+        await widget.notesRepository.savePrivateNote(newNote);
+      }
     } catch (error) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -58,6 +65,20 @@ class _NotesScreenState extends State<NotesScreen> {
         );
       }
       return;
+    }
+
+    if (newNote.isShared && widget.onSharedNoteCreated != null) {
+      try {
+        await widget.onSharedNoteCreated!(newNote.id);
+      } catch (error) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Note created but could not share it: $error'),
+            ),
+          );
+        }
+      }
     }
 
     if (!mounted) return;
@@ -228,7 +249,7 @@ class _NotesScreenState extends State<NotesScreen> {
                   Text(
                     widget.threadId == null
                         ? 'Create encrypted checklists and notes stored securely in your private vault.'
-                        : 'Share a note or checklist from the attachment sheet.',
+                        : 'Create a note or checklist to share with this chat.',
                     textAlign: TextAlign.center,
                     style: theme.textTheme.bodyMedium?.copyWith(
                       color: theme.colorScheme.onSurfaceVariant,
@@ -269,6 +290,12 @@ class _NotesScreenState extends State<NotesScreen> {
       return Scaffold(
         appBar: AppBar(title: const Text('Chat Notes & Lists')),
         body: body,
+        floatingActionButton: FloatingActionButton.extended(
+          heroTag: 'chat_notes_create_fab',
+          onPressed: () => _showCreateOptions(context),
+          icon: const Icon(Icons.add_rounded),
+          label: const Text('Create'),
+        ),
       );
     }
     return BaseScreenShell(

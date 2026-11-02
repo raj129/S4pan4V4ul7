@@ -1,6 +1,10 @@
 import '../entities/user_mode.dart';
 
 abstract class SettingsRepository {
+  static const defaultAutoLockTimeoutSeconds = 10;
+  static const autoLockTimeoutOptionsSeconds = [5, 10, 30, 60];
+  static const defaultIncomingChatAlertText = '';
+
   Future<UserMode?> getUserMode();
   Future<void> saveUserMode(UserMode mode);
   Future<bool> isCalculatorOnboardingCompleted();
@@ -19,6 +23,14 @@ abstract class SettingsRepository {
   /// Whether the vault should automatically lock when backgrounded.
   Future<bool> isAutoLockOnBackgroundEnabled() async => true;
   Future<void> setAutoLockOnBackgroundEnabled(bool enabled) async {}
+  Future<int> getAutoLockTimeoutSeconds() async =>
+      defaultAutoLockTimeoutSeconds;
+  Future<void> setAutoLockTimeoutSeconds(int seconds) async {}
+
+  /// Body text shown in incoming-chat notification alerts.
+  Future<String> getIncomingChatAlertText() async =>
+      defaultIncomingChatAlertText;
+  Future<void> setIncomingChatAlertText(String text) async {}
 
   /// Whether contacts may see when this user was last online. Reciprocal:
   /// when off, the user cannot see anyone else's last seen either.

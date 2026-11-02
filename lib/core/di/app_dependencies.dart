@@ -200,6 +200,7 @@ class AppDependencies {
     final deps = ChatDependencies(
       authRepository: authRepository,
       vaultSession: vaultSession,
+      settingsRepository: settingsRepository,
       database: switch (photoRepository) {
         final PersistentPhotoRepositoryImpl repository => repository.database,
         _ => null,

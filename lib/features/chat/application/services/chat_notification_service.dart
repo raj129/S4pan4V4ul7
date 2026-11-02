@@ -5,6 +5,7 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
 import '../../domain/entities/chat_thread.dart';
 import '../../domain/repositories/thread_repository.dart';
+import 'package:photo_vault/features/vault/domain/repositories/settings_repository.dart';
 
 typedef ChatNotificationPresenter =
     Future<void> Function({
@@ -23,13 +24,16 @@ typedef ChatNotificationPresenter =
 class ChatNotificationService {
   ChatNotificationService({
     required ThreadRepository threadRepository,
+    SettingsRepository? settingsRepository,
     ChatNotificationPresenter? presentNotification,
     DateTime Function()? clock,
   }) : _threadRepository = threadRepository,
+       _settingsRepository = settingsRepository,
        _presentNotification = presentNotification,
        _clock = clock ?? DateTime.now;
 
   final ThreadRepository _threadRepository;
+  final SettingsRepository? _settingsRepository;
   final ChatNotificationPresenter? _presentNotification;
   final DateTime Function() _clock;
   final _plugin = FlutterLocalNotificationsPlugin();
@@ -40,6 +44,7 @@ class ChatNotificationService {
 
   /// FCM posts tagged notifications with id 0; reusing it lets them replace.
   static const _notificationId = 0;
+  static const _testNotificationId = 1;
 
   /// Keep foreground burst behavior aligned with the Cloud Function throttle.
   static const _alertCooldown = Duration(seconds: 30);
@@ -141,7 +146,7 @@ class ChatNotificationService {
 
   Future<void> _notify(ChatThread thread) async {
     final title = 'Calculator';
-    const body = 'You have a new alert';
+    final body = await _incomingChatAlertText();
 
     final presentNotification = _presentNotification;
     if (presentNotification != null) {
@@ -156,19 +161,55 @@ class ChatNotificationService {
       id: _notificationId,
       title: title,
       body: body,
-      notificationDetails: NotificationDetails(
+      notificationDetails: _notificationDetails(tag: thread.threadId),
+      payload: thread.threadId,
+    );
+  }
+
+  Future<void> showTestNotification() async {
+    await init();
+    final body = await _incomingChatAlertText();
+    final presentNotification = _presentNotification;
+    if (presentNotification != null) {
+      await presentNotification(
+        threadId: 'test-notification',
+        title: 'Calculator',
+        body: body,
+      );
+      return;
+    }
+    await _plugin.show(
+      id: _testNotificationId,
+      title: 'Calculator',
+      body: body,
+      notificationDetails: _notificationDetails(),
+    );
+  }
+
+  Future<String> _incomingChatAlertText() async {
+    final settingsRepository = _settingsRepository;
+    if (settingsRepository == null) {
+      return SettingsRepository.defaultIncomingChatAlertText;
+    }
+    try {
+      return (await settingsRepository.getIncomingChatAlertText()).trim();
+    } catch (error) {
+      debugPrint('Could not read custom notification alert text: $error');
+      return SettingsRepository.defaultIncomingChatAlertText;
+    }
+  }
+
+  NotificationDetails _notificationDetails({String? tag}) =>
+      NotificationDetails(
         android: AndroidNotificationDetails(
           channelId,
           'Chat messages',
           channelDescription: 'Notifies you about new chat messages.',
           importance: Importance.high,
           priority: Priority.high,
-          tag: thread.threadId,
+          tag: tag,
         ),
-      ),
-      payload: thread.threadId,
-    );
-  }
+      );
 
   Future<void> setActiveThread(String? threadId) async {
     _activeThreadId = threadId;

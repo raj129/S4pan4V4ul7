@@ -53,6 +53,10 @@ class InMemorySettingsRepository implements SettingsRepository {
 
   String? _chatImageQuality;
   bool _autoLockOnBackground = true;
+  int _autoLockTimeoutSeconds =
+      SettingsRepository.defaultAutoLockTimeoutSeconds;
+  String _incomingChatAlertText =
+      SettingsRepository.defaultIncomingChatAlertText;
   String? _themePaletteId;
   String? _themeMode;
 
@@ -70,6 +74,29 @@ class InMemorySettingsRepository implements SettingsRepository {
   @override
   Future<void> setAutoLockOnBackgroundEnabled(bool enabled) async {
     _autoLockOnBackground = enabled;
+  }
+
+  @override
+  Future<int> getAutoLockTimeoutSeconds() async => _autoLockTimeoutSeconds;
+
+  @override
+  Future<void> setAutoLockTimeoutSeconds(int seconds) async {
+    if (!SettingsRepository.autoLockTimeoutOptionsSeconds.contains(seconds)) {
+      throw ArgumentError.value(
+        seconds,
+        'seconds',
+        'Unsupported auto-lock timeout.',
+      );
+    }
+    _autoLockTimeoutSeconds = seconds;
+  }
+
+  @override
+  Future<String> getIncomingChatAlertText() async => _incomingChatAlertText;
+
+  @override
+  Future<void> setIncomingChatAlertText(String text) async {
+    _incomingChatAlertText = text.trim();
   }
 
   bool _showLastSeen = true;
