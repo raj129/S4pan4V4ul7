@@ -513,6 +513,23 @@ class _ThreadScreenState extends State<ThreadScreen>
     });
   }
 
+  void _updateJumpToLatestFromCurrentPosition() {
+    final positions = _itemPositions.itemPositions.value;
+    if (positions.isEmpty) return;
+    final nearest = positions
+        .map((position) => position.index)
+        .reduce((a, b) => a < b ? a : b);
+    final state = context.read<ActiveThreadCubit>().state;
+    final detached = state is ActiveThreadLoaded && state.isDetached;
+    _setJumpToLatestVisible(detached || nearest > 4);
+  }
+
+  void _setJumpToLatestVisible(bool visible) {
+    if (_showJumpToLatest.value != visible) {
+      _showJumpToLatest.value = visible;
+    }
+  }
+
   Future<void> _flushDraft({String? text}) {
     _draftSaveTimer?.cancel();
     final generation = ++_draftGeneration;
@@ -574,8 +591,8 @@ class _ThreadScreenState extends State<ThreadScreen>
     // A detached window pages newer history in as the bottom is approached.
     if (detached && nearest <= 3) cubit.loadNewerMessages();
     final shouldShowJump = detached || nearest > 4;
-    if (_showJumpToLatest.value != shouldShowJump) {
-      _showJumpToLatest.value = shouldShowJump;
+    if (shouldShowJump || _userScrolling) {
+      _setJumpToLatestVisible(shouldShowJump);
     }
     if (!_scrollbarVisible.value) {
       _scrollbarVisible.value = true;
@@ -665,6 +682,7 @@ class _ThreadScreenState extends State<ThreadScreen>
       _userScrolling = n.direction != ScrollDirection.idle;
     } else if (n is ScrollEndNotification) {
       _userScrolling = false;
+      _updateJumpToLatestFromCurrentPosition();
     }
     return false;
   }
@@ -812,17 +830,23 @@ class _ThreadScreenState extends State<ThreadScreen>
               prev.scrollRequest == next.scrollRequest,
           listener: (context, state) {
             final nextLoaded = state as ActiveThreadLoaded;
-            final myUid = context.read<ActiveThreadCubit>().myUid;
-            final newest = nextLoaded.visibleMessages.firstOrNull;
-            if (newest != null &&
-                newest.senderId == myUid &&
-                !nextLoaded.isDetached) {
+            final positions = _itemPositions.itemPositions.value;
+            final nearest = positions.isEmpty
+                ? null
+                : positions
+                      .map((position) => position.index)
+                      .reduce((a, b) => a < b ? a : b);
+            final wasPinnedToLatest =
+                !nextLoaded.isDetached &&
+                (nearest == null ? !_showJumpToLatest.value : nearest <= 4);
+            if (wasPinnedToLatest) {
               WidgetsBinding.instance.addPostFrameCallback((_) {
                 if (mounted) _scrollToBottom();
               });
               return;
             }
             _keepAnchor();
+            _setJumpToLatestVisible(true);
           },
         ),
       ],
@@ -1545,6 +1569,7 @@ class _ThreadScreenState extends State<ThreadScreen>
                   isLabelVisible: count > 0,
                   label: Text('$count'),
                   child: FloatingActionButton.small(
+                    key: const ValueKey('jump-to-latest-button'),
                     heroTag: null,
                     tooltip: 'Scroll to latest',
                     onPressed: visible

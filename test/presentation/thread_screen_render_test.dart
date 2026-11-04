@@ -54,6 +54,8 @@ class _Crypto implements ChatCryptoService {
 class _Messages implements MessageRepository {
   // ignore: close_sinks - test fake lives for the whole test.
   final live = StreamController<List<ChatMessage>>.broadcast();
+  Completer<List<ChatMessage>>? nextOlderPage;
+  int loadBeforeCalls = 0;
 
   @override
   Stream<List<ChatMessage>> watchMessages(String threadId, {int limit = 30}) =>
@@ -64,7 +66,13 @@ class _Messages implements MessageRepository {
     required String threadId,
     required DateTime before,
     int limit = 30,
-  }) async => const [];
+  }) {
+    loadBeforeCalls++;
+    final pendingPage = nextOlderPage;
+    nextOlderPage = null;
+    if (pendingPage != null) return pendingPage.future;
+    return Future.value(const []);
+  }
 
   @override
   Future<List<ChatMessage>> loadAfter({
@@ -198,15 +206,19 @@ class _Unused implements UserRepository, MediaRepository, ChatVaultBridge {
       throw UnimplementedError('${i.memberName} not needed');
 }
 
-ChatMessage _msg(String id, String text, {String sender = 'other'}) =>
-    ChatMessage(
-      messageId: id,
-      threadId: 't',
-      senderId: sender,
-      encryptedText: text,
-      sentAt: DateTime.now().toUtc().subtract(const Duration(minutes: 1)),
-      deletedFor: const [],
-    );
+ChatMessage _msg(
+  String id,
+  String text, {
+  String sender = 'other',
+  DateTime? sentAt,
+}) => ChatMessage(
+  messageId: id,
+  threadId: 't',
+  senderId: sender,
+  encryptedText: text,
+  sentAt: sentAt ?? DateTime.now().toUtc().subtract(const Duration(minutes: 1)),
+  deletedFor: const [],
+);
 
 void main() {
   test('bubble shape tolerates a rect narrower than its tail', () {
@@ -418,4 +430,191 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pump(const Duration(seconds: 2));
   });
+
+  testWidgets(
+    'loading older messages preserves the viewport and jump returns to latest',
+    (tester) async {
+      tester.view.physicalSize = const Size(1080, 2400);
+      tester.view.devicePixelRatio = 3.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      final messages = _Messages();
+      final unused = _Unused();
+      final drafts = _Drafts();
+      final cubit = ActiveThreadCubit(
+        messageRepository: messages,
+        threadRepository: _Threads(),
+        userRepository: unused,
+        typingRepository: _Typing(),
+        presenceRepository: _Presence(),
+        mediaRepository: unused,
+        messageCache: const NoopMessageCacheRepository(),
+        outbox: _Outbox(),
+        cryptoService: _Crypto(),
+        myUid: 'me',
+      );
+      final thread = ChatThread(
+        threadId: 't',
+        participantIds: const ['me', 'other'],
+        lastMessage: '',
+        createdAt: DateTime.utc(2024),
+        lastMessageAt: DateTime.utc(2024),
+        unreadCounts: const {},
+      );
+      final other = ChatUser(
+        uid: 'other',
+        email: 'other@example.com',
+        displayName: 'Other',
+        publicKey: '',
+        createdAt: DateTime.utc(2024),
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: BlocProvider.value(
+            value: cubit,
+            child: ThreadScreen(
+              thread: thread,
+              otherUser: other,
+              mediaLoader: ChatMediaLoader(
+                mediaRepository: unused,
+                cryptoService: _Crypto(),
+              ),
+              vaultBridge: unused,
+              onLock: () {},
+              chatDraftRepository: drafts,
+              stickerPackFactory: (uid) =>
+                  LocalStickerPackRepository(userId: uid),
+            ),
+          ),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 50));
+
+      final newestAt = DateTime.utc(2024, 1, 2, 12);
+      messages.live.add(
+        List.generate(
+          60,
+          (index) => _msg(
+            'recent-$index',
+            'Recent message $index',
+            sender: index == 0 ? 'me' : 'other',
+            sentAt: newestAt.subtract(Duration(minutes: index)),
+          ),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 100));
+      await tester.pump(const Duration(milliseconds: 100));
+
+      final olderPage = Completer<List<ChatMessage>>();
+      messages.nextOlderPage = olderPage;
+      for (
+        var attempt = 0;
+        attempt < 3 && messages.loadBeforeCalls == 0;
+        attempt++
+      ) {
+        await tester.dragFrom(const Offset(40, 400), const Offset(0, 2500));
+        await tester.pump(const Duration(milliseconds: 400));
+      }
+      expect(messages.loadBeforeCalls, 1);
+      await tester.pump(const Duration(milliseconds: 700));
+
+      final visibleBefore = tester
+          .widgetList<MessageBubble>(find.byType(MessageBubble))
+          .toList();
+      expect(visibleBefore, isNotEmpty);
+      final anchorMessageId = visibleBefore.first.message.messageId;
+      final anchorFinder = find.byKey(ValueKey('bubble-$anchorMessageId'));
+      final anchorTopBefore = tester.getTopLeft(anchorFinder).dy;
+
+      olderPage.complete(
+        List.generate(
+          10,
+          (index) => _msg(
+            'older-$index',
+            'Older message $index',
+            sentAt: newestAt.subtract(Duration(minutes: 60 + index)),
+          ),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 400));
+
+      expect(find.byTooltip('Scroll to latest'), findsOneWidget);
+      expect(
+        tester
+            .widget<FloatingActionButton>(
+              find.byKey(const ValueKey('jump-to-latest-button')),
+            )
+            .onPressed,
+        isNotNull,
+      );
+      expect(anchorFinder, findsOneWidget);
+      expect(
+        (tester.getTopLeft(anchorFinder).dy - anchorTopBefore).abs(),
+        lessThan(24),
+      );
+
+      messages.live.add([
+        _msg(
+          'incoming-while-reading',
+          'Incoming while reading',
+          sentAt: newestAt.add(const Duration(minutes: 1)),
+        ),
+      ]);
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.pump();
+      expect(
+        (cubit.state as ActiveThreadLoaded).messages.map((m) => m.messageId),
+        contains('incoming-while-reading'),
+      );
+      expect(anchorFinder, findsOneWidget);
+      expect(
+        (tester.getTopLeft(anchorFinder).dy - anchorTopBefore).abs(),
+        lessThan(24),
+      );
+      expect(
+        tester
+            .widget<FloatingActionButton>(
+              find.byKey(const ValueKey('jump-to-latest-button')),
+            )
+            .onPressed,
+        isNotNull,
+      );
+
+      await tester.tap(find.byKey(const ValueKey('jump-to-latest-button')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 700));
+      await tester.pump();
+      expect(
+        find.byKey(const ValueKey('bubble-incoming-while-reading')),
+        findsOneWidget,
+      );
+
+      messages.live.add([
+        _msg(
+          'incoming-while-pinned',
+          'Incoming while pinned',
+          sentAt: newestAt.add(const Duration(minutes: 2)),
+        ),
+      ]);
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.pump();
+      expect(
+        find.byKey(const ValueKey('bubble-incoming-while-pinned')),
+        findsOneWidget,
+      );
+      expect(
+        tester
+            .widget<FloatingActionButton>(
+              find.byKey(const ValueKey('jump-to-latest-button')),
+            )
+            .onPressed,
+        isNull,
+      );
+
+      await cubit.close();
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
 }

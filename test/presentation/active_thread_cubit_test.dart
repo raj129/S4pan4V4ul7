@@ -435,6 +435,8 @@ void main() {
   group('shared notes', () {
     test('sends a note marker and updates the thread preview', () async {
       await open();
+      messages.emitLive(const []);
+      await Future<void>.delayed(Duration.zero);
 
       final sent = await cubit.sendSharedNoteMessage(noteId: 'note-1');
 
@@ -445,6 +447,15 @@ void main() {
       expect(messages.sent.single.sharedNoteId, 'note-1');
       expect(threads.previews, ['Shared a note']);
       expect(threads.unreadBumps, ['other']);
+      expect((cubit.state as ActiveThreadLoaded).scrollRequest, isNotNull);
+      expect(
+        (cubit.state as ActiveThreadLoaded).scrollRequest?.messageId,
+        isNull,
+      );
+      expect(
+        (cubit.state as ActiveThreadLoaded).scrollRequest?.messageId,
+        isNull,
+      );
     });
   });
 
@@ -848,6 +859,11 @@ void main() {
       expect(outbox.items, isEmpty);
       expect(messages.sent.single.encryptedText, 'hello');
       expect(threads.unreadBumps, ['other']);
+      expect((cubit.state as ActiveThreadLoaded).scrollRequest, isNotNull);
+      expect(
+        (cubit.state as ActiveThreadLoaded).scrollRequest?.messageId,
+        isNull,
+      );
       expect(
         (cubit.state as ActiveThreadLoaded).messages.single.status,
         MessageStatus.sent,
@@ -1378,6 +1394,8 @@ void main() {
       'sendMultipleImages queues all optimistic messages and delivers batch',
       () async {
         await open();
+        messages.emitLive(const []);
+        await Future<void>.delayed(Duration.zero);
         final png = img.encodePng(img.Image(width: 4, height: 2));
 
         await cubit.sendMultipleImages(
@@ -1395,6 +1413,15 @@ void main() {
           'multi-3',
         ]);
         expect((cubit.state as ActiveThreadLoaded).uploadProgress, isEmpty);
+        expect((cubit.state as ActiveThreadLoaded).scrollRequest, isNotNull);
+        expect(
+          (cubit.state as ActiveThreadLoaded).scrollRequest?.messageId,
+          isNull,
+        );
+        expect(
+          (cubit.state as ActiveThreadLoaded).scrollRequest?.messageId,
+          isNull,
+        );
       },
     );
 
@@ -1468,6 +1495,15 @@ void main() {
           'video-c',
         ]);
         expect((cubit.state as ActiveThreadLoaded).uploadProgress, isEmpty);
+        expect((cubit.state as ActiveThreadLoaded).scrollRequest, isNotNull);
+        expect(
+          (cubit.state as ActiveThreadLoaded).scrollRequest?.messageId,
+          isNull,
+        );
+        expect(
+          (cubit.state as ActiveThreadLoaded).scrollRequest?.messageId,
+          isNull,
+        );
       },
     );
 
