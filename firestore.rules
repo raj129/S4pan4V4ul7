@@ -68,7 +68,8 @@ service cloud.firestore {
                'startedAt',
                'expiresAt',
                'lastUpdatedAt',
-               'encryptedPayload'
+               'encryptedPayload',
+               'stoppedAt'
              ])
              && data.threadId == threadId
              && data.sessionId == sessionId
@@ -82,6 +83,11 @@ service cloud.firestore {
              && (!data.isActive || data.expiresAt > request.time.toMillis())
              && data.lastUpdatedAt is int
              && isWithinClientClockSkew(data.lastUpdatedAt)
+             && (!('stoppedAt' in data) ||
+                (data.stoppedAt is int
+                 && data.stoppedAt >= data.startedAt
+                 && isWithinClientClockSkew(data.stoppedAt)))
+             && (!data.isActive || !('stoppedAt' in data))
              && data.encryptedPayload is string
              && data.encryptedPayload.size() <= 8192;
     }

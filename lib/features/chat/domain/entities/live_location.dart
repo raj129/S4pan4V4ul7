@@ -87,6 +87,7 @@ class LiveLocationSession extends Equatable {
     required this.expiresAt,
     required this.lastUpdatedAt,
     this.currentPoint,
+    this.stoppedAt,
   });
 
   final String sessionId;
@@ -97,6 +98,7 @@ class LiveLocationSession extends Equatable {
   final DateTime expiresAt;
   final DateTime lastUpdatedAt;
   final LiveLocationPoint? currentPoint;
+  final DateTime? stoppedAt;
 
   /// True if the session duration has passed.
   bool get isExpired => DateTime.now().isAfter(expiresAt);
@@ -116,6 +118,7 @@ class LiveLocationSession extends Equatable {
     DateTime? expiresAt,
     DateTime? lastUpdatedAt,
     LiveLocationPoint? currentPoint,
+    DateTime? stoppedAt,
   }) {
     return LiveLocationSession(
       sessionId: sessionId ?? this.sessionId,
@@ -126,6 +129,7 @@ class LiveLocationSession extends Equatable {
       expiresAt: expiresAt ?? this.expiresAt,
       lastUpdatedAt: lastUpdatedAt ?? this.lastUpdatedAt,
       currentPoint: currentPoint ?? this.currentPoint,
+      stoppedAt: stoppedAt ?? this.stoppedAt,
     );
   }
 
@@ -139,5 +143,6 @@ class LiveLocationSession extends Equatable {
     expiresAt,
     lastUpdatedAt,
     currentPoint,
+    stoppedAt,
   ];
 }

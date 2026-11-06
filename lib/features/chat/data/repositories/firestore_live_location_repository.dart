@@ -105,6 +105,7 @@ class FirestoreLiveLocationRepository implements LiveLocationRepository {
     await ref.update({
       'isActive': false,
       'lastUpdatedAt': now.millisecondsSinceEpoch,
+      'stoppedAt': now.millisecondsSinceEpoch,
     });
   }
 
@@ -159,6 +160,7 @@ class FirestoreLiveLocationRepository implements LiveLocationRepository {
     final startedAtMs = data['startedAt'];
     final expiresAtMs = data['expiresAt'];
     final lastUpdatedAtMs = data['lastUpdatedAt'];
+    final stoppedAtMs = data['stoppedAt'];
     final encryptedPayload = data['encryptedPayload'];
     if (sessionId != expectedSessionId ||
         data['threadId'] != threadId ||
@@ -169,6 +171,7 @@ class FirestoreLiveLocationRepository implements LiveLocationRepository {
         startedAtMs is! num ||
         expiresAtMs is! num ||
         lastUpdatedAtMs is! num ||
+        (stoppedAtMs != null && stoppedAtMs is! num) ||
         encryptedPayload is! String) {
       throw const FormatException('Invalid live-location session document.');
     }
@@ -200,6 +203,12 @@ class FirestoreLiveLocationRepository implements LiveLocationRepository {
         isUtc: true,
       ),
       currentPoint: LiveLocationPoint.fromJson(json),
+      stoppedAt: stoppedAtMs is num
+          ? DateTime.fromMillisecondsSinceEpoch(
+              stoppedAtMs.toInt(),
+              isUtc: true,
+            )
+          : null,
     );
   }
 

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math';
 
+import 'package:flutter/widgets.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../../../core/location/app_location.dart';
@@ -22,7 +23,7 @@ typedef LowBatteryNotifier =
     });
 
 /// Owns a single active Android live-location session and its GPS subscription.
-class LiveLocationService {
+class LiveLocationService with WidgetsBindingObserver {
   LiveLocationService({
     required LiveLocationRepository repository,
     LiveLocationUpdates? locationUpdates,
@@ -34,7 +35,9 @@ class LiveLocationService {
            locationUpdates ?? LiveLocationService._geolocatorUpdates,
        _clock = clock ?? DateTime.now,
        _battery = battery,
-       _onLowBattery = onLowBattery;
+       _onLowBattery = onLowBattery {
+    WidgetsBinding.instance.addObserver(this);
+  }
 
   final LiveLocationRepository _repository;
   final LiveLocationUpdates _locationUpdates;
@@ -44,7 +47,10 @@ class LiveLocationService {
   final _uuid = const Uuid();
 
   Timer? _sessionExpiryTimer;
+  Timer? _locationRetryTimer;
   StreamSubscription<LiveLocationPoint>? _positionSubscription;
+  int _locationRetryAttempt = 0;
+  int _locationStreamGeneration = 0;
   LiveLocationPoint? _lastPublishedPoint;
   DateTime? _lastPublishedAt;
   DateTime? _activeStartedAt;
@@ -145,13 +151,93 @@ class LiveLocationService {
     _sessionExpiryTimer = Timer(duration, () {
       unawaited(_stopAfterExpiry());
     });
-    _positionSubscription = _locationUpdates().listen(
-      (point) => unawaited(_handleLocation(point)),
-      onError: (Object error, StackTrace stackTrace) {
-        _reportError(error);
-      },
-    );
+    _subscribeToLocationUpdates();
     return sessionId;
+  }
+
+  void _subscribeToLocationUpdates() {
+    if (_disposed || !isSharing || _positionSubscription != null) return;
+    final generation = ++_locationStreamGeneration;
+    try {
+      _positionSubscription = _locationUpdates().listen(
+        (point) {
+          if (generation != _locationStreamGeneration || !isSharing) return;
+          _locationRetryTimer?.cancel();
+          _locationRetryTimer = null;
+          _locationRetryAttempt = 0;
+          unawaited(_handleLocation(point));
+        },
+        onError: (Object error, StackTrace stackTrace) {
+          if (generation != _locationStreamGeneration) return;
+          _positionSubscription = null;
+          _reportError(error);
+          _scheduleLocationRetry();
+        },
+        onDone: () {
+          if (generation != _locationStreamGeneration) return;
+          _positionSubscription = null;
+          _scheduleLocationRetry();
+        },
+        cancelOnError: true,
+      );
+    } catch (error) {
+      _reportError(error);
+      _scheduleLocationRetry();
+    }
+  }
+
+  void _scheduleLocationRetry() {
+    final expiresAt = _activeExpiresAt;
+    if (_disposed ||
+        !isSharing ||
+        expiresAt == null ||
+        _locationRetryTimer != null) {
+      return;
+    }
+    if (!_clock().toUtc().isBefore(expiresAt)) {
+      unawaited(_stopAfterExpiry());
+      return;
+    }
+    _locationRetryAttempt++;
+    final seconds = _locationRetryAttempt >= 6
+        ? 30
+        : 1 << (_locationRetryAttempt - 1);
+    _locationRetryTimer = Timer(Duration(seconds: seconds), () {
+      _locationRetryTimer = null;
+      unawaited(_restartLocationUpdates());
+    });
+  }
+
+  Future<void> _restartLocationUpdates() async {
+    final expiresAt = _activeExpiresAt;
+    if (_disposed || !isSharing || expiresAt == null) return;
+    if (!_clock().toUtc().isBefore(expiresAt)) {
+      await _stopAfterExpiry();
+      return;
+    }
+    _locationRetryTimer?.cancel();
+    _locationRetryTimer = null;
+    final previous = _positionSubscription;
+    _positionSubscription = null;
+    final restartGeneration = ++_locationStreamGeneration;
+    try {
+      await previous?.cancel();
+    } catch (error) {
+      _reportError(error);
+      _scheduleLocationRetry();
+      return;
+    }
+    final latestExpiry = _activeExpiresAt;
+    if (_disposed ||
+        !isSharing ||
+        restartGeneration != _locationStreamGeneration) {
+      return;
+    }
+    if (latestExpiry == null || !_clock().toUtc().isBefore(latestExpiry)) {
+      await _stopAfterExpiry();
+      return;
+    }
+    _subscribeToLocationUpdates();
   }
 
   Future<void> _handleLocation(LiveLocationPoint point) async {
@@ -267,8 +353,12 @@ class LiveLocationService {
   Future<void> stopSharing() async {
     _sessionExpiryTimer?.cancel();
     _sessionExpiryTimer = null;
-    await _positionSubscription?.cancel();
+    _locationRetryTimer?.cancel();
+    _locationRetryTimer = null;
+    _locationStreamGeneration++;
+    final subscription = _positionSubscription;
     _positionSubscription = null;
+    await subscription?.cancel();
 
     final threadId = _activeThreadId;
     final userId = _activeUserId;
@@ -287,6 +377,22 @@ class LiveLocationService {
     } catch (error) {
       _reportError(error);
     }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed || !isSharing || _disposed) return;
+    unawaited(_recoverLocationUpdates());
+  }
+
+  Future<void> _recoverLocationUpdates() async {
+    final expiresAt = _activeExpiresAt;
+    if (expiresAt == null || !_clock().toUtc().isBefore(expiresAt)) {
+      await _stopAfterExpiry();
+      return;
+    }
+    _locationRetryAttempt = 0;
+    await _restartLocationUpdates();
   }
 
   void _reportError(Object error) {
@@ -337,7 +443,9 @@ class LiveLocationService {
     return AppLocation.instance
         .updates(
           LocationUpdateConfig(
-            distanceFilterMeters: minDisplacementMeters.round(),
+            // Let the service receive stationary fixes so its heartbeat can
+            // keep the remote session fresh; movement filtering happens below.
+            distanceFilterMeters: 0,
             interval: minWriteInterval,
             backgroundNotification: true,
           ),
@@ -377,8 +485,12 @@ class LiveLocationService {
   void dispose() {
     if (_disposed) return;
     _disposed = true;
+    WidgetsBinding.instance.removeObserver(this);
     _sessionExpiryTimer?.cancel();
     _sessionExpiryTimer = null;
+    _locationRetryTimer?.cancel();
+    _locationRetryTimer = null;
+    _locationStreamGeneration++;
     unawaited(_positionSubscription?.cancel());
     _positionSubscription = null;
     _activeSessionController.close();

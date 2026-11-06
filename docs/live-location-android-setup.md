@@ -13,7 +13,7 @@ Without a key, the feature remains buildable but the map screen explains that Go
 
 ## User permissions and behavior
 
-The user chooses a 15-minute, 1-hour, or 8-hour session. The app requests location access and notification permission before starting. To keep sharing active when the app is backgrounded, Android must grant **Allow all the time** location access and display the ongoing foreground-service notification. Users can stop sharing from the message card or map screen; sessions also stop at expiry.
+The user chooses a 15-minute, 1-hour, or 8-hour session. The app requests location access and notification permission before starting. To keep sharing active when the app is backgrounded, Android must grant **Allow all the time** location access and display the ongoing foreground-service notification. Users can stop sharing from the message card or map screen; sessions also stop at expiry. The chat card shows when sharing started and, after it ends, the stopped or expiry time. Stationary fixes are retained for periodic session heartbeats; transient location-stream interruptions are retried while the session is active.
 
 The sharing action and map are intentionally unavailable on Windows. The Windows chat shows an Android-availability notice for received live-location messages.
 

@@ -117,6 +117,25 @@ class _LiveLocationBubbleState extends State<LiveLocationBubble> {
             : session.isExpired
             ? 'Live location ended'
             : 'Sharing stopped';
+        final timestampFormat = DateFormat.yMMMd().add_jm();
+        final startedAtText = session == null
+            ? null
+            : timestampFormat.format(session.startedAt.toLocal());
+        final stoppedAt = session == null
+            ? null
+            : session.stoppedAt ??
+                  (session.isExpired
+                      ? session.expiresAt
+                      : !session.isActive
+                      ? session.lastUpdatedAt
+                      : null);
+        final stoppedAtText = stoppedAt == null
+            ? null
+            : timestampFormat.format(stoppedAt.toLocal());
+        final stoppedLabel =
+            session?.isExpired == true && session?.isActive == true
+            ? 'Ended'
+            : 'Stopped';
 
         return InkWell(
           borderRadius: BorderRadius.circular(12),
@@ -205,6 +224,24 @@ class _LiveLocationBubbleState extends State<LiveLocationBubble> {
                     ),
                   ],
                 ),
+                if (startedAtText != null) ...[
+                  const SizedBox(height: AppSpacing.xxs),
+                  Text(
+                    'Started $startedAtText',
+                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+                if (stoppedAtText != null) ...[
+                  const SizedBox(height: AppSpacing.xxs),
+                  Text(
+                    '$stoppedLabel $stoppedAtText',
+                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
                 if (widget.isMine &&
                     isActive &&
                     widget.onStopSharing != null) ...[

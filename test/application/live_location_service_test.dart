@@ -1,12 +1,18 @@
 import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter/widgets.dart';
+import 'package:photo_vault/core/location/app_location.dart';
+import 'package:photo_vault/core/location/geo_fix.dart';
+import 'package:photo_vault/core/location/location_source.dart';
 import 'package:photo_vault/features/chat/application/services/device_battery.dart';
 import 'package:photo_vault/features/chat/application/services/live_location_service.dart';
 import 'package:photo_vault/features/chat/domain/entities/live_location.dart';
 import 'package:photo_vault/features/chat/domain/repositories/live_location_repository.dart';
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
   late _FakeLiveLocationRepository repository;
   late StreamController<LiveLocationPoint> positions;
   late LiveLocationService service;
@@ -86,6 +92,134 @@ void main() {
     },
   );
 
+  test('publishes a heartbeat while the device is stationary', () async {
+    await service.startSharing(
+      threadId: 'alice_bob',
+      userId: 'alice',
+      duration: const Duration(minutes: 15),
+      initialPoint: firstPoint,
+    );
+
+    now = now.add(const Duration(seconds: 45));
+    await service.onNewLocation(
+      LiveLocationPoint(
+        latitude: firstPoint.latitude,
+        longitude: firstPoint.longitude,
+        accuracy: firstPoint.accuracy,
+        timestamp: now,
+      ),
+    );
+
+    expect(repository.updated, hasLength(1));
+    expect(repository.updated.single.latitude, firstPoint.latitude);
+  });
+
+  test(
+    'keeps stationary location fixes enabled for heartbeat checks',
+    () async {
+      final previousLocation = AppLocation.instance;
+      final locationSource = _CapturingLocationSource();
+      AppLocation.instance = AppLocation(real: locationSource);
+      final configured = LiveLocationService(
+        repository: repository,
+        clock: () => now,
+      );
+
+      try {
+        await configured.startSharing(
+          threadId: 'alice_bob',
+          userId: 'alice',
+          duration: const Duration(minutes: 15),
+          initialPoint: firstPoint,
+        );
+
+        expect(locationSource.config?.distanceFilterMeters, 0);
+        expect(
+          locationSource.config?.interval,
+          LiveLocationService.minWriteInterval,
+        );
+        expect(locationSource.config?.backgroundNotification, isTrue);
+        await configured.stopSharing();
+      } finally {
+        configured.dispose();
+        AppLocation.instance = previousLocation;
+      }
+    },
+  );
+
+  test(
+    'retries interrupted streams and resumes without restarting stopped sessions',
+    () async {
+      final streams = <StreamController<LiveLocationPoint>>[];
+      final recovering = LiveLocationService(
+        repository: repository,
+        locationUpdates: () {
+          final stream = StreamController<LiveLocationPoint>();
+          streams.add(stream);
+          return stream.stream;
+        },
+        clock: () => now,
+      );
+      addTearDown(recovering.dispose);
+
+      await recovering.startSharing(
+        threadId: 'alice_bob',
+        userId: 'alice',
+        duration: const Duration(minutes: 15),
+        initialPoint: firstPoint,
+      );
+      expect(streams, hasLength(1));
+
+      streams.single.addError(StateError('location service interrupted'));
+      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(const Duration(milliseconds: 1100));
+      expect(streams, hasLength(2));
+
+      recovering.didChangeAppLifecycleState(AppLifecycleState.resumed);
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      expect(streams, hasLength(3));
+
+      await streams[2].close();
+      await Future<void>.delayed(const Duration(milliseconds: 1100));
+      expect(streams, hasLength(4));
+
+      await recovering.stopSharing();
+      recovering.didChangeAppLifecycleState(AppLifecycleState.resumed);
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      expect(streams, hasLength(4));
+      await Future.wait(streams.map((stream) => stream.close()));
+    },
+  );
+
+  test('stops instead of resuming after the session expires', () async {
+    final streams = <StreamController<LiveLocationPoint>>[];
+    final expiring = LiveLocationService(
+      repository: repository,
+      locationUpdates: () {
+        final stream = StreamController<LiveLocationPoint>();
+        streams.add(stream);
+        return stream.stream;
+      },
+      clock: () => now,
+    );
+    addTearDown(expiring.dispose);
+
+    await expiring.startSharing(
+      threadId: 'alice_bob',
+      userId: 'alice',
+      duration: const Duration(minutes: 1),
+      initialPoint: firstPoint,
+    );
+    now = expiring.activeExpiresAt!;
+    expiring.didChangeAppLifecycleState(AppLifecycleState.resumed);
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+
+    expect(expiring.isSharing, isFalse);
+    expect(repository.stopped, hasLength(1));
+    expect(streams, hasLength(1));
+    await Future.wait(streams.map((stream) => stream.close()));
+  });
+
   test(
     'does not publish tiny movement before the heartbeat interval',
     () async {
@@ -132,6 +266,7 @@ void main() {
   });
 
   test('LiveLocationSession retains last known coordinates when ended or expired', () {
+    final stoppedAt = DateTime.utc(2026, 10, 21, 11, 12);
     final session = LiveLocationSession(
       sessionId: 'session_1',
       threadId: 'alice_bob',
@@ -141,11 +276,13 @@ void main() {
       expiresAt: DateTime.utc(2026, 10, 21, 11, 15),
       lastUpdatedAt: DateTime.utc(2026, 10, 21, 11, 10),
       currentPoint: firstPoint,
+      stoppedAt: stoppedAt,
     );
 
     expect(session.isActive, isFalse);
     expect(session.isLive, isFalse);
     expect(session.currentPoint, equals(firstPoint));
+    expect(session.stoppedAt, stoppedAt);
   });
 
   group('battery', () {
@@ -236,6 +373,27 @@ class _FakeBattery implements BatteryReader {
 
   @override
   Future<BatteryStatus?> read() async => status;
+}
+
+class _CapturingLocationSource implements LocationSource {
+  LocationUpdateConfig? config;
+
+  @override
+  Future<bool> isServiceEnabled() async => true;
+
+  @override
+  Future<GeoFix?> lastKnown() async => null;
+
+  @override
+  Future<GeoFix> current({Duration? timeLimit}) => throw UnimplementedError();
+
+  @override
+  Stream<GeoFix> updates([
+    LocationUpdateConfig config = const LocationUpdateConfig(),
+  ]) {
+    this.config = config;
+    return const Stream<GeoFix>.empty();
+  }
 }
 
 class _FakeLiveLocationRepository implements LiveLocationRepository {
