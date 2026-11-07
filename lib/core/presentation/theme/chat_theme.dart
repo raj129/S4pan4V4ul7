@@ -23,18 +23,23 @@ class ChatColors extends ThemeExtension<ChatColors> {
     AppThemePalette palette = AppThemePalette.royalIndigo,
   }) {
     final dark = brightness == Brightness.dark;
+    final bubbleMine = dark ? palette.bubbleMineDark : palette.bubbleMineLight;
+    final onBubbleMine = dark
+        ? palette.onBubbleMineDark
+        : palette.onBubbleMineLight;
+    final readTick = _contrastRatio(palette.readTick, bubbleMine) >= 3
+        ? palette.readTick
+        : onBubbleMine;
     return ChatColors(
-      bubbleMine: dark ? palette.bubbleMineDark : palette.bubbleMineLight,
-      onBubbleMine: dark
-          ? palette.onBubbleMineDark
-          : palette.onBubbleMineLight,
+      bubbleMine: bubbleMine,
+      onBubbleMine: onBubbleMine,
       bubbleTheirs: dark
           ? AppColors.bubbleTheirsDark
           : AppColors.bubbleTheirsLight,
       onBubbleTheirs: dark
           ? AppColors.onBubbleTheirsDark
           : AppColors.onBubbleTheirsLight,
-      readTick: palette.readTick,
+      readTick: readTick,
       wallpaper: dark ? AppColors.wallpaperDark : AppColors.wallpaperLight,
       wallpaperPattern: dark
           ? AppColors.wallpaperPatternDark
@@ -111,6 +116,18 @@ class ChatColors extends ThemeExtension<ChatColors> {
       bubbleShadow: Color.lerp(bubbleShadow, other.bubbleShadow, t)!,
     );
   }
+}
+
+double _contrastRatio(Color foreground, Color background) {
+  final foregroundLuminance = foreground.computeLuminance();
+  final backgroundLuminance = background.computeLuminance();
+  final lighter = foregroundLuminance > backgroundLuminance
+      ? foregroundLuminance
+      : backgroundLuminance;
+  final darker = foregroundLuminance > backgroundLuminance
+      ? backgroundLuminance
+      : foregroundLuminance;
+  return (lighter + 0.05) / (darker + 0.05);
 }
 
 /// `context.chatColors` access to the resolved chat palette.

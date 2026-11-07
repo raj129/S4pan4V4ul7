@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:photo_vault/core/platform/battery_optimization.dart';
+import 'package:photo_vault/core/platform/screenshot_protection.dart';
 import 'package:photo_vault/core/testing/repositories/in_memory_settings_repository.dart';
 import 'package:photo_vault/features/vault/application/services/pin_validator.dart';
 import 'package:photo_vault/features/vault/application/usecases/unlock_vault_usecase.dart';
@@ -15,6 +16,7 @@ class _FakeUnlock implements UnlockVaultUseCase {
 
 class _FakeBattery implements BatteryOptimization {
   _FakeBattery({required this.exempt});
+
   bool exempt;
   int requests = 0;
 
@@ -29,6 +31,18 @@ class _FakeBattery implements BatteryOptimization {
   }
 }
 
+class _FakeScreenshotProtection implements ScreenshotProtectionController {
+  final changes = <bool>[];
+
+  @override
+  bool get isSupportedPlatform => true;
+
+  @override
+  Future<void> setEnabled(bool enabled) async {
+    changes.add(enabled);
+  }
+}
+
 void main() {
   late InMemorySettingsRepository settings;
   late List<bool> lastSeenChanges;
@@ -37,6 +51,7 @@ void main() {
     WidgetTester tester,
     BatteryOptimization battery, {
     Future<void> Function()? onTestNotification,
+    ScreenshotProtectionController? screenshotProtection,
   }) async {
     tester.view.physicalSize = const Size(1080, 4000);
     tester.view.devicePixelRatio = 2.75;
@@ -53,12 +68,37 @@ void main() {
           onSettingsChanged: () async {},
           onShowLastSeenChanged: (v) async => lastSeenChanges.add(v),
           onTestNotification: onTestNotification,
+          screenshotProtection:
+              screenshotProtection ?? const AndroidScreenshotProtection(),
           batteryOptimization: battery,
         ),
       ),
     );
     await tester.pumpAndSettle();
   }
+
+  testWidgets('screenshot protection defaults on and can be disabled', (
+    tester,
+  ) async {
+    final protection = _FakeScreenshotProtection();
+    await pump(
+      tester,
+      _FakeBattery(exempt: true),
+      screenshotProtection: protection,
+    );
+
+    expect(find.text('Screenshot protection'), findsOneWidget);
+    expect(await settings.isScreenshotProtectionEnabled(), isTrue);
+    await tester.tap(find.text('Screenshot protection'));
+    await tester.pumpAndSettle();
+
+    expect(await settings.isScreenshotProtectionEnabled(), isFalse);
+    expect(protection.changes, [false]);
+    expect(
+      find.text('Screenshots and screen recordings are allowed.'),
+      findsOneWidget,
+    );
+  });
 
   testWidgets('Show last seen toggle persists and notifies chat', (
     tester,

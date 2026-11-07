@@ -68,7 +68,7 @@ class MapsDiagnosticsPlugin : FlutterPlugin, ActivityAware {
         if (active) {
             window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
         } else {
-            window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+            ScreenshotProtectionState.applyTo(window)
         }
     }
 

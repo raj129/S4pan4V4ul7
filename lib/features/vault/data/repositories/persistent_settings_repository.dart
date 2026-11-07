@@ -152,6 +152,16 @@ class PersistentSettingsRepository implements SettingsRepository {
       _kv.write(StorageKeys.showLastSeen, enabled.toString());
 
   @override
+  Future<bool> isScreenshotProtectionEnabled() async {
+    final raw = await _kv.read(StorageKeys.screenshotProtectionEnabled);
+    return raw == null ? true : raw == 'true';
+  }
+
+  @override
+  Future<void> setScreenshotProtectionEnabled(bool enabled) =>
+      _kv.write(StorageKeys.screenshotProtectionEnabled, enabled.toString());
+
+  @override
   Future<String?> getThemePaletteId() => _kv.read(StorageKeys.themePalette);
 
   @override

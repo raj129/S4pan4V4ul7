@@ -12,6 +12,7 @@ import './external_activity_guard.dart';
 import './android_chat_viewer_guard.dart';
 import '../di/app_dependencies.dart';
 import '../location/presentation/mock_location_banner.dart';
+import '../platform/screenshot_protection.dart';
 import '../routing/app_router.dart';
 import '../widgets/app_navigation_drawer.dart';
 import '../../features/vault/presentation/state/onboarding_cubit.dart';
@@ -60,6 +61,8 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
   bool _autoLockOnBackground = true;
   int _autoLockTimeoutSeconds =
       SettingsRepository.defaultAutoLockTimeoutSeconds;
+  final ScreenshotProtectionController _screenshotProtection =
+      const AndroidScreenshotProtection();
 
   @override
   void initState() {
@@ -97,6 +100,21 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
         .isAutoLockOnBackgroundEnabled();
     final autoLockTimeoutSeconds = await _deps.settingsRepository
         .getAutoLockTimeoutSeconds();
+    final screenshotProtectionEnabled = await _deps.settingsRepository
+        .isScreenshotProtectionEnabled();
+    if (_screenshotProtection.isSupportedPlatform) {
+      try {
+        await _screenshotProtection.setEnabled(screenshotProtectionEnabled);
+      } catch (error, stack) {
+        FlutterError.reportError(
+          FlutterErrorDetails(
+            exception: error,
+            stack: stack,
+            library: 'screenshot protection',
+          ),
+        );
+      }
+    }
     final paletteId = await _deps.settingsRepository.getThemePaletteId();
     final rawThemeMode = await _deps.settingsRepository.getThemeMode();
     if (!mounted) return;

@@ -11,6 +11,7 @@ import 'package:photo_vault/core/widgets/app_surfaces.dart';
 import 'package:photo_vault/core/widgets/base_screen_shell.dart';
 import 'package:photo_vault/features/vault/domain/entities/user_mode.dart';
 import 'package:photo_vault/features/vault/domain/repositories/settings_repository.dart';
+import 'package:photo_vault/core/platform/screenshot_protection.dart';
 import 'package:photo_vault/core/presentation/theme/app_colors.dart';
 import 'package:photo_vault/core/presentation/theme/app_spacing.dart';
 import '../../widgets/pin_reauth_dialog.dart';
@@ -23,17 +24,20 @@ class SettingsScreen extends StatefulWidget {
     required this.unlockVaultUseCase,
     required this.pinValidator,
     required this.onSettingsChanged,
+    this.screenshotProtection = const AndroidScreenshotProtection(),
     this.chatBackupService,
     this.onShowLastSeenChanged,
     this.onTestNotification,
     this.batteryOptimization = const AndroidBatteryOptimization(),
     super.key,
   });
+
   final UserMode mode;
   final SettingsRepository settingsRepository;
   final UnlockVaultUseCase unlockVaultUseCase;
   final PinValidator pinValidator;
   final Future<void> Function() onSettingsChanged;
+  final ScreenshotProtectionController screenshotProtection;
 
   /// Reports and requests exemption from Android battery optimisation.
   final BatteryOptimization batteryOptimization;
@@ -55,6 +59,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   int _autoLockTimeoutSeconds =
       SettingsRepository.defaultAutoLockTimeoutSeconds;
   bool _showLastSeen = true;
+  bool _screenshotProtectionEnabled = true;
   bool? _backgroundAllowed;
   final _incomingChatAlertController = TextEditingController();
   Timer? _incomingChatAlertSaveTimer;
@@ -116,6 +121,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
         .getIncomingChatAlertText();
     final showLastSeen = await widget.settingsRepository
         .isShowLastSeenEnabled();
+    final screenshotProtectionEnabled = await widget.settingsRepository
+        .isScreenshotProtectionEnabled();
     final paletteId = await widget.settingsRepository.getThemePaletteId();
     final themeMode = await widget.settingsRepository.getThemeMode();
     if (!mounted) return;
@@ -126,6 +133,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _autoLockOnBackground = autoLock;
       _autoLockTimeoutSeconds = autoLockTimeoutSeconds;
       _showLastSeen = showLastSeen;
+      _screenshotProtectionEnabled = screenshotProtectionEnabled;
       _incomingChatAlertController.text = incomingChatAlertText;
       _themePalette = AppThemePalette.fromId(paletteId);
       _themeMode = switch (themeMode) {
@@ -566,6 +574,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   await widget.onShowLastSeenChanged?.call(v);
                 },
               ),
+              if (widget.screenshotProtection.isSupportedPlatform)
+                _SettingsSwitch(
+                  icon: Icons.no_photography_outlined,
+                  title: 'Screenshot protection',
+                  subtitle: _screenshotProtectionEnabled
+                      ? 'Screenshots and screen recordings are blocked.'
+                      : 'Screenshots and screen recordings are allowed.',
+                  value: _screenshotProtectionEnabled,
+                  onChanged: (enabled) async {
+                    await widget.settingsRepository
+                        .setScreenshotProtectionEnabled(enabled);
+                    await widget.screenshotProtection.setEnabled(enabled);
+                    if (mounted) {
+                      setState(() => _screenshotProtectionEnabled = enabled);
+                    }
+                  },
+                ),
             ],
           ),
           const SectionHeader('Notifications'),

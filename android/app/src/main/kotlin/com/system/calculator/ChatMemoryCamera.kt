@@ -16,7 +16,6 @@ import android.os.HandlerThread
 import android.os.Looper
 import android.view.Surface
 import android.view.TextureView
-import android.view.WindowManager
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -48,7 +47,7 @@ internal class ChatMemoryCamera(
         layout.addView(capture)
         layout.addView(Button(activity).apply { text = "Cancel"; setOnClickListener { close() } })
         dialog.setContentView(layout)
-        dialog.window?.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        ScreenshotProtectionState.applyTo(dialog.window)
         dialog.setOnDismissListener { if (!closed) finish(null, null) }
         capture.setOnClickListener {
             capture.isEnabled = false

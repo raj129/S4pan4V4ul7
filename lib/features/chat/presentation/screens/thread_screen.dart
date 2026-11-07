@@ -215,6 +215,8 @@ class _ThreadScreenState extends State<ThreadScreen>
 
   /// Message flashed after jumping to it from a quote.
   String? _highlightedId;
+  Timer? _replyFlashTimer;
+  bool _replyFlashVisible = true;
 
   /// Rows most recently rendered, so a message id can be mapped to an index.
   List<ThreadItem> _items = const [];
@@ -727,6 +729,7 @@ class _ThreadScreenState extends State<ThreadScreen>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _draftSaveTimer?.cancel();
+    _replyFlashTimer?.cancel();
     if (!_sendingText || _textCtrl.text.isNotEmpty) {
       final draftText = _isEditing ? (_draftBeforeEdit ?? '') : _textCtrl.text;
       unawaited(_flushDraft(text: draftText).catchError((Object _) {}));
@@ -1322,9 +1325,9 @@ class _ThreadScreenState extends State<ThreadScreen>
                           unawaited(HapticFeedback.selectionClick());
                           await cubit.cancelUpload(msg.messageId);
                         },
-                  isHighlighted:
-                      _highlightedId == msg.messageId ||
-                      state.currentMatchId == msg.messageId,
+                  isHighlighted: state.currentMatchId == msg.messageId,
+                  isReplyTarget: _highlightedId == msg.messageId,
+                  replyFlashVisible: _replyFlashVisible,
                   highlightQuery: matchIds.contains(msg.messageId)
                       ? state.searchQuery
                       : '',
@@ -1407,11 +1410,27 @@ class _ThreadScreenState extends State<ThreadScreen>
       );
       return;
     }
-    setState(() => _highlightedId = messageId);
-    Future<void>.delayed(const Duration(milliseconds: 1200), () {
-      if (mounted && _highlightedId == messageId) {
-        setState(() => _highlightedId = null);
+    _replyFlashTimer?.cancel();
+    setState(() {
+      _highlightedId = messageId;
+      _replyFlashVisible = true;
+    });
+    var phase = 0;
+    _replyFlashTimer = Timer.periodic(const Duration(milliseconds: 200), (
+      timer,
+    ) {
+      if (!mounted || phase == 5) {
+        timer.cancel();
+        if (mounted && _highlightedId == messageId) {
+          setState(() {
+            _highlightedId = null;
+            _replyFlashVisible = false;
+          });
+        }
+        return;
       }
+      phase++;
+      setState(() => _replyFlashVisible = !_replyFlashVisible);
     });
   }
 

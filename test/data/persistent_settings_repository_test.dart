@@ -22,6 +22,18 @@ class _MemoryStringKv implements StorageStringKv {
 }
 
 void main() {
+  test('screenshot protection defaults on and persists user choice', () async {
+    final kv = _MemoryStringKv();
+    final repository = PersistentSettingsRepository(kv);
+
+    expect(await repository.isScreenshotProtectionEnabled(), isTrue);
+
+    await repository.setScreenshotProtectionEnabled(false);
+
+    expect(await repository.isScreenshotProtectionEnabled(), isFalse);
+    expect(kv.values[StorageKeys.screenshotProtectionEnabled], 'false');
+  });
+
   test('provides defaults and persists timeout and alert text', () async {
     final kv = _MemoryStringKv();
     final repository = PersistentSettingsRepository(kv);

@@ -66,6 +66,8 @@ class MessageBubble extends StatelessWidget {
     this.onCopy,
     this.canReplyFromLeftToRight = true,
     this.isHighlighted = false,
+    this.isReplyTarget = false,
+    this.replyFlashVisible = true,
     this.highlightQuery = '',
 
     this.sendStatus,
@@ -120,9 +122,12 @@ class MessageBubble extends StatelessWidget {
   /// Force every reply swipe to use the same left-to-right gesture.
   final bool canReplyFromLeftToRight;
 
-  /// Tinted after the user jumps here from a quote, or while this is the
-  /// current search match.
+  /// Tinted while this is the current search match.
   final bool isHighlighted;
+
+  /// Flashed after the user jumps here from a quoted message.
+  final bool isReplyTarget;
+  final bool replyFlashVisible;
 
   /// Search term whose occurrences are marked inside the message text.
   final String highlightQuery;
@@ -183,6 +188,7 @@ class MessageBubble extends StatelessWidget {
     final chat = context.chatColors;
     final bgColor = chat.bubbleFor(isMine: isMine);
     final textColor = chat.onBubbleFor(isMine: isMine);
+    final highlighted = isHighlighted || (isReplyTarget && replyFlashVisible);
     final grouped = message.groupedReactions;
 
     // Location cards render inside the same swipe-to-reply / long-press
@@ -228,44 +234,51 @@ class MessageBubble extends StatelessWidget {
     );
 
     final bubble = locationCard != null
-        ? Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (message.replyTo != null)
-                Material(
-                  color: bgColor,
-                  borderRadius: AppRadius.all(AppRadius.sm),
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(
-                      AppSpacing.sm,
-                      AppSpacing.sm,
-                      AppSpacing.sm,
-                      AppSpacing.xs,
-                    ),
-                    child: _QuotedHeader(
-                      reply: message.replyTo!,
-                      isMine: isMine,
-                      myUid: myUid,
-                      textColor: textColor,
-                      onTap: onTapQuote == null
-                          ? null
-                          : () => onTapQuote!(message.replyTo!.messageId),
+        ? AnimatedContainer(
+            duration: AppDuration.fast,
+            decoration: BoxDecoration(
+              color: highlighted ? cs.tertiaryContainer : Colors.transparent,
+              borderRadius: AppRadius.all(AppRadius.sm),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (message.replyTo != null)
+                  Material(
+                    color: bgColor,
+                    borderRadius: AppRadius.all(AppRadius.sm),
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(
+                        AppSpacing.sm,
+                        AppSpacing.sm,
+                        AppSpacing.sm,
+                        AppSpacing.xs,
+                      ),
+                      child: _QuotedHeader(
+                        reply: message.replyTo!,
+                        isMine: isMine,
+                        myUid: myUid,
+                        textColor: textColor,
+                        onTap: onTapQuote == null
+                            ? null
+                            : () => onTapQuote!(message.replyTo!.messageId),
+                      ),
                     ),
                   ),
-                ),
-              locationCard,
-            ],
+                locationCard,
+              ],
+            ),
           )
         : bare || bareAttachment
         ? AnimatedContainer(
             duration: AppDuration.fast,
             decoration: BoxDecoration(
-              color: bare && isHighlighted
+              color: bare && highlighted
                   ? cs.tertiaryContainer
                   : Colors.transparent,
               borderRadius: AppRadius.all(AppRadius.sm),
-              border: bareAttachment && isHighlighted
+              border: bareAttachment && highlighted
                   ? Border.all(color: cs.tertiary, width: 2)
                   : null,
             ),
@@ -290,7 +303,7 @@ class MessageBubble extends StatelessWidget {
             ),
           )
         : Material(
-            color: isHighlighted ? cs.tertiaryContainer : bgColor,
+            color: highlighted ? cs.tertiaryContainer : bgColor,
             shape: shape,
             elevation: AppElevation.none,
             animationDuration: Duration.zero,
@@ -314,8 +327,8 @@ class MessageBubble extends StatelessWidget {
                 onResumeUpload: onResumeUpload,
                 onRetry: onRetry,
                 onTapQuote: onTapQuote,
-                textColor: isHighlighted ? cs.onTertiaryContainer : textColor,
-                metaColor: isHighlighted ? cs.onTertiaryContainer : textColor,
+                textColor: highlighted ? cs.onTertiaryContainer : textColor,
+                metaColor: highlighted ? cs.onTertiaryContainer : textColor,
                 bare: false,
                 highlightQuery: highlightQuery,
                 onLongPress: () => _showActionSheet(context),
@@ -1124,7 +1137,7 @@ class _MetaRow extends StatelessWidget {
           const SizedBox(width: AppSpacing.xs),
           _StatusTicks(
             status: visibleStatus,
-            color: faded,
+            color: textColor,
             labelOverride: statusLabel,
           ),
         ],
@@ -1169,7 +1182,11 @@ class _StatusTicks extends StatelessWidget {
         child: Icon(
           icon,
           key: ValueKey((status, labelOverride)),
-          size: status == MessageStatus.failed ? 14 : 15,
+          size: switch (status) {
+            MessageStatus.read => 18,
+            MessageStatus.failed => 14,
+            _ => 16,
+          },
           color: iconColor,
         ),
       ),

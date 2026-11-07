@@ -23,7 +23,6 @@ import android.system.OsConstants
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
-import android.view.WindowManager
 import android.widget.*
 import com.google.firebase.auth.FirebaseAuth
 import io.flutter.embedding.engine.plugins.FlutterPlugin
@@ -617,7 +616,7 @@ class ChatSecureMediaPlugin : FlutterPlugin, ActivityAware, MethodChannel.Method
             setPadding(16, 16, 16, 16)
         }
         dialog.setContentView(layout)
-        dialog.window?.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        ScreenshotProtectionState.applyTo(dialog.window)
         return Pair(dialog, layout)
     }
 
@@ -752,7 +751,7 @@ class ChatSecureMediaPlugin : FlutterPlugin, ActivityAware, MethodChannel.Method
         var replied = false
 
         val dialog = Dialog(host, android.R.style.Theme_Black_NoTitleBar_Fullscreen)
-        dialog.window?.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        ScreenshotProtectionState.applyTo(dialog.window)
 
         fun complete(error: Boolean) {
             if (replied) return
@@ -883,7 +882,7 @@ class ChatSecureMediaPlugin : FlutterPlugin, ActivityAware, MethodChannel.Method
         val player = MediaPlayer()
         val dialog = Dialog(host)
         dialog.window?.apply {
-            addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+            ScreenshotProtectionState.applyTo(this)
             setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
             setDimAmount(0.6f)
             setGravity(Gravity.BOTTOM)

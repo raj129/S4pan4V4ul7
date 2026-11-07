@@ -100,6 +100,7 @@ class InMemorySettingsRepository implements SettingsRepository {
   }
 
   bool _showLastSeen = true;
+  bool _screenshotProtectionEnabled = true;
 
   @override
   Future<bool> isShowLastSeenEnabled() async => _showLastSeen;
@@ -107,6 +108,15 @@ class InMemorySettingsRepository implements SettingsRepository {
   @override
   Future<void> setShowLastSeenEnabled(bool enabled) async {
     _showLastSeen = enabled;
+  }
+
+  @override
+  Future<bool> isScreenshotProtectionEnabled() async =>
+      _screenshotProtectionEnabled;
+
+  @override
+  Future<void> setScreenshotProtectionEnabled(bool enabled) async {
+    _screenshotProtectionEnabled = enabled;
   }
 
   @override

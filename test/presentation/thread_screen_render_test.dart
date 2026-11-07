@@ -211,6 +211,8 @@ ChatMessage _msg(
   String text, {
   String sender = 'other',
   DateTime? sentAt,
+  MessageReply? replyTo,
+  MessageStatus? status,
 }) => ChatMessage(
   messageId: id,
   threadId: 't',
@@ -218,6 +220,8 @@ ChatMessage _msg(
   encryptedText: text,
   sentAt: sentAt ?? DateTime.now().toUtc().subtract(const Duration(minutes: 1)),
   deletedFor: const [],
+  replyTo: replyTo,
+  status: status,
 );
 
 void main() {
@@ -294,15 +298,57 @@ void main() {
     );
     await tester.pump(const Duration(milliseconds: 50));
 
-    messages.live.add([_msg('m1', 'hello there')]);
+    messages.live.add([
+      _msg('m1', 'hello there'),
+      _msg(
+        'm2',
+        'reply to the original',
+        sender: 'me',
+        replyTo: const MessageReply(
+          messageId: 'm1',
+          senderId: 'other',
+          encryptedPreview: 'hello there',
+          localDecryptedPreview: 'hello there',
+        ),
+        status: MessageStatus.read,
+      ),
+    ]);
     await tester.pump(const Duration(milliseconds: 50));
     await tester.pump(const Duration(milliseconds: 50));
+    await tester.pump(const Duration(milliseconds: 500));
 
-    expect(find.byType(MessageBubble), findsOneWidget);
-    expect(tester.getSize(find.byType(MessageBubble)).width, greaterThan(100));
+    expect(find.byType(MessageBubble), findsNWidgets(2));
+    expect(
+      tester.getSize(find.byKey(const ValueKey('bubble-m1'))).width,
+      greaterThan(100),
+    );
     expect(
       find.textContaining('hello there', findRichText: true),
-      findsOneWidget,
+      findsNWidgets(2),
+    );
+    final readTick = tester.widget<Icon>(find.byIcon(Icons.done_all_rounded));
+    expect(readTick.color, isNotNull);
+    expect(readTick.size, 18);
+
+    final replyBubble = tester.widget<MessageBubble>(
+      find.byKey(const ValueKey('bubble-m2')),
+    );
+    replyBubble.onTapQuote!.call('m1');
+    await tester.pump();
+    final originalBubble = find.byKey(const ValueKey('bubble-m1'));
+    expect(tester.widget<MessageBubble>(originalBubble).isReplyTarget, isTrue);
+    final initialFlashPhase = tester
+        .widget<MessageBubble>(originalBubble)
+        .replyFlashVisible;
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(
+      tester.widget<MessageBubble>(originalBubble).replyFlashVisible,
+      isNot(initialFlashPhase),
+    );
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(
+      tester.widget<MessageBubble>(originalBubble).replyFlashVisible,
+      initialFlashPhase,
     );
 
     // Not awaited: delivery never completes, so the message stays pending.
@@ -310,7 +356,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 50));
     await tester.pump(const Duration(milliseconds: 50));
 
-    expect(find.byType(MessageBubble), findsNWidgets(2));
+    expect(find.byType(MessageBubble), findsNWidgets(3));
     expect(find.textContaining('my reply', findRichText: true), findsOneWidget);
     expect(tester.takeException(), isNull);
 
