@@ -15,6 +15,9 @@ enum ChatMediaPickerTab { emoji, stickers, gifs }
 
 enum _StickerSource { giphy, personal }
 
+typedef ChatMediaEmojiPickerBuilder =
+    Widget Function(double height, GlobalKey<EmojiPickerState> pickerKey);
+
 class ChatMediaPickerSheetController {
   VoidCallback? _close;
 
@@ -39,7 +42,7 @@ Future<void> showChatMediaPickerSheet(
   BuildContext context, {
   required StickerPackRepository stickerPack,
   ChatMediaPickerSheetController? controller,
-  required Widget Function(double height) buildEmojiPicker,
+  required ChatMediaEmojiPickerBuilder buildEmojiPicker,
   required Widget composer,
   required Future<void> Function(
     Uint8List bytes,
@@ -94,7 +97,7 @@ class _DraggableChatMediaPickerSheet extends StatefulWidget {
   });
 
   final StickerPackRepository stickerPack;
-  final Widget Function(double height) buildEmojiPicker;
+  final ChatMediaEmojiPickerBuilder buildEmojiPicker;
   final Widget composer;
   final Future<void> Function(
     Uint8List bytes,
@@ -167,7 +170,7 @@ class ChatMediaPickerPanel extends StatefulWidget {
   });
 
   final StickerPackRepository stickerPack;
-  final Widget Function(double height) buildEmojiPicker;
+  final ChatMediaEmojiPickerBuilder buildEmojiPicker;
   final Future<void> Function(
     Uint8List bytes,
     MessageType type,
@@ -189,6 +192,7 @@ class _ChatMediaPickerPanelState extends State<ChatMediaPickerPanel> {
     for (final category in defaultEmojiSet) ...category.emoji,
   ];
   final _catalog = GiphyMediaService();
+  final _emojiPickerKey = GlobalKey<EmojiPickerState>();
   final _searchController = TextEditingController();
   final _searchFocusNode = FocusNode();
   final _scrollController = ScrollController();
@@ -370,6 +374,43 @@ class _ChatMediaPickerPanelState extends State<ChatMediaPickerPanel> {
     _searchController.clear();
     setState(() => _searchExpanded = false);
     _onQueryChanged('');
+  }
+
+  void _deleteSearchQueryCharacter() {
+    final value = _searchController.value;
+    final text = value.text;
+    if (text.isEmpty) return;
+
+    final selection = value.selection;
+    final start = selection.isValid ? selection.start : text.length;
+    final end = selection.isValid ? selection.end : text.length;
+    if (start < 0 || end > text.length) return;
+
+    final deleteStart = start == end
+        ? text.substring(0, start).characters.skipLast(1).toString().length
+        : start;
+    final updatedText = text.replaceRange(deleteStart, end, '');
+    _searchController.value = TextEditingValue(
+      text: updatedText,
+      selection: TextSelection.collapsed(offset: deleteStart),
+    );
+    _onQueryChanged(updatedText);
+  }
+
+  void _selectSearchEmoji(Emoji emoji) {
+    widget.onInsertEmoji(emoji.emoji);
+    unawaited(_addSearchEmojiToRecents(emoji));
+  }
+
+  Future<void> _addSearchEmojiToRecents(Emoji emoji) async {
+    try {
+      await EmojiPickerUtils().addEmojiToRecentlyUsed(
+        key: _emojiPickerKey,
+        emoji: emoji,
+      );
+    } catch (error) {
+      if (mounted) _showError('Could not add emoji to recents: $error');
+    }
   }
 
   void _selectStickerSource(_StickerSource source) {
@@ -617,10 +658,10 @@ class _ChatMediaPickerPanelState extends State<ChatMediaPickerPanel> {
                                   height: 34,
                                 ),
                                 padding: EdgeInsets.zero,
-                                onPressed:
-                                    _tab == ChatMediaPickerTab.emoji &&
-                                        !_searchExpanded
+                                onPressed: _tab == ChatMediaPickerTab.emoji
                                     ? widget.onBackspace
+                                    : _searchExpanded
+                                    ? _deleteSearchQueryCharacter
                                     : null,
                                 icon: const Icon(
                                   Icons.backspace_outlined,
@@ -824,7 +865,7 @@ class _ChatMediaPickerPanelState extends State<ChatMediaPickerPanel> {
     if (tab == ChatMediaPickerTab.emoji) {
       final query = _searchController.text.trim().toLowerCase();
       if (query.isNotEmpty) return _buildEmojiSearchResults(query);
-      return widget.buildEmojiPicker(panelHeight);
+      return widget.buildEmojiPicker(panelHeight, _emojiPickerKey);
     }
     if (tab == ChatMediaPickerTab.stickers &&
         _stickerSource == _StickerSource.personal) {
@@ -860,7 +901,7 @@ class _ChatMediaPickerPanelState extends State<ChatMediaPickerPanel> {
         return Tooltip(
           message: emoji.name,
           child: InkResponse(
-            onTap: () => widget.onInsertEmoji(emoji.emoji),
+            onTap: () => _selectSearchEmoji(emoji),
             child: Center(
               child: Text(emoji.emoji, style: const TextStyle(fontSize: 26)),
             ),

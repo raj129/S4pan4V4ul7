@@ -175,8 +175,13 @@ class ChatMessage extends Equatable {
   /// True when the body is nothing but emoji, which renders oversized and
   /// without a bubble background, as in WhatsApp.
   bool get isEmojiOnly {
-    final text = localDecryptedText?.trim();
-    if (text == null || text.isEmpty || isMedia) return false;
+    if (isMedia) return false;
+    return isEmojiOnlyText(localDecryptedText);
+  }
+
+  static bool isEmojiOnlyText(String? value) {
+    final text = value?.trim();
+    if (text == null || text.isEmpty) return false;
     if (text.runes.length > 8) return false;
     return !RegExp(r'[0-9\p{L}]', unicode: true).hasMatch(text);
   }

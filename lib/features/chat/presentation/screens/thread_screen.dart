@@ -178,6 +178,8 @@ class ThreadScreen extends StatefulWidget {
 
 class _ThreadScreenState extends State<ThreadScreen>
     with WidgetsBindingObserver, RouteAware {
+  static const _latestPinThreshold = 4;
+
   final _textCtrl = TextEditingController();
   final _itemScrollCtrl = ItemScrollController();
   final _itemPositions = ItemPositionsListener.create();
@@ -226,6 +228,7 @@ class _ThreadScreenState extends State<ThreadScreen>
   /// Drives the send button's reveal without rebuilding the whole composer on
   /// every keystroke.
   final _hasText = ValueNotifier<bool>(false);
+  final _editingMode = ValueNotifier<bool>(false);
 
   /// Viewport position in the whole cached history (0 first .. 1 latest).
   final _historyPosition = ValueNotifier<double?>(null);
@@ -787,6 +790,7 @@ class _ThreadScreenState extends State<ThreadScreen>
     _scrollbarVisible.dispose();
     _showJumpToLatest.dispose();
     _hasText.dispose();
+    _editingMode.dispose();
     _textCtrl.dispose();
     _searchCtrl.dispose();
     _inputFocus.dispose();
@@ -878,7 +882,9 @@ class _ThreadScreenState extends State<ThreadScreen>
                       .reduce((a, b) => a < b ? a : b);
             final wasPinnedToLatest =
                 !nextLoaded.isDetached &&
-                (nearest == null ? !_showJumpToLatest.value : nearest <= 4);
+                (nearest == null
+                    ? !_showJumpToLatest.value
+                    : nearest <= _latestPinThreshold);
             if (wasPinnedToLatest) {
               WidgetsBinding.instance.addPostFrameCallback((_) {
                 if (mounted) _scrollToBottom();
@@ -1197,9 +1203,11 @@ class _ThreadScreenState extends State<ThreadScreen>
   void _cancelEdit() {
     if (!_isEditing) return;
     final draft = _draftBeforeEdit ?? '';
+    final keepEmojiPickerOpen = _emojiPickerRoute != null;
     _draftBeforeEdit = null;
     setState(() {
       _editingMessage = null;
+      _editingMode.value = false;
       _restoringDraft = true;
       _textCtrl.value = TextEditingValue(
         text: draft,
@@ -1207,8 +1215,12 @@ class _ThreadScreenState extends State<ThreadScreen>
       );
       _restoringDraft = false;
       _hasText.value = draft.trim().isNotEmpty;
-      _showEmojiPicker = false;
-      _inputFocus.unfocus();
+      _showEmojiPicker = keepEmojiPickerOpen;
+      if (keepEmojiPickerOpen) {
+        _pickerInputFocus.unfocus();
+      } else {
+        _inputFocus.unfocus();
+      }
     });
   }
 
@@ -1490,6 +1502,17 @@ class _ThreadScreenState extends State<ThreadScreen>
     _showJumpToLatest.value = false;
   }
 
+  bool _isNearLatest() {
+    final threadState = context.read<ActiveThreadCubit>().state;
+    if (threadState is! ActiveThreadLoaded || threadState.isDetached) {
+      return false;
+    }
+    if (_showJumpToLatest.value) return false;
+    final positions = _itemPositions.itemPositions.value;
+    return positions.isEmpty ||
+        positions.any((position) => position.index <= _latestPinThreshold);
+  }
+
   /// Honour a scroll request from the cubit (search match, quote, date,
   /// scrollbar or jump-to-latest).
   void _performScroll(ChatScrollRequest request) {
@@ -1724,6 +1747,7 @@ class _ThreadScreenState extends State<ThreadScreen>
     context.read<ActiveThreadCubit>().clearReplyTarget();
     setState(() {
       _editingMessage = msg;
+      _editingMode.value = true;
       _textCtrl.text = text;
       _textCtrl.selection = TextSelection.fromPosition(
         TextPosition(offset: _textCtrl.text.length),
@@ -2611,6 +2635,9 @@ class _ThreadScreenState extends State<ThreadScreen>
   }
 
   Future<void> _sendText(String text) async {
+    if (!mounted) return;
+    final scrollToLatest =
+        !ChatMessage.isEmojiOnlyText(text) || _isNearLatest();
     try {
       try {
         await _flushDraft();
@@ -2629,6 +2656,7 @@ class _ThreadScreenState extends State<ThreadScreen>
       final queued = await context.read<ActiveThreadCubit>().sendText(
         text,
         waitForDelivery: false,
+        scrollToLatest: scrollToLatest,
       );
       if (queued) unawaited(HapticFeedback.lightImpact());
       if (queued && shouldClearComposer && _draftGeneration == generation) {
@@ -2665,15 +2693,19 @@ class _ThreadScreenState extends State<ThreadScreen>
       context,
       stickerPack: _stickerPackFor(cubit.myUid),
       controller: _emojiPickerController,
-      composer: BlocProvider.value(
-        value: cubit,
-        child: _buildComposerSurface(
-          context,
-          applyBottomSafeArea: false,
-          inputFocusNode: _pickerInputFocus,
+      composer: ValueListenableBuilder<bool>(
+        valueListenable: _editingMode,
+        builder: (_, _, _) => BlocProvider.value(
+          value: cubit,
+          child: _buildComposerSurface(
+            context,
+            applyBottomSafeArea: false,
+            inputFocusNode: _pickerInputFocus,
+          ),
         ),
       ),
-      buildEmojiPicker: (height) => ThemedEmojiPicker(
+      buildEmojiPicker: (height, pickerKey) => ThemedEmojiPicker(
+        pickerKey: pickerKey,
         textEditingController: _textCtrl,
         height: height,
         searchHeight: height * 0.7,
@@ -2690,6 +2722,7 @@ class _ThreadScreenState extends State<ThreadScreen>
         type: type,
         filename: fileName,
         propagateFailure: true,
+        scrollToLatest: _isNearLatest(),
       ),
       onInsertEmoji: _insertEmoji,
       onBackspace: _backspaceComposerText,
@@ -2777,93 +2810,129 @@ class _ThreadScreenState extends State<ThreadScreen>
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
-      builder: (sheetContext) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-          child: Wrap(
-            spacing: 12,
-            runSpacing: 12,
-            alignment: WrapAlignment.spaceEvenly,
-            children: [
-              _AttachmentOption(
+      builder: (sheetContext) {
+        final options =
+            <({IconData icon, String label, Color color, String choice})>[
+              (
                 icon: Icons.photo_library_rounded,
                 label: 'Gallery',
                 color: const Color(0xFF7C4DFF),
-                onTap: () => Navigator.pop(sheetContext, 'photo'),
+                choice: 'photo',
               ),
-              _AttachmentOption(
+              (
                 icon: Icons.camera_alt_rounded,
                 label: 'Camera',
                 color: const Color(0xFFE91E63),
-                onTap: () => Navigator.pop(sheetContext, 'camera'),
+                choice: 'camera',
               ),
-              _AttachmentOption(
+              (
                 icon: Icons.lock_rounded,
                 label: 'From Vault',
                 color: const Color(0xFFFF9800),
-                onTap: () => Navigator.pop(sheetContext, 'vault'),
+                choice: 'vault',
               ),
-              _AttachmentOption(
+              (
                 icon: Icons.videocam_rounded,
                 label: 'Video',
                 color: const Color(0xFF2196F3),
-                onTap: () => Navigator.pop(sheetContext, 'video'),
+                choice: 'video',
               ),
-              _AttachmentOption(
+              (
                 icon: Icons.video_camera_back_rounded,
                 label: 'Record Video',
                 color: const Color(0xFF00A896),
-                onTap: () => Navigator.pop(sheetContext, 'recordVideo'),
+                choice: 'recordVideo',
               ),
-              _AttachmentOption(
+              (
                 icon: Icons.insert_drive_file_rounded,
                 label: 'Document',
                 color: const Color(0xFF009688),
-                onTap: () => Navigator.pop(sheetContext, 'document'),
+                choice: 'document',
               ),
-              _AttachmentOption(
+              (
                 icon: Icons.mic_rounded,
                 label: 'Audio',
                 color: const Color(0xFFFF5722),
-                onTap: () => Navigator.pop(sheetContext, 'audio'),
+                choice: 'audio',
               ),
-              _AttachmentOption(
+              (
                 icon: Icons.folder_special_rounded,
                 label: 'Saved Files',
                 color: const Color(0xFF673AB7),
-                onTap: () => Navigator.pop(sheetContext, 'saved'),
+                choice: 'saved',
               ),
-              _AttachmentOption(
+              (
                 icon: Icons.library_books_outlined,
                 label: 'Notes & Lists',
                 color: const Color(0xFF607D8B),
-                onTap: () => Navigator.pop(sheetContext, 'notes'),
+                choice: 'notes',
               ),
-              if (Platform.isAndroid)
-                _AttachmentOption(
-                  icon: Icons.location_on_rounded,
-                  label: 'Live Location',
-                  color: const Color(0xFF4CAF50),
-                  onTap: () => Navigator.pop(sheetContext, 'liveLocation'),
-                ),
-              if (Platform.isAndroid)
-                _AttachmentOption(
-                  icon: Icons.pin_drop_rounded,
-                  label: 'Pin / Route',
-                  color: const Color(0xFFE53935),
-                  onTap: () => Navigator.pop(sheetContext, 'pinRoute'),
-                ),
-              if (Platform.isAndroid)
-                _AttachmentOption(
-                  icon: Icons.notifications_active_rounded,
-                  label: 'Arrival alert',
-                  color: const Color(0xFF3949AB),
-                  onTap: () => Navigator.pop(sheetContext, 'arrival'),
-                ),
-            ],
+            ];
+        if (Platform.isAndroid) {
+          options.addAll([
+            (
+              icon: Icons.location_on_rounded,
+              label: 'Live Location',
+              color: const Color(0xFF4CAF50),
+              choice: 'liveLocation',
+            ),
+            (
+              icon: Icons.pin_drop_rounded,
+              label: 'Pin / Route',
+              color: const Color(0xFFE53935),
+              choice: 'pinRoute',
+            ),
+            (
+              icon: Icons.notifications_active_rounded,
+              label: 'Arrival alert',
+              color: const Color(0xFF3949AB),
+              choice: 'arrival',
+            ),
+          ]);
+        }
+
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.only(bottom: 16),
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final columns = constraints.maxWidth >= 600
+                    ? (options.length + 1) ~/ 2
+                    : (options.length + 2) ~/ 3;
+                final rows = (options.length + columns - 1) ~/ columns;
+                final desiredHeight = (rows * 112 + (rows - 1) * 8).toDouble();
+                final gridHeight =
+                    constraints.maxHeight.isFinite &&
+                        constraints.maxHeight < desiredHeight
+                    ? constraints.maxHeight
+                    : desiredHeight;
+                return SizedBox(
+                  height: gridHeight,
+                  child: GridView.builder(
+                    key: const ValueKey('attachment-options-grid'),
+                    padding: EdgeInsets.zero,
+                    gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                      crossAxisCount: columns,
+                      mainAxisSpacing: 8,
+                      mainAxisExtent: 112,
+                    ),
+                    itemCount: options.length,
+                    itemBuilder: (context, index) {
+                      final option = options[index];
+                      return _AttachmentOption(
+                        icon: option.icon,
+                        label: option.label,
+                        color: option.color,
+                        onTap: () => Navigator.pop(sheetContext, option.choice),
+                      );
+                    },
+                  ),
+                );
+              },
+            ),
           ),
-        ),
-      ),
+        );
+      },
     );
     if (choice == null || !mounted || !context.mounted) return;
     if (choice == 'notes') {
@@ -3845,7 +3914,7 @@ class _AttachmentOption extends StatelessWidget {
       onTap: onTap,
       borderRadius: BorderRadius.circular(16),
       child: Container(
-        width: 78,
+        width: double.infinity,
         padding: const EdgeInsets.symmetric(vertical: 8),
         child: Column(
           mainAxisSize: MainAxisSize.min,

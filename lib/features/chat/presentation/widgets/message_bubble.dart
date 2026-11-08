@@ -795,6 +795,7 @@ class ThemedEmojiPicker extends StatefulWidget {
   const ThemedEmojiPicker({
     super.key,
     required this.onEmojiSelected,
+    this.pickerKey,
     this.textEditingController,
     this.height = 280,
     this.searchHeight = 170,
@@ -804,6 +805,7 @@ class ThemedEmojiPicker extends StatefulWidget {
   });
 
   final OnEmojiSelected onEmojiSelected;
+  final GlobalKey<EmojiPickerState>? pickerKey;
   final TextEditingController? textEditingController;
   final double height;
   final double searchHeight;
@@ -875,6 +877,7 @@ class _ThemedEmojiPickerState extends State<ThemedEmojiPicker> {
         return SizedBox(
           height: h,
           child: EmojiPicker(
+            key: widget.pickerKey,
             textEditingController: widget.textEditingController,
             onEmojiSelected: widget.onEmojiSelected,
             config: _config(context, h),
@@ -901,12 +904,41 @@ class _EmojiSearchView extends SearchView {
 }
 
 class _EmojiSearchViewState extends SearchViewState<_EmojiSearchView> {
+  final _searchController = TextEditingController();
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) widget.searching.value = true;
     });
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  void _deleteSearchCharacter() {
+    final value = _searchController.value;
+    final text = value.text;
+    if (text.isEmpty) return;
+
+    final selection = value.selection;
+    final start = selection.isValid ? selection.start : text.length;
+    final end = selection.isValid ? selection.end : text.length;
+    if (start < 0 || end > text.length) return;
+
+    final deleteStart = start == end
+        ? text.substring(0, start).characters.skipLast(1).toString().length
+        : start;
+    final updatedText = text.replaceRange(deleteStart, end, '');
+    _searchController.value = TextEditingValue(
+      text: updatedText,
+      selection: TextSelection.collapsed(offset: deleteStart),
+    );
+    onTextInputChanged(updatedText);
   }
 
   @override
@@ -983,6 +1015,7 @@ class _EmojiSearchViewState extends SearchViewState<_EmojiSearchView> {
                     ),
                     Expanded(
                       child: TextField(
+                        controller: _searchController,
                         onChanged: onTextInputChanged,
                         focusNode: focusNode,
                         style: cfg.searchViewConfig.inputTextStyle,
@@ -999,6 +1032,12 @@ class _EmojiSearchViewState extends SearchViewState<_EmojiSearchView> {
                           ),
                         ),
                       ),
+                    ),
+                    IconButton(
+                      tooltip: 'Backspace',
+                      onPressed: _deleteSearchCharacter,
+                      color: cfg.searchViewConfig.buttonIconColor,
+                      icon: const Icon(Icons.backspace_outlined),
                     ),
                   ],
                 ),

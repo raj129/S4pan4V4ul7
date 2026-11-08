@@ -312,12 +312,12 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
       isBufferContaining: (id) => _buffer.containsKey(id),
       getBufferMessage: (id) => _buffer[id],
       getPendingMessage: (id) => _pending[id],
-      setPendingMessage: (id, msg) => _pending[id] = msg,
+      setPendingMessage: _setPendingMessageFromUpload,
       removePendingMessage: (id) => _pending.remove(id),
       afterClearWatermark: _afterClearWatermark,
       setUploadStatus: _setUploadStatus,
       advanceUpload: _advanceUpload,
-      emitMessages: _emitMessages,
+      emitMessages: _emitMessagesFromUpload,
       reportActionError: _reportActionError,
       discardMessage: discardMessage,
       deliverOutboxItem: _deliver,
@@ -438,6 +438,7 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
   /// Kept separate from [_buffer] so that when the real message arrives on the
   /// stream the optimistic copy disappears without a merge conflict.
   final Map<String, ChatMessage> _pending = {};
+  final Set<String> _scrollAfterMediaPending = {};
 
   /// Local-only "clear chat" watermark for the open thread (null if the chat
   /// has never been cleared on this device). Messages sent at or before this
@@ -690,7 +691,11 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
   // Send text message
   // ---------------------------------------------------------------------------
 
-  Future<bool> sendText(String plaintext, {bool waitForDelivery = true}) async {
+  Future<bool> sendText(
+    String plaintext, {
+    bool waitForDelivery = true,
+    bool scrollToLatest = true,
+  }) async {
     if (plaintext.trim().isEmpty) return false;
     final threadId = _currentThreadId;
     if (threadId == null) return false;
@@ -716,6 +721,7 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
         ),
         decryptedPreview: plaintext.trim(),
         waitForDelivery: waitForDelivery,
+        scrollToLatest: scrollToLatest,
       );
       await setTyping(false);
       return true;
@@ -902,11 +908,12 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
     OutboxItem item, {
     String? decryptedPreview,
     bool waitForDelivery = true,
+    bool scrollToLatest = true,
   }) async {
-    if (_detached) await jumpToLatest();
+    if (scrollToLatest && _detached) await jumpToLatest();
     await outbox.enqueue(item);
     _showPending(item, decryptedPreview);
-    _requestScroll(null);
+    if (scrollToLatest) _requestScroll(null);
     if (waitForDelivery) {
       await _deliver(item, decryptedPreview: decryptedPreview);
     } else {
@@ -981,6 +988,23 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
     if (status != null) msg = msg.copyWith(status: status);
     _pending[item.messageId] = msg;
     _emitMessages();
+    if (_scrollAfterMediaPending.remove(item.messageId)) {
+      _requestScroll(null);
+    }
+  }
+
+  void _setPendingMessageFromUpload(String messageId, ChatMessage message) {
+    _pending[messageId] = message;
+  }
+
+  void _emitMessagesFromUpload() {
+    _emitMessages();
+    final pendingScrollIds = _scrollAfterMediaPending
+        .where(_pending.containsKey)
+        .toList();
+    if (pendingScrollIds.isEmpty) return;
+    _scrollAfterMediaPending.removeAll(pendingScrollIds);
+    _requestScroll(null);
   }
 
   /// Retry every queued message for this account, even when its thread is not
@@ -1260,6 +1284,7 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
   // ---------------------------------------------------------------------------
 
   void _requestScroll(String? messageId) {
+    if (isClosed) return;
     final current = state;
     if (current is! ActiveThreadLoaded) return;
     emit(
@@ -1778,6 +1803,7 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
     required String messageId,
     required List<int> rawBytes,
     required MessageType type,
+    bool? scrollToLatest,
     String? filename,
     ImageQuality quality = ImageQuality.high,
     VideoQuality videoQuality = VideoQuality.high,
@@ -1785,19 +1811,29 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
     String? sourceUri,
     int sourceFlags = 0,
   }) async {
-    if (_detached) await jumpToLatest();
-    _requestScroll(null);
-    return _uploadCoordinator.sendMedia(
-      messageId: messageId,
-      rawBytes: rawBytes,
-      type: type,
-      filename: filename,
-      quality: quality,
-      videoQuality: videoQuality,
-      propagateFailure: propagateFailure,
-      sourceUri: sourceUri,
-      sourceFlags: sourceFlags,
-    );
+    final shouldScrollToLatest =
+        scrollToLatest ??
+        (!_detached ||
+            (type != MessageType.gif && type != MessageType.sticker));
+    if (shouldScrollToLatest && _detached) {
+      await jumpToLatest();
+    }
+    if (shouldScrollToLatest) _scrollAfterMediaPending.add(messageId);
+    try {
+      await _uploadCoordinator.sendMedia(
+        messageId: messageId,
+        rawBytes: rawBytes,
+        type: type,
+        filename: filename,
+        quality: quality,
+        videoQuality: videoQuality,
+        propagateFailure: propagateFailure,
+        sourceUri: sourceUri,
+        sourceFlags: sourceFlags,
+      );
+    } finally {
+      _scrollAfterMediaPending.remove(messageId);
+    }
   }
 
   /// Queue multiple images at once, immediately showing optimistic messages in

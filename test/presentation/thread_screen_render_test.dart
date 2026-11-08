@@ -54,6 +54,7 @@ class _Crypto implements ChatCryptoService {
 class _Messages implements MessageRepository {
   // ignore: close_sinks - test fake lives for the whole test.
   final live = StreamController<List<ChatMessage>>.broadcast();
+  final editedTexts = <String>[];
   Completer<List<ChatMessage>>? nextOlderPage;
   int loadBeforeCalls = 0;
 
@@ -97,6 +98,15 @@ class _Messages implements MessageRepository {
     MessageReply? replyTo,
     bool isForwarded = false,
   }) => Completer<ChatMessage>().future;
+
+  @override
+  Future<void> editMessage({
+    required String threadId,
+    required String messageId,
+    required String encryptedText,
+  }) async {
+    editedTexts.add(encryptedText);
+  }
 
   @override
   Future<void> markRead({
@@ -378,6 +388,19 @@ void main() {
     await tester.pump(const Duration(milliseconds: 400));
     expect(find.text('Record Video'), findsOneWidget);
     expect(find.text('Notes & Lists'), findsOneWidget);
+    final attachmentGridFinder = find.byKey(
+      const ValueKey('attachment-options-grid'),
+    );
+    final attachmentGrid = tester.widget<GridView>(attachmentGridFinder);
+    expect(
+      (attachmentGrid.gridDelegate as SliverGridDelegateWithFixedCrossAxisCount)
+          .crossAxisCount,
+      3,
+    );
+    expect(attachmentGrid.padding, EdgeInsets.zero);
+    expect(tester.getRect(attachmentGridFinder).left, closeTo(0, 0.5));
+    expect(tester.getRect(attachmentGridFinder).right, closeTo(360, 0.5));
+    expect(tester.getRect(attachmentGridFinder).height, closeTo(352, 0.5));
     expect(find.text('Checklist'), findsNothing);
     expect(find.text('Note'), findsNothing);
     await tester.binding.handlePopRoute();
@@ -659,6 +682,104 @@ void main() {
         isNull,
       );
 
+      await cubit.close();
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
+  testWidgets(
+    'editing from the emoji drawer hides the edit header and keeps the drawer open',
+    (tester) async {
+      tester.view.physicalSize = const Size(1080, 2400);
+      tester.view.devicePixelRatio = 3.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      final messages = _Messages();
+      final unused = _Unused();
+      final cubit = ActiveThreadCubit(
+        messageRepository: messages,
+        threadRepository: _Threads(),
+        userRepository: unused,
+        typingRepository: _Typing(),
+        presenceRepository: _Presence(),
+        mediaRepository: unused,
+        messageCache: const NoopMessageCacheRepository(),
+        outbox: _Outbox(),
+        cryptoService: _Crypto(),
+        myUid: 'me',
+      );
+      final thread = ChatThread(
+        threadId: 't',
+        participantIds: const ['me', 'other'],
+        lastMessage: '',
+        createdAt: DateTime.utc(2024),
+        lastMessageAt: DateTime.utc(2024),
+        unreadCounts: const {},
+      );
+      final other = ChatUser(
+        uid: 'other',
+        email: 'other@example.com',
+        displayName: 'Other',
+        publicKey: '',
+        createdAt: DateTime.utc(2024),
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: BlocProvider.value(
+            value: cubit,
+            child: ThreadScreen(
+              thread: thread,
+              otherUser: other,
+              mediaLoader: ChatMediaLoader(
+                mediaRepository: unused,
+                cryptoService: _Crypto(),
+              ),
+              vaultBridge: unused,
+              onLock: () {},
+              chatDraftRepository: _Drafts(),
+              stickerPackFactory: (uid) =>
+                  LocalStickerPackRepository(userId: uid),
+            ),
+          ),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 50));
+      messages.live.add([_msg('editable', 'before 😀', sender: 'me')]);
+      await tester.pump(const Duration(milliseconds: 50));
+      await tester.pump(const Duration(milliseconds: 500));
+
+      tester
+          .widget<MessageBubble>(find.byKey(const ValueKey('bubble-editable')))
+          .onEdit!
+          .call();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+      expect(find.text('Edit message'), findsWidgets);
+
+      await tester.enterText(find.byType(TextField).first, 'edited 😀');
+      await tester.pump();
+      await tester.tap(find.byTooltip('Emoji, stickers, and GIFs').first);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+
+      expect(find.byType(ChatMediaPickerPanel), findsOneWidget);
+      expect(find.text('Edit message'), findsWidgets);
+      final checkButton = find.byIcon(Icons.check_rounded).last;
+      await tester.tap(checkButton);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+      await tester.pump(const Duration(milliseconds: 100));
+
+      expect(messages.editedTexts, ['cipher:edited 😀']);
+      expect(find.text('Edit message'), findsNothing);
+      expect(find.byType(ChatMediaPickerPanel), findsOneWidget);
+      expect(find.byIcon(Icons.check_rounded), findsNothing);
+      expect(tester.takeException(), isNull);
+
+      await tester.binding.handlePopRoute();
+      await tester.pump(const Duration(milliseconds: 400));
       await cubit.close();
       await tester.pumpWidget(const SizedBox.shrink());
     },

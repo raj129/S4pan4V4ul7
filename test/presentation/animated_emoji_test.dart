@@ -67,10 +67,12 @@ void main() {
 
   testWidgets('sizes emoji-only messages by emoji count', (tester) async {
     for (final (text, expectedSize) in [
-      ('😀', 67.2),
-      ('😀😀', 76.8),
-      ('😀😀😀😀', 76.8),
-      ('😀😀😀😀😀', 67.2),
+      ('😀', 62.208),
+      ('😀😀', 62.208),
+      ('😀😀😀', 54.432),
+      ('😀😀😀😀', 54.432),
+      ('😀😀😀😀😀', 54.432),
+      ('😀😀😀😀😀😀', 67.2),
     ]) {
       await tester.pumpWidget(
         MaterialApp(
@@ -84,8 +86,8 @@ void main() {
       final box = tester.widget<SizedBox>(
         find.byKey(const ValueKey('emoji-box-0')),
       );
-      expect(box.width, expectedSize, reason: text);
-      expect(box.height, expectedSize, reason: text);
+      expect(box.width, closeTo(expectedSize, 0.01), reason: text);
+      expect(box.height, closeTo(expectedSize, 0.01), reason: text);
     }
   });
 
@@ -116,7 +118,7 @@ void main() {
     expect(tester.widget<Opacity>(animationFinder).opacity, 0);
     expect(find.byType(FittedBox), findsOneWidget);
     expect(tester.widget<SizedBox>(boxFinder).width, animatedSize);
-    expect(animatedSize, closeTo(67.2, 0.01));
+    expect(animatedSize, closeTo(62.208, 0.01));
   });
 
   testWidgets('remounted played emoji stays static until tapped', (

@@ -752,6 +752,66 @@ void main() {
       expect(state.scrollRequest?.messageId, isNull);
     });
 
+    test('emoji-only sends preserve the older-history viewport', () async {
+      await openWith(history());
+      await cubit.jumpToMessage('h100');
+      final before = cubit.state as ActiveThreadLoaded;
+      final scrollSeq = before.scrollRequest!.seq;
+
+      await cubit.sendText('😊', scrollToLatest: false);
+
+      final after = cubit.state as ActiveThreadLoaded;
+      expect(after.isDetached, isTrue);
+      expect(after.scrollRequest?.seq, scrollSeq);
+      expect(messages.sent.single.encryptedText, '😊');
+
+      await cubit.sendMedia(
+        messageId: 'gif-in-older-history',
+        rawBytes: [1, 2],
+        type: MessageType.gif,
+      );
+
+      final afterGif = cubit.state as ActiveThreadLoaded;
+      expect(afterGif.isDetached, isTrue);
+      expect(afterGif.scrollRequest?.seq, scrollSeq);
+    });
+
+    test(
+      'media scroll is requested after its optimistic message is visible',
+      () async {
+        await openWith(history());
+        await cubit.jumpToMessage('h100');
+        final scrollSeq =
+            (cubit.state as ActiveThreadLoaded).scrollRequest!.seq;
+        final emittedStates = <ActiveThreadLoaded>[];
+        final subscription = cubit.stream.listen((state) {
+          if (state is ActiveThreadLoaded) emittedStates.add(state);
+        });
+
+        await cubit.sendMedia(
+          messageId: 'sticker-near-latest',
+          rawBytes: [1, 2],
+          type: MessageType.sticker,
+          scrollToLatest: true,
+        );
+        await subscription.cancel();
+
+        expect(
+          emittedStates.any(
+            (state) =>
+                (state.scrollRequest?.seq ?? 0) > scrollSeq &&
+                state.messages.any(
+                  (message) =>
+                      message.messageId == 'sticker-near-latest' &&
+                      message.status == MessageStatus.sending,
+                ),
+          ),
+          isTrue,
+        );
+        expect((cubit.state as ActiveThreadLoaded).isDetached, isFalse);
+      },
+    );
+
     test('counts new arrivals while viewing older history', () async {
       await openWith(history());
       await cubit.jumpToMessage('h100');

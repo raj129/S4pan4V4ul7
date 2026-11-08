@@ -105,12 +105,13 @@ class AnimatedEmojiText extends StatefulWidget {
   static void debugResetPlayback() => _played.clear();
 
   static double _sizeForEmojiCount(double baseSize, int count) {
-    final size = count >= 2 && count <= 4
+    final size = count >= 1 && count <= 2
         ? baseSize + 16
         : count > 0
         ? baseSize + 8
         : baseSize;
-    return size * 1.2;
+    final sizeMultiplier = count >= 1 && count <= 5 ? 0.81 : 1.0;
+    return size * 1.2 * sizeMultiplier;
   }
 
   @override

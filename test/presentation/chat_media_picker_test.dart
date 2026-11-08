@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:photo_vault/features/chat/data/repositories/local_sticker_pack_repository.dart';
 import 'package:photo_vault/features/chat/presentation/widgets/chat_media_picker.dart';
+import 'package:photo_vault/features/chat/presentation/widgets/message_bubble.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class _MemoryStickerKeyStore implements StickerKeyStore {
   final Map<String, String> values = {};
@@ -18,9 +20,11 @@ class _MemoryStickerKeyStore implements StickerKeyStore {
 }
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
   late Directory root;
 
   setUp(() async {
+    SharedPreferences.setMockInitialValues({});
     root = await Directory.systemTemp.createTemp('chat-media-picker-test-');
   });
 
@@ -33,6 +37,8 @@ void main() {
   ) async {
     String? insertedEmoji;
     var backspacePresses = 0;
+    final composerController = TextEditingController();
+    addTearDown(composerController.dispose);
     await tester.pumpWidget(
       MaterialApp(
         home: Builder(
@@ -46,16 +52,32 @@ void main() {
                     rootDirectory: root,
                     keyStore: _MemoryStickerKeyStore(),
                   ),
-                  buildEmojiPicker: (_) =>
-                      const Center(child: Text('Emoji grid')),
+                  buildEmojiPicker: (height, pickerKey) => ThemedEmojiPicker(
+                    pickerKey: pickerKey,
+                    textEditingController: composerController,
+                    height: height,
+                    searchHeight: height * 0.7,
+                    showBackspace: false,
+                    showSearchButton: false,
+                    columns: 9,
+                    onEmojiSelected: (_, _) {},
+                  ),
                   composer: const SizedBox(
                     key: ValueKey('visible-chat-composer'),
                     height: 56,
                     child: Center(child: Text('Draft stays visible')),
                   ),
                   onSend: (_, _, _) async {},
-                  onInsertEmoji: (emoji) => insertedEmoji = emoji,
-                  onBackspace: () => backspacePresses++,
+                  onInsertEmoji: (emoji) {
+                    insertedEmoji = emoji;
+                    composerController.text += emoji;
+                  },
+                  onBackspace: () {
+                    backspacePresses++;
+                    if (composerController.text.isNotEmpty) {
+                      composerController.clear();
+                    }
+                  },
                 ),
                 child: const Text('Open picker'),
               ),
@@ -79,7 +101,7 @@ void main() {
     expect(find.byTooltip('Stickers'), findsOneWidget);
     expect(find.byTooltip('GIFs'), findsOneWidget);
     expect(find.byType(TextField), findsNothing);
-    expect(find.text('Emoji grid'), findsOneWidget);
+    expect(find.byType(ThemedEmojiPicker), findsOneWidget);
     expect(find.byTooltip('Close media picker'), findsNothing);
     expect(
       tester.getRect(find.byTooltip('Search emoji')).left,
@@ -110,7 +132,7 @@ void main() {
 
     await tester.tap(find.byKey(const ValueKey('picker-tab-emoji')));
     await tester.pumpAndSettle();
-    expect(find.text('Emoji grid'), findsOneWidget);
+    expect(find.byType(ThemedEmojiPicker), findsOneWidget);
 
     await tester.tap(find.byKey(const ValueKey('picker-tab-stickers')));
     await tester.pumpAndSettle();
@@ -129,7 +151,7 @@ void main() {
 
     await tester.tap(find.byKey(const ValueKey('picker-tab-emoji')));
     await tester.pumpAndSettle();
-    expect(find.text('Emoji grid'), findsOneWidget);
+    expect(find.byType(ThemedEmojiPicker), findsOneWidget);
 
     final initialHeight = tester
         .getSize(find.byType(ChatMediaPickerPanel))
@@ -159,32 +181,38 @@ void main() {
       of: find.byTooltip('Backspace'),
       matching: find.byType(IconButton),
     );
-    expect(tester.widget<IconButton>(backspaceButton).onPressed, isNull);
+    expect(tester.widget<IconButton>(backspaceButton).onPressed, isNotNull);
 
-    await tester.enterText(find.byType(TextField), 'smiling eyes');
+    final searchInput = find.byType(TextField);
+    await tester.enterText(searchInput, 'smiling eyes');
     await tester.pumpAndSettle();
     expect(find.text('😊'), findsOneWidget);
     await tester.tap(find.text('😊'));
     expect(insertedEmoji, '😊');
+    expect(composerController.text, '😊');
+    await tester.tap(backspaceButton);
+    expect(backspacePresses, 2);
+    expect(composerController.text, isEmpty);
+    expect(
+      tester.widget<TextField>(searchInput).controller!.text,
+      'smiling eyes',
+    );
 
     await tester.tap(find.byTooltip('Close search'));
     await tester.pumpAndSettle();
     expect(find.byType(TextField), findsNothing);
-    expect(find.text('Emoji grid'), findsOneWidget);
+    expect(find.byType(ThemedEmojiPicker), findsOneWidget);
+    await tester.tap(find.byIcon(Icons.access_time));
+    await tester.pumpAndSettle();
+    expect(find.text('😊'), findsOneWidget);
 
-    await tester.drag(
-      find.byKey(const ValueKey('chat-media-pages')),
-      const Offset(-600, 0),
-    );
+    await tester.tap(find.byKey(const ValueKey('picker-tab-stickers')));
     await tester.pumpAndSettle();
     expect(find.text('Explore'), findsOneWidget);
     expect(find.text('My stickers'), findsOneWidget);
     expect(tester.widget<IconButton>(backspaceButton).onPressed, isNull);
 
-    await tester.drag(
-      find.byKey(const ValueKey('chat-media-pages')),
-      const Offset(-600, 0),
-    );
+    await tester.tap(find.byKey(const ValueKey('picker-tab-gifs')));
     await tester.pumpAndSettle();
 
     expect(
