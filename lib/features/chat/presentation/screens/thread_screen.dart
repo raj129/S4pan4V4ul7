@@ -33,6 +33,7 @@ import '../widgets/arrival_permissions.dart';
 import '../widgets/arrival_place_sheets.dart';
 import 'location_picker_screen.dart';
 import '../../application/services/chat_notification_service.dart';
+import '../chat_route_observer.dart';
 import 'package:photo_vault/core/integrations/chat_vault_bridge.dart';
 import '../../application/media/image_compressor.dart';
 import '../../application/services/profile_service.dart';
@@ -176,7 +177,7 @@ class ThreadScreen extends StatefulWidget {
 }
 
 class _ThreadScreenState extends State<ThreadScreen>
-    with WidgetsBindingObserver {
+    with WidgetsBindingObserver, RouteAware {
   final _textCtrl = TextEditingController();
   final _itemScrollCtrl = ItemScrollController();
   final _itemPositions = ItemPositionsListener.create();
@@ -252,6 +253,7 @@ class _ThreadScreenState extends State<ThreadScreen>
 
   /// Whether the rows in [_items] were built from a detached window.
   bool _renderedDetached = false;
+  ModalRoute<void>? _observedRoute;
 
   @override
   void initState() {
@@ -282,6 +284,40 @@ class _ThreadScreenState extends State<ThreadScreen>
         );
       });
     }
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final route = ModalRoute.of(context);
+    if (route == _observedRoute) return;
+    if (_observedRoute != null) {
+      chatRouteObserver.unsubscribe(this);
+    }
+    _observedRoute = route is ModalRoute<void> ? route : null;
+    if (_observedRoute != null) {
+      chatRouteObserver.subscribe(this, _observedRoute!);
+    }
+  }
+
+  @override
+  void didPush() {
+    widget.notificationService?.setActiveThread(widget.thread.threadId);
+  }
+
+  @override
+  void didPushNext() {
+    widget.notificationService?.setActiveThread(null);
+  }
+
+  @override
+  void didPopNext() {
+    widget.notificationService?.setActiveThread(widget.thread.threadId);
+  }
+
+  @override
+  void didPop() {
+    widget.notificationService?.setActiveThread(null);
   }
 
   Future<void> _prepareChat() async {
@@ -727,6 +763,7 @@ class _ThreadScreenState extends State<ThreadScreen>
 
   @override
   void dispose() {
+    chatRouteObserver.unsubscribe(this);
     WidgetsBinding.instance.removeObserver(this);
     _draftSaveTimer?.cancel();
     _replyFlashTimer?.cancel();

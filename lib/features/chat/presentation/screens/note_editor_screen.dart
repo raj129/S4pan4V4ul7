@@ -190,6 +190,25 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
     });
   }
 
+  void _addChecklistItem() {
+    final emptyItem = _currentNote.items
+        .where((item) => !item.isDone && item.text.trim().isEmpty)
+        .firstOrNull;
+    if (emptyItem != null) {
+      _focusChecklistItem(emptyItem.id);
+      return;
+    }
+
+    final item = _emptyChecklistItem();
+    setState(() {
+      _currentNote = _currentNote.copyWith(
+        items: [..._currentNote.items, item],
+      );
+    });
+    _triggerSave();
+    _focusChecklistItem(item.id);
+  }
+
   void _insertChecklistItemAfter(ChecklistItem item) {
     final items = [..._currentNote.items];
     final index = items.indexWhere((candidate) => candidate.id == item.id);
@@ -444,6 +463,20 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
       children: [
         // Active uncompleted items
         reorderableItems(uncompleted, false),
+        Padding(
+          padding: const EdgeInsets.only(
+            left: AppSpacing.lg,
+            top: AppSpacing.xs,
+          ),
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              onPressed: _addChecklistItem,
+              icon: const Icon(Icons.add_rounded),
+              label: const Text('Add item'),
+            ),
+          ),
+        ),
 
         // Completed / checked items section (Google Keep style)
         if (completed.isNotEmpty) ...[

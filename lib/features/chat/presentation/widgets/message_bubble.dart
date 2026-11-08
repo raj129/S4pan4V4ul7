@@ -837,6 +837,7 @@ class _ThemedEmojiPickerState extends State<ThemedEmojiPicker> {
         backgroundColor: bg,
       ),
       categoryViewConfig: CategoryViewConfig(
+        recentTabBehavior: RecentTabBehavior.RECENT,
         backgroundColor: bg,
         indicatorColor: cs.primary,
         iconColor: cs.onSurfaceVariant,
@@ -909,15 +910,6 @@ class _EmojiSearchViewState extends SearchViewState<_EmojiSearchView> {
   }
 
   @override
-  void dispose() {
-    final searching = widget.searching;
-    WidgetsBinding.instance.addPostFrameCallback(
-      (_) => searching.value = false,
-    );
-    super.dispose();
-  }
-
-  @override
   void onTextInputChanged(String text) {
     if (text.trim().isNotEmpty) {
       super.onTextInputChanged(text);
@@ -982,7 +974,10 @@ class _EmojiSearchViewState extends SearchViewState<_EmojiSearchView> {
                 child: Row(
                   children: [
                     IconButton(
-                      onPressed: widget.showEmojiView,
+                      onPressed: () {
+                        widget.searching.value = false;
+                        widget.showEmojiView();
+                      },
                       color: cfg.searchViewConfig.buttonIconColor,
                       icon: const Icon(Icons.arrow_back),
                     ),

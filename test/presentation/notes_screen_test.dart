@@ -465,6 +465,27 @@ void main() {
     expect(repository.shared, isEmpty);
   });
 
+  testWidgets('checklist has a visible action to add an item', (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: NoteEditorScreen(
+          note: _checklist('Add item'),
+          notesRepository: repository,
+          currentUserId: 'me',
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final addItemButton = find.widgetWithText(TextButton, 'Add item');
+    expect(addItemButton, findsOneWidget);
+    await tester.tap(addItemButton);
+    await tester.pump();
+
+    final emptyField = tester.widget<TextField>(_emptyChecklistFields());
+    expect(emptyField.focusNode?.hasFocus, isTrue);
+  });
+
   testWidgets('reordering checklist items saves the new order', (tester) async {
     await tester.pumpWidget(
       MaterialApp(

@@ -19,6 +19,7 @@ import '../../features/vault/presentation/state/onboarding_cubit.dart';
 import '../../features/vault/domain/repositories/settings_repository.dart';
 import '../presentation/theme/app_colors.dart';
 import '../presentation/theme/app_theme.dart';
+import '../../features/chat/application/services/chat_notification_service.dart';
 
 /// App root: owns the dependency container, session state, and router.
 ///
@@ -41,6 +42,9 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
     persistentState: widget.persistentState,
   );
   final AppSessionState _session = AppSessionState();
+  final _scaffoldMessengerKey = GlobalKey<ScaffoldMessengerState>();
+  late final ChatNotificationService _notificationService =
+      _deps.chatDependencies.notificationService;
   late final OnboardingCubit _onboardingCubit = OnboardingCubit(
     authRepository: _deps.authRepository,
     createVaultUseCase: _deps.createVaultUseCase,
@@ -68,6 +72,11 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _notificationService.foregroundNotification.addListener(
+      _showForegroundNotification,
+    );
+    _router.routeInformationProvider.addListener(_updateChatVisibility);
+    _updateChatVisibility();
     _initShareIntentHandling();
     // Database/storage setup failing must not be silent: report it (to
     // Crashlytics in release via FlutterError.onError) instead of leaving the
@@ -84,6 +93,57 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
       }),
     );
     unawaited(_hydrateSessionSettings());
+  }
+
+  void _updateChatVisibility() {
+    final path = _router.routeInformationProvider.value.uri.path;
+    _notificationService.setChatSectionVisible(
+      path == '/chat' || path == '/chat/thread',
+    );
+  }
+
+  void _showForegroundNotification() {
+    final notification = _notificationService.foregroundNotification.value;
+    final messenger = _scaffoldMessengerKey.currentState;
+    if (notification == null || messenger == null) return;
+
+    messenger
+      ..hideCurrentMaterialBanner()
+      ..showMaterialBanner(
+        MaterialBanner(
+          content: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                notification.title,
+                style: Theme.of(context).textTheme.titleSmall,
+              ),
+              if (notification.body.isNotEmpty) Text(notification.body),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                _router.go('/chat');
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  if (mounted) {
+                    _notificationService.openFromNotification(
+                      notification.threadId,
+                    );
+                  }
+                });
+                messenger.hideCurrentMaterialBanner();
+              },
+              child: const Text('Open'),
+            ),
+            TextButton(
+              onPressed: messenger.hideCurrentMaterialBanner,
+              child: const Text('Dismiss'),
+            ),
+          ],
+        ),
+      );
   }
 
   Future<void> _hydrateSessionSettings() async {
@@ -215,6 +275,10 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
     _onboardingCubit.close();
     _shareStreamSub?.cancel();
     _backgroundLockTimer?.cancel();
+    _notificationService.foregroundNotification.removeListener(
+      _showForegroundNotification,
+    );
+    _router.routeInformationProvider.removeListener(_updateChatVisibility);
     unawaited(_deps.dispose());
     WidgetsBinding.instance.removeObserver(this);
     _session.dispose();
@@ -230,6 +294,7 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
       darkTheme: AppTheme.forPalette(_themePalette, Brightness.dark),
       themeMode: _themeMode,
       routerConfig: _router,
+      scaffoldMessengerKey: _scaffoldMessengerKey,
       builder: (context, child) => AppDrawerScope(
         hasMyLocations: () =>
             Platform.isAndroid &&

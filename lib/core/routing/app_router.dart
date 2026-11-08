@@ -12,6 +12,7 @@ import '../../features/vault/domain/entities/vault_status.dart';
 import '../../features/calculator/calculator.dart';
 import '../../features/chat/application/media/chat_share_inbox.dart';
 import '../../features/chat/presentation/app/chat_app.dart';
+import '../../features/chat/presentation/chat_route_observer.dart';
 import '../app/main_scaffold.dart';
 import '../presentation/features/utility_shell/utility_shell.dart';
 import '../../features/chat/presentation/screens/new_chat_screen.dart';
@@ -93,7 +94,10 @@ GoRouter buildAppRouter({
           ),
         ),
         branches: [
-          StatefulShellBranch(routes: [_chatRoute(deps, session)]),
+          StatefulShellBranch(
+            observers: [chatRouteObserver],
+            routes: [_chatRoute(deps, session)],
+          ),
           StatefulShellBranch(routes: [_galleryRoute(deps, session)]),
           StatefulShellBranch(routes: [_trashRoute(deps)]),
           StatefulShellBranch(

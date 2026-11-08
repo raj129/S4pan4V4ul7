@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
 import '../../domain/entities/chat_thread.dart';
@@ -14,29 +14,49 @@ typedef ChatNotificationPresenter =
       required String body,
     });
 
-/// Shows a local notification when an unread count goes up, and remembers
-/// which conversation a tapped notification belongs to.
+@immutable
+class ForegroundChatNotification {
+  const ForegroundChatNotification({
+    required this.threadId,
+    required this.title,
+    required this.body,
+  });
+
+  final String threadId;
+  final String title;
+  final String body;
+}
+
+/// Emits an in-app alert while the app is visible and a local notification
+/// while it is backgrounded, and remembers the tapped conversation.
 ///
-/// This covers the app while its process is alive. The background FCM handler
-/// also posts through the local-notification plugin. Both use the Android tag
-/// = threadId and id = 0, so they replace rather than stack duplicates.
+/// The background FCM handler also posts through the local-notification plugin.
+/// Both local notifications use the Android tag = threadId and id = 0, so they
+/// replace rather than stack duplicates.
 /// Foreground unread updates are coalesced to one alert per thread per window.
 class ChatNotificationService {
   ChatNotificationService({
     required ThreadRepository threadRepository,
     SettingsRepository? settingsRepository,
     ChatNotificationPresenter? presentNotification,
+    bool Function()? isAppForeground,
     DateTime Function()? clock,
   }) : _threadRepository = threadRepository,
        _settingsRepository = settingsRepository,
        _presentNotification = presentNotification,
+       _isAppForeground = isAppForeground,
        _clock = clock ?? DateTime.now;
 
   final ThreadRepository _threadRepository;
   final SettingsRepository? _settingsRepository;
   final ChatNotificationPresenter? _presentNotification;
+  final bool Function()? _isAppForeground;
   final DateTime Function() _clock;
   final _plugin = FlutterLocalNotificationsPlugin();
+
+  /// New-message events for the app shell to display as in-app banners.
+  final ValueNotifier<ForegroundChatNotification?> foregroundNotification =
+      ValueNotifier(null);
 
   /// Must match `android.notification.channelId` in the Cloud Function and the
   /// default channel declared in AndroidManifest.xml.
@@ -58,6 +78,7 @@ class ChatNotificationService {
   final _lastUnread = <String, int>{};
   final _lastAlertAt = <String, DateTime>{};
   String? _activeThreadId;
+  bool _chatSectionVisible = true;
   bool _initialised = false;
   String? _watchingUid;
   bool _primed = false;
@@ -125,7 +146,7 @@ class ChatNotificationService {
       final unread = thread.unreadCounts[myUid] ?? 0;
       final previous = _lastUnread[thread.threadId];
 
-      if (thread.threadId == _activeThreadId) {
+      if (_chatSectionVisible && thread.threadId == _activeThreadId) {
         _lastUnread[thread.threadId] = 0;
         continue;
       }
@@ -147,6 +168,15 @@ class ChatNotificationService {
   Future<void> _notify(ChatThread thread) async {
     final title = 'Calculator';
     final body = await _incomingChatAlertText();
+
+    if (_isForeground) {
+      foregroundNotification.value = ForegroundChatNotification(
+        threadId: thread.threadId,
+        title: 'New message',
+        body: body,
+      );
+      return;
+    }
 
     final presentNotification = _presentNotification;
     if (presentNotification != null) {
@@ -223,9 +253,18 @@ class ChatNotificationService {
     }
   }
 
+  bool get _isForeground =>
+      _isAppForeground?.call() ??
+      WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
+
+  /// Whether the chat branch is currently visible in the app.
+  void setChatSectionVisible(bool visible) {
+    _chatSectionVisible = visible;
+  }
+
   /// Whether [threadId] is open on screen right now.
   bool isActiveThread(String? threadId) =>
-      threadId != null && threadId == _activeThreadId;
+      _chatSectionVisible && threadId != null && threadId == _activeThreadId;
 
   Future<void> stop() async {
     await _sub?.cancel();
@@ -239,5 +278,6 @@ class ChatNotificationService {
   Future<void> dispose() async {
     await stop();
     pendingThreadId.dispose();
+    foregroundNotification.dispose();
   }
 }

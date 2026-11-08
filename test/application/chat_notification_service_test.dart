@@ -27,6 +27,8 @@ ChatThread _thread(String id, int unread) => ChatThread(
 );
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
   test(
     'coalesces rapid unread changes per thread without changing the text',
     () async {
@@ -35,6 +37,7 @@ void main() {
       final notifications = <({String threadId, String body})>[];
       final service = ChatNotificationService(
         threadRepository: repository,
+        isAppForeground: () => false,
         clock: () => now,
         presentNotification:
             ({required threadId, required title, required body}) async {
@@ -71,6 +74,7 @@ void main() {
     final service = ChatNotificationService(
       threadRepository: repository,
       settingsRepository: settings,
+      isAppForeground: () => false,
       presentNotification:
           ({required threadId, required title, required body}) async {
             notifications.add(body);
@@ -96,6 +100,7 @@ void main() {
     final service = ChatNotificationService(
       threadRepository: repository,
       settingsRepository: settings,
+      isAppForeground: () => false,
       presentNotification:
           ({required threadId, required title, required body}) async {
             notifications.add((threadId: threadId, body: body));
@@ -124,6 +129,7 @@ void main() {
       final notifications = <String>[];
       final service = ChatNotificationService(
         threadRepository: repository,
+        isAppForeground: () => false,
         presentNotification:
             ({required threadId, required title, required body}) async {
               notifications.add(threadId);
@@ -147,4 +153,36 @@ void main() {
       await repository.updates.close();
     },
   );
+
+  test('emits an in-app alert outside the visible chat branch', () async {
+    final repository = _ThreadRepository();
+    final service = ChatNotificationService(
+      threadRepository: repository,
+      isAppForeground: () => true,
+      presentNotification:
+          ({required threadId, required title, required body}) async {},
+    );
+
+    await service.start('alice');
+    repository.updates.add([_thread('alice_bob', 0)]);
+    await service.setActiveThread('alice_bob');
+    repository.updates.add([_thread('alice_bob', 1)]);
+    await Future<void>.delayed(Duration.zero);
+    expect(service.foregroundNotification.value, isNull);
+
+    service.setChatSectionVisible(false);
+    repository.updates.add([_thread('alice_bob', 2)]);
+    await Future<void>.delayed(Duration.zero);
+
+    expect(service.foregroundNotification.value, isNotNull);
+    expect(service.foregroundNotification.value!.threadId, 'alice_bob');
+    expect(service.foregroundNotification.value!.title, 'New message');
+    expect(service.isActiveThread('alice_bob'), isFalse);
+
+    service.setChatSectionVisible(true);
+    expect(service.isActiveThread('alice_bob'), isTrue);
+
+    await service.dispose();
+    await repository.updates.close();
+  });
 }

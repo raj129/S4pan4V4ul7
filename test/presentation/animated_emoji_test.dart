@@ -65,6 +65,89 @@ void main() {
     expect(find.bySemanticsLabel('😀🦖'), findsOneWidget);
   });
 
+  testWidgets('sizes emoji-only messages by emoji count', (tester) async {
+    for (final (text, expectedSize) in [
+      ('😀', 67.2),
+      ('😀😀', 76.8),
+      ('😀😀😀😀', 76.8),
+      ('😀😀😀😀😀', 67.2),
+    ]) {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: AnimatedEmojiText(text: text, playbackId: text, size: 48),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      final box = tester.widget<SizedBox>(
+        find.byKey(const ValueKey('emoji-box-0')),
+      );
+      expect(box.width, expectedSize, reason: text);
+      expect(box.height, expectedSize, reason: text);
+    }
+  });
+
+  testWidgets('keeps the settled emoji centered in the animation-sized box', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Scaffold(
+          body: AnimatedEmojiText(text: '😀', playbackId: 'finished'),
+        ),
+      ),
+    );
+    final boxFinder = find.byKey(const ValueKey('emoji-box-0'));
+    final animationFinder = find.byKey(const ValueKey('emoji-animation-0'));
+    final animatedSize = tester.widget<SizedBox>(boxFinder).width;
+    await tester.pumpAndSettle();
+
+    expect(tester.widget<Opacity>(animationFinder).opacity, 1);
+    expect(find.byType(FittedBox), findsNothing);
+    await tester.pump(
+      AnimatedEmojiText.staticEmojiDelay - const Duration(milliseconds: 1),
+    );
+    expect(find.byType(FittedBox), findsNothing);
+    await tester.pump(const Duration(milliseconds: 1));
+
+    expect(find.text('😀'), findsOneWidget);
+    expect(tester.widget<Opacity>(animationFinder).opacity, 0);
+    expect(find.byType(FittedBox), findsOneWidget);
+    expect(tester.widget<SizedBox>(boxFinder).width, animatedSize);
+    expect(animatedSize, closeTo(67.2, 0.01));
+  });
+
+  testWidgets('remounted played emoji stays static until tapped', (
+    tester,
+  ) async {
+    Widget app() => const MaterialApp(
+      home: Scaffold(
+        body: AnimatedEmojiText(text: '😀', playbackId: 'remounted'),
+      ),
+    );
+
+    await tester.pumpWidget(app());
+    await tester.pumpAndSettle();
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+
+    await tester.pumpWidget(app());
+    final animationOpacity = find.byKey(const ValueKey('emoji-animation-0'));
+    expect(tester.widget<Opacity>(animationOpacity).opacity, 0);
+    expect(find.byType(FittedBox), findsOneWidget);
+
+    await tester.pumpAndSettle();
+    expect(tester.widget<Opacity>(animationOpacity).opacity, 0);
+    expect(find.text('😀'), findsOneWidget);
+
+    await tester.tap(find.byType(AnimatedEmojiText));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(tester.widget<Opacity>(animationOpacity).opacity, 1);
+  });
+
   testWidgets('emoji without a Google animation still bounce, once', (
     tester,
   ) async {
