@@ -35,6 +35,9 @@ import '../../features/vault/presentation/screens/settings/notification_settings
 import '../../features/vault/presentation/screens/settings/settings_screen.dart';
 import '../../features/vault/presentation/screens/trash/trash_screen.dart';
 import '../../features/chat/presentation/screens/notes_screen.dart';
+import '../../features/calls/data/phone_contact_source.dart';
+import '../../features/calls/data/platform_call_log_repository.dart';
+import '../../features/calls/presentation/call_log_screen.dart';
 import '../../features/chat/presentation/state/active_thread_cubit.dart';
 import '../../features/chat/presentation/state/thread_list_cubit.dart';
 import '../../features/chat/presentation/state/user_lookup_cubit.dart';
@@ -114,6 +117,17 @@ GoRouter buildAppRouter({
                   notesRepository: deps.chatDependencies.notesRepository,
                   currentUserId:
                       deps.chatDependencies.authService.currentUid ?? '',
+                ),
+              ),
+            ],
+          ),
+          StatefulShellBranch(
+            routes: [
+              GoRoute(
+                path: '/calls',
+                builder: (_, _) => const CallLogScreen(
+                  repository: PlatformCallLogRepository(),
+                  contactSource: PlatformPhoneContactSource(),
                 ),
               ),
             ],

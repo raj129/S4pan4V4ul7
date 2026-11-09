@@ -40,7 +40,7 @@ class _MainScaffoldState extends State<MainScaffold> {
       context.push(path);
       return;
     }
-    if (index == 5) {
+    if (index == 6) {
       Navigator.of(context).pop();
       context.go(path);
       return;

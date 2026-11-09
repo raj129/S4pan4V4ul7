@@ -8,14 +8,15 @@ String? navigationPathForDestination(int index) => switch (index) {
   2 => '/trash',
   3 => '/files',
   4 => '/notes',
-  5 => '/settings',
-  6 => '/settings/developer',
-  7 => '/chat/my-locations',
+  5 => '/calls',
+  6 => '/settings',
+  7 => '/settings/developer',
+  8 => '/chat/my-locations',
   _ => null,
 };
 
 /// Destinations that open above the current tab instead of replacing it.
-bool isPushedDestination(int index) => index == 6 || index == 7;
+bool isPushedDestination(int index) => index == 7 || index == 8;
 
 /// Tells the drawer, wherever it is hosted, which optional entries apply.
 /// Evaluated when the drawer is built, i.e. each time it is opened.
@@ -147,6 +148,11 @@ class AppNavigationDrawer extends StatelessWidget {
           icon: Icon(Icons.checklist_rtl_rounded),
           selectedIcon: Icon(Icons.checklist_rounded),
           label: Text('Notes & Lists'),
+        ),
+        const NavigationDrawerDestination(
+          icon: Icon(Icons.call_outlined),
+          selectedIcon: Icon(Icons.call),
+          label: Text('Call log'),
         ),
         const NavigationDrawerDestination(
           icon: Icon(Icons.settings_outlined),

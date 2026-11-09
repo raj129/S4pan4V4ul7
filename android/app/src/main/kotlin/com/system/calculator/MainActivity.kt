@@ -44,6 +44,7 @@ class MainActivity : FlutterFragmentActivity() {
         flutterEngine.plugins.add(MockLocationPlugin())
         flutterEngine.plugins.add(ArrivalGeofencePlugin())
         flutterEngine.plugins.add(BatteryPlugin())
+        flutterEngine.plugins.add(CallLogPlugin())
     }
 
     private companion object {

@@ -212,7 +212,7 @@ class _NotificationSettingsScreenState
     return BaseScreenShell(
       title: 'Notifications',
       showDrawerMenu: false,
-      drawerSelectedIndex: 5,
+      drawerSelectedIndex: 6,
       body: _buildBody(context),
     );
   }

@@ -126,10 +126,11 @@ void main() {
 
   test('drawer destination routes match the visible order', () {
     expect(navigationPathForDestination(4), '/notes');
-    expect(navigationPathForDestination(5), '/settings');
-    expect(navigationPathForDestination(6), '/settings/developer');
-    expect(navigationPathForDestination(7), '/chat/my-locations');
-    expect(navigationPathForDestination(8), isNull);
+    expect(navigationPathForDestination(5), '/calls');
+    expect(navigationPathForDestination(6), '/settings');
+    expect(navigationPathForDestination(7), '/settings/developer');
+    expect(navigationPathForDestination(8), '/chat/my-locations');
+    expect(navigationPathForDestination(9), isNull);
   });
 
   setUp(() {
