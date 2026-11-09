@@ -149,6 +149,7 @@ class _ChatAppState extends State<ChatApp> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     unawaited(_deps.arrivalAlertService?.refreshArrivals());
     unawaited(_deps.savedPlacesService?.purgeExpired());
+    unawaited(_deps.liveLocationService?.restore());
     if (widget.userMode == UserMode.localOnly) {
       _chatAuthCubit.markUnauthenticated();
     } else {

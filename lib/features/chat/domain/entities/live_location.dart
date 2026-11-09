@@ -146,3 +146,28 @@ class LiveLocationSession extends Equatable {
     stoppedAt,
   ];
 }
+
+/// A recipient's request for the active sharer to refresh their location.
+class LiveLocationRefreshRequest extends Equatable {
+  const LiveLocationRefreshRequest({
+    required this.requestToken,
+    required this.requestedBy,
+    required this.requestedAt,
+    this.processedToken,
+  });
+
+  final String requestToken;
+  final String requestedBy;
+  final DateTime requestedAt;
+  final String? processedToken;
+
+  bool get isPending => requestToken != processedToken;
+
+  @override
+  List<Object?> get props => [
+    requestToken,
+    requestedBy,
+    requestedAt,
+    processedToken,
+  ];
+}

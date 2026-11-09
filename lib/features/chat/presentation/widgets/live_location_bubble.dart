@@ -19,6 +19,8 @@ class LiveLocationBubble extends StatefulWidget {
     required this.repository,
     required this.sessionId,
     this.onStopSharing,
+    this.onRefreshLiveLocation,
+    this.onRequestLiveLocationRefresh,
   });
 
   final ChatMessage message;
@@ -26,6 +28,8 @@ class LiveLocationBubble extends StatefulWidget {
   final LiveLocationRepository? repository;
   final String? sessionId;
   final Future<void> Function()? onStopSharing;
+  final Future<void> Function()? onRefreshLiveLocation;
+  final Future<void> Function()? onRequestLiveLocationRefresh;
 
   @override
   State<LiveLocationBubble> createState() => _LiveLocationBubbleState();
@@ -34,6 +38,8 @@ class LiveLocationBubble extends StatefulWidget {
 class _LiveLocationBubbleState extends State<LiveLocationBubble> {
   Stream<LiveLocationSession?>? _sessionStream;
   Timer? _stalenessTimer;
+  Timer? _refreshCooldownTimer;
+  bool _refreshPending = false;
 
   @override
   void initState() {
@@ -47,7 +53,35 @@ class _LiveLocationBubbleState extends State<LiveLocationBubble> {
   @override
   void dispose() {
     _stalenessTimer?.cancel();
+    _refreshCooldownTimer?.cancel();
     super.dispose();
+  }
+
+  Future<void> _refreshLocation({
+    required Future<void> Function()? action,
+    required String successMessage,
+  }) async {
+    if (action == null || _refreshPending) return;
+    setState(() => _refreshPending = true);
+    try {
+      await action();
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(successMessage)));
+      }
+      _refreshCooldownTimer?.cancel();
+      _refreshCooldownTimer = Timer(const Duration(seconds: 20), () {
+        if (mounted) setState(() => _refreshPending = false);
+      });
+    } catch (error) {
+      if (mounted) {
+        setState(() => _refreshPending = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not refresh location: $error')),
+        );
+      }
+    }
   }
 
   @override
@@ -152,6 +186,9 @@ class _LiveLocationBubbleState extends State<LiveLocationBubble> {
                       initialSession: session,
                       sessionStream: sessionStream,
                       onStopSharing: widget.onStopSharing,
+                      onRefreshLiveLocation: widget.onRefreshLiveLocation,
+                      onRequestLiveLocationRefresh:
+                          widget.onRequestLiveLocationRefresh,
                     ),
                   ),
                 ),
@@ -224,6 +261,42 @@ class _LiveLocationBubbleState extends State<LiveLocationBubble> {
                     ),
                   ],
                 ),
+                if (isActive &&
+                    isStale &&
+                    (widget.isMine
+                        ? widget.onRefreshLiveLocation != null
+                        : widget.onRequestLiveLocationRefresh != null)) ...[
+                  const SizedBox(height: AppSpacing.xs),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: _refreshPending
+                          ? null
+                          : () => _refreshLocation(
+                              action: widget.isMine
+                                  ? widget.onRefreshLiveLocation
+                                  : widget.onRequestLiveLocationRefresh,
+                              successMessage: widget.isMine
+                                  ? 'Refreshing your location…'
+                                  : 'Refresh requested. The location will update when the sharer’s device is available.',
+                            ),
+                      icon: _refreshPending
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.refresh, size: 16),
+                      label: Text(
+                        _refreshPending
+                            ? 'Refresh requested'
+                            : widget.isMine
+                            ? 'Refresh Location'
+                            : 'Request Refresh',
+                      ),
+                    ),
+                  ),
+                ],
                 if (startedAtText != null) ...[
                   const SizedBox(height: AppSpacing.xxs),
                   Text(

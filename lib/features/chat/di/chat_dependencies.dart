@@ -203,6 +203,7 @@ class ChatDependencies {
           repository: liveLocationRepository,
           battery: ChannelBatteryReader(),
           onLowBattery: _sendLowBatteryNotice,
+          store: FlutterSecureStringKv(const FlutterSecureStorage()),
         )
       : null;
 

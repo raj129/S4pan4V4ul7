@@ -249,6 +249,64 @@ service cloud.firestore {
                               && isValidLiveLocation(threadId, sessionId);
         allow delete: if isExistingThreadParticipant(threadId)
                       && isSelf(resource.data.userId);
+
+        match /refresh_requests/{requestId} {
+          function activeSession() {
+            let session = get(
+              /databases/$(database)/documents/threads/$(threadId)/live_locations/$(sessionId)
+            ).data;
+            return session.isActive == true
+                   && session.expiresAt > request.time.toMillis();
+          }
+
+          function isSessionOwner() {
+            return isSelf(get(
+              /databases/$(database)/documents/threads/$(threadId)/live_locations/$(sessionId)
+            ).data.userId);
+          }
+
+          allow read: if isExistingThreadParticipant(threadId);
+          allow create: if isExistingThreadParticipant(threadId)
+                        && requestId == 'latest'
+                        && activeSession()
+                        && request.resource.data.keys().hasOnly([
+                          'requestToken',
+                          'requestedBy',
+                          'requestedAt'
+                        ])
+                        && request.resource.data.requestToken is string
+                        && request.resource.data.requestedBy == request.auth.uid
+                        && !isSessionOwner()
+                        && request.resource.data.requestedAt is timestamp
+                        && request.resource.data.requestedAt == request.time;
+          allow update: if isExistingThreadParticipant(threadId)
+                        && requestId == 'latest'
+                        && activeSession()
+                        && (
+                          (
+                            !isSessionOwner()
+                            && resource.data.requestedBy == request.auth.uid
+                            && request.resource.data.requestedBy == request.auth.uid
+                            && request.resource.data.diff(resource.data)
+                                 .affectedKeys()
+                                 .hasOnly(['requestToken', 'requestedAt'])
+                            && request.resource.data.requestToken is string
+                            && request.resource.data.requestedAt is timestamp
+                            && request.resource.data.requestedAt == request.time
+                            && request.time >= resource.data.requestedAt
+                                 + duration.value(20, 's')
+                          )
+                          || (
+                            isSessionOwner()
+                            && request.resource.data.diff(resource.data)
+                                 .affectedKeys()
+                                 .hasOnly(['processedToken'])
+                            && request.resource.data.processedToken
+                                 == resource.data.requestToken
+                          )
+                        );
+          allow delete: if false;
+        }
       }
 
       // ── Shared notes & checklists ──────────────────────────────────────────

@@ -76,6 +76,8 @@ class MessageBubble extends StatelessWidget {
     this.onResumeUpload,
     this.liveLocationRepository,
     this.onStopLiveLocation,
+    this.onRefreshLiveLocation,
+    this.onRequestLiveLocationRefresh,
     this.notesRepository,
   });
 
@@ -146,6 +148,14 @@ class MessageBubble extends StatelessWidget {
     String sessionId,
   )?
   onStopLiveLocation;
+  final FutureOr<void> Function(
+    String threadId,
+    String userId,
+    String sessionId,
+  )?
+  onRefreshLiveLocation;
+  final FutureOr<void> Function(String threadId, String sessionId)?
+  onRequestLiveLocationRefresh;
   final NotesRepository? notesRepository;
 
   @override
@@ -205,6 +215,23 @@ class MessageBubble extends StatelessWidget {
             : () async => onStopLiveLocation!(
                 message.threadId,
                 message.senderId,
+                message.liveLocationSessionId!,
+              ),
+        onRefreshLiveLocation:
+            onRefreshLiveLocation == null ||
+                message.liveLocationSessionId == null
+            ? null
+            : () async => onRefreshLiveLocation!(
+                message.threadId,
+                message.senderId,
+                message.liveLocationSessionId!,
+              ),
+        onRequestLiveLocationRefresh:
+            onRequestLiveLocationRefresh == null ||
+                message.liveLocationSessionId == null
+            ? null
+            : () async => onRequestLiveLocationRefresh!(
+                message.threadId,
                 message.liveLocationSessionId!,
               ),
       ),

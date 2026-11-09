@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'package:photo_vault/core/presentation/theme/app_spacing.dart';
 import '../../domain/entities/chat_message.dart';
 import '../../domain/entities/geo_share.dart';
 import '../screens/geo_share_map_screen.dart';
+
+final DateFormat _arrivalSentTimeFormat = DateFormat.jm();
 
 /// Card for a shared pin, route or arrival message.
 class GeoShareBubble extends StatelessWidget {
@@ -89,6 +92,12 @@ class GeoShareBubble extends StatelessWidget {
                             style: Theme.of(context).textTheme.titleSmall,
                           ),
                           if (details.isNotEmpty) Text(details),
+                          if (share.kind == GeoShareKind.arrival)
+                            Text(
+                              'Sent ${_arrivalSentTimeFormat.format(message.sentAt.toLocal())}',
+                              style: Theme.of(context).textTheme.labelSmall
+                                  ?.copyWith(color: cs.onSurfaceVariant),
+                            ),
                         ],
                       ),
                     ),

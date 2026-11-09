@@ -21,6 +21,8 @@ class LiveLocationMapScreen extends StatefulWidget {
     required this.sessionStream,
     this.initialSession,
     this.onStopSharing,
+    this.onRefreshLiveLocation,
+    this.onRequestLiveLocationRefresh,
   });
 
   final String threadId;
@@ -29,6 +31,8 @@ class LiveLocationMapScreen extends StatefulWidget {
   final Stream<LiveLocationSession?> sessionStream;
   final LiveLocationSession? initialSession;
   final Future<void> Function()? onStopSharing;
+  final Future<void> Function()? onRefreshLiveLocation;
+  final Future<void> Function()? onRequestLiveLocationRefresh;
 
   @override
   State<LiveLocationMapScreen> createState() => _LiveLocationMapScreenState();
@@ -39,6 +43,8 @@ class _LiveLocationMapScreenState extends State<LiveLocationMapScreen> {
   MapsDiagnostics? _diagnostics;
   LiveLocationPoint? _deviceFallbackPoint;
   bool _locationGranted = false;
+  bool _refreshPending = false;
+  Timer? _refreshCooldownTimer;
 
   @override
   void initState() {
@@ -95,10 +101,44 @@ class _LiveLocationMapScreenState extends State<LiveLocationMapScreen> {
   @override
   void dispose() {
     _countdownTimer?.cancel();
+    _refreshCooldownTimer?.cancel();
     if (Platform.isAndroid) {
       unawaited(MapsDiagnostics.setMapActive(false));
     }
     super.dispose();
+  }
+
+  Future<void> _refreshLocation({
+    required Future<void> Function()? action,
+    required bool isMine,
+  }) async {
+    if (action == null || _refreshPending) return;
+    setState(() => _refreshPending = true);
+    try {
+      await action();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              isMine
+                  ? 'Refreshing your location…'
+                  : 'Refresh requested. The location will update when the sharer’s device is available.',
+            ),
+          ),
+        );
+      }
+      _refreshCooldownTimer?.cancel();
+      _refreshCooldownTimer = Timer(const Duration(seconds: 20), () {
+        if (mounted) setState(() => _refreshPending = false);
+      });
+    } catch (error) {
+      if (mounted) {
+        setState(() => _refreshPending = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not refresh location: $error')),
+        );
+      }
+    }
   }
 
   void _showDiagnosticsDialog(BuildContext context, MapsDiagnostics diag) {
@@ -289,6 +329,17 @@ class _LiveLocationMapScreenState extends State<LiveLocationMapScreen> {
                 isLive: isLive,
                 isStale: isStale,
                 point: effectivePoint,
+                isMine: widget.isMine,
+                canRefresh: widget.isMine
+                    ? widget.onRefreshLiveLocation != null
+                    : widget.onRequestLiveLocationRefresh != null,
+                refreshPending: _refreshPending,
+                onRefresh: () => _refreshLocation(
+                  action: widget.isMine
+                      ? widget.onRefreshLiveLocation
+                      : widget.onRequestLiveLocationRefresh,
+                  isMine: widget.isMine,
+                ),
               ),
             ),
         ],
@@ -460,12 +511,20 @@ class _LocationDetailsCard extends StatelessWidget {
     required this.isLive,
     required this.isStale,
     required this.point,
+    required this.isMine,
+    required this.canRefresh,
+    required this.refreshPending,
+    required this.onRefresh,
   });
 
   final LiveLocationSession session;
   final bool isLive;
   final bool isStale;
   final LiveLocationPoint? point;
+  final bool isMine;
+  final bool canRefresh;
+  final bool refreshPending;
+  final VoidCallback onRefresh;
 
   @override
   Widget build(BuildContext context) {
@@ -508,6 +567,32 @@ class _LocationDetailsCard extends StatelessWidget {
               ],
             ),
             const Divider(height: 20),
+            if (isStale &&
+                session.isActive &&
+                !session.isExpired &&
+                canRefresh) ...[
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: refreshPending ? null : onRefresh,
+                  icon: refreshPending
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.refresh, size: 16),
+                  label: Text(
+                    refreshPending
+                        ? 'Refresh requested'
+                        : isMine
+                        ? 'Refresh Location'
+                        : 'Request Refresh',
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+            ],
             if (currentPoint == null)
               Text(
                 'Location details are unavailable.',

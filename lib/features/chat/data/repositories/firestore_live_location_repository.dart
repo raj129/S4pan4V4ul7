@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:uuid/uuid.dart';
 
 import '../../application/crypto/chat_crypto_service.dart';
 import '../../domain/entities/live_location.dart';
@@ -39,6 +40,14 @@ class FirestoreLiveLocationRepository implements LiveLocationRepository {
 
   CollectionReference<Map<String, dynamic>> _threadLocations(String threadId) =>
       _db.collection('threads').doc(threadId).collection('live_locations');
+
+  DocumentReference<Map<String, dynamic>> _refreshRequestDoc(
+    String threadId,
+    String sessionId,
+  ) => _locationDoc(
+    threadId,
+    sessionId,
+  ).collection('refresh_requests').doc('latest');
 
   @override
   Future<void> startSession({
@@ -147,6 +156,72 @@ class FirestoreLiveLocationRepository implements LiveLocationRepository {
           }
           return sessions;
         });
+  }
+
+  @override
+  Future<void> requestRefresh({
+    required String sessionId,
+    required String threadId,
+    required String requesterUid,
+  }) async {
+    final ref = _locationDoc(threadId, sessionId);
+    final session = await ref.get();
+    final data = session.data();
+    if (!session.exists ||
+        data?['isActive'] != true ||
+        data?['expiresAt'] is! num ||
+        (data!['expiresAt'] as num).toInt() <=
+            DateTime.now().toUtc().millisecondsSinceEpoch) {
+      throw StateError('Cannot request a refresh for an inactive session.');
+    }
+    if (data['userId'] == requesterUid) {
+      throw StateError('The session owner should refresh their own location.');
+    }
+
+    await _refreshRequestDoc(threadId, sessionId).set({
+      'requestToken': const Uuid().v4(),
+      'requestedBy': requesterUid,
+      'requestedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+  }
+
+  @override
+  Stream<LiveLocationRefreshRequest?> watchRefreshRequest({
+    required String sessionId,
+    required String threadId,
+  }) {
+    return _refreshRequestDoc(threadId, sessionId).snapshots().map((snapshot) {
+      if (!snapshot.exists) return null;
+      final data = snapshot.data()!;
+      final requestToken = data['requestToken'];
+      final requestedBy = data['requestedBy'];
+      final requestedAt = data['requestedAt'];
+      final processedToken = data['processedToken'];
+      if (requestToken is! String ||
+          requestedBy is! String ||
+          requestedAt is! Timestamp ||
+          (processedToken != null && processedToken is! String)) {
+        throw const FormatException('Invalid live-location refresh request.');
+      }
+      return LiveLocationRefreshRequest(
+        requestToken: requestToken,
+        requestedBy: requestedBy,
+        requestedAt: requestedAt.toDate().toUtc(),
+        processedToken: processedToken as String?,
+      );
+    });
+  }
+
+  @override
+  Future<void> acknowledgeRefreshRequest({
+    required String sessionId,
+    required String threadId,
+    required String requestToken,
+  }) async {
+    await _refreshRequestDoc(
+      threadId,
+      sessionId,
+    ).update({'processedToken': requestToken});
   }
 
   Future<LiveLocationSession?> _parseSession(

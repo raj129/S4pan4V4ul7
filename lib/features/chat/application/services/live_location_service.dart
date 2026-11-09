@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math';
 
 import 'package:flutter/widgets.dart';
@@ -6,6 +7,7 @@ import 'package:uuid/uuid.dart';
 
 import '../../../../core/location/app_location.dart';
 import '../../../../core/location/location_source.dart';
+import '../../../vault/data/repositories/storage_string_kv.dart';
 
 import '../../domain/entities/live_location.dart';
 import '../../domain/repositories/live_location_repository.dart';
@@ -30,12 +32,16 @@ class LiveLocationService with WidgetsBindingObserver {
     DateTime Function()? clock,
     BatteryReader? battery,
     LowBatteryNotifier? onLowBattery,
+    StorageStringKv? store,
+    Duration batteryReadTimeout = const Duration(seconds: 5),
   }) : _repository = repository,
        _locationUpdates =
            locationUpdates ?? LiveLocationService._geolocatorUpdates,
        _clock = clock ?? DateTime.now,
        _battery = battery,
-       _onLowBattery = onLowBattery {
+       _onLowBattery = onLowBattery,
+       _store = store,
+       _batteryReadTimeout = batteryReadTimeout {
     WidgetsBinding.instance.addObserver(this);
   }
 
@@ -44,11 +50,14 @@ class LiveLocationService with WidgetsBindingObserver {
   final DateTime Function() _clock;
   final BatteryReader? _battery;
   final LowBatteryNotifier? _onLowBattery;
+  final StorageStringKv? _store;
+  final Duration _batteryReadTimeout;
   final _uuid = const Uuid();
 
   Timer? _sessionExpiryTimer;
   Timer? _locationRetryTimer;
   StreamSubscription<LiveLocationPoint>? _positionSubscription;
+  StreamSubscription<LiveLocationRefreshRequest?>? _refreshRequestSubscription;
   int _locationRetryAttempt = 0;
   int _locationStreamGeneration = 0;
   LiveLocationPoint? _lastPublishedPoint;
@@ -62,6 +71,7 @@ class LiveLocationService with WidgetsBindingObserver {
   bool _lowBatteryNotified = false;
   bool _writeInFlight = false;
   bool _disposed = false;
+  String? _lastHandledRefreshRequestToken;
 
   final _activeSessionController =
       StreamController<LiveLocationSession?>.broadcast();
@@ -81,6 +91,7 @@ class LiveLocationService with WidgetsBindingObserver {
   static const Duration maxHeartbeatInterval = Duration(seconds: 45);
   static const Duration maxSessionDuration = Duration(hours: 8);
   static const Duration writeTimeout = Duration(seconds: 20);
+  static const storageKey = 'chat.live_location_session.v1';
 
   /// Battery percentage at or below which the partner is told (when not charging).
   static const int lowBatteryThreshold = 15;
@@ -144,15 +155,186 @@ class LiveLocationService with WidgetsBindingObserver {
     _activeSessionId = sessionId;
     _activeStartedAt = now;
     _activeExpiresAt = expiresAt;
+    _lastHandledRefreshRequestToken = null;
     _lastPublishedPoint = firstPoint;
     _lastPublishedAt = now;
+    await _persistActive();
     _emitActiveSession(firstPoint);
 
     _sessionExpiryTimer = Timer(duration, () {
       unawaited(_stopAfterExpiry());
     });
     _subscribeToLocationUpdates();
+    _watchRefreshRequests();
     return sessionId;
+  }
+
+  /// Re-attaches to a session that was sharing before the app process was
+  /// stopped by Android, as long as it has not expired and was not stopped.
+  ///
+  /// Does nothing when a session is already active on this device.
+  Future<void> restore() async {
+    if (_disposed || isSharing) return;
+    final store = _store;
+    if (store == null) return;
+    try {
+      final saved = await _readPersisted(store);
+      if (saved == null || _disposed || isSharing) return;
+
+      final now = _clock().toUtc();
+      if (!now.isBefore(saved.expiresAt)) {
+        await _forgetPersisted();
+        return;
+      }
+
+      _activeThreadId = saved.threadId;
+      _activeUserId = saved.userId;
+      _activeRecipientUid = saved.recipientUid;
+      _activeSessionId = saved.sessionId;
+      _activeStartedAt = saved.startedAt;
+      _activeExpiresAt = saved.expiresAt;
+      _lastHandledRefreshRequestToken = null;
+      _lastPublishedPoint = null;
+      _lastPublishedAt = null;
+      _lowBatteryNotified = false;
+      _locationRetryAttempt = 0;
+
+      _sessionExpiryTimer = Timer(saved.expiresAt.difference(now), () {
+        unawaited(_stopAfterExpiry());
+      });
+      _subscribeToLocationUpdates();
+      _watchRefreshRequests();
+    } catch (error) {
+      _reportError(error);
+    }
+  }
+
+  Future<void> _persistActive() async {
+    final store = _store;
+    final threadId = _activeThreadId;
+    final userId = _activeUserId;
+    final sessionId = _activeSessionId;
+    final startedAt = _activeStartedAt;
+    final expiresAt = _activeExpiresAt;
+    if (store == null ||
+        threadId == null ||
+        userId == null ||
+        sessionId == null ||
+        startedAt == null ||
+        expiresAt == null) {
+      return;
+    }
+    try {
+      await store.write(
+        storageKey,
+        jsonEncode({
+          'sessionId': sessionId,
+          'threadId': threadId,
+          'userId': userId,
+          'recipientUid': _activeRecipientUid,
+          'startedAt': startedAt.millisecondsSinceEpoch,
+          'expiresAt': expiresAt.millisecondsSinceEpoch,
+        }),
+      );
+    } catch (error) {
+      _reportError(error);
+    }
+  }
+
+  Future<_PersistedSession?> _readPersisted(StorageStringKv store) async {
+    final raw = await store.read(storageKey);
+    if (raw == null) return null;
+    try {
+      final json = jsonDecode(raw) as Map<String, dynamic>;
+      return _PersistedSession(
+        sessionId: json['sessionId'] as String,
+        threadId: json['threadId'] as String,
+        userId: json['userId'] as String,
+        recipientUid: json['recipientUid'] as String?,
+        startedAt: DateTime.fromMillisecondsSinceEpoch(
+          json['startedAt'] as int,
+          isUtc: true,
+        ),
+        expiresAt: DateTime.fromMillisecondsSinceEpoch(
+          json['expiresAt'] as int,
+          isUtc: true,
+        ),
+      );
+    } catch (_) {
+      await _forgetPersisted();
+      return null;
+    }
+  }
+
+  Future<void> _forgetPersisted() async {
+    final store = _store;
+    if (store == null) return;
+    try {
+      await store.delete(storageKey);
+    } catch (error) {
+      _reportError(error);
+    }
+  }
+
+  void _watchRefreshRequests() {
+    final threadId = _activeThreadId;
+    final sessionId = _activeSessionId;
+    if (threadId == null || sessionId == null) return;
+    try {
+      _refreshRequestSubscription = _repository
+          .watchRefreshRequest(sessionId: sessionId, threadId: threadId)
+          .listen(
+            (request) {
+              if (request == null ||
+                  !request.isPending ||
+                  request.requestedBy == _activeUserId ||
+                  request.requestToken == _lastHandledRefreshRequestToken) {
+                return;
+              }
+              _lastHandledRefreshRequestToken = request.requestToken;
+              unawaited(_handleRefreshRequest(request.requestToken));
+            },
+            onError: (Object error, StackTrace stackTrace) {
+              _reportError(error);
+            },
+          );
+    } catch (error) {
+      _reportError(error);
+    }
+  }
+
+  Future<void> _handleRefreshRequest(String requestToken) async {
+    final threadId = _activeThreadId;
+    final sessionId = _activeSessionId;
+    if (threadId == null || sessionId == null || !isSharing) return;
+    try {
+      await refreshSharing();
+      await _repository.acknowledgeRefreshRequest(
+        sessionId: sessionId,
+        threadId: threadId,
+        requestToken: requestToken,
+      );
+    } catch (error) {
+      if (_lastHandledRefreshRequestToken == requestToken) {
+        _lastHandledRefreshRequestToken = null;
+      }
+      _reportError(error);
+    }
+  }
+
+  /// Restart location collection for the currently active session.
+  ///
+  /// This cannot resume a session after it has been stopped or expired.
+  Future<void> refreshSharing() async {
+    if (_disposed) throw StateError('LiveLocationService is disposed.');
+    final expiresAt = _activeExpiresAt;
+    if (!isSharing ||
+        expiresAt == null ||
+        !_clock().toUtc().isBefore(expiresAt)) {
+      throw StateError('There is no active live-location session to refresh.');
+    }
+    _locationRetryAttempt = 0;
+    await _restartLocationUpdates();
   }
 
   void _subscribeToLocationUpdates() {
@@ -326,7 +508,10 @@ class LiveLocationService with WidgetsBindingObserver {
   }) async {
     final reader = _battery;
     if (reader == null) return point;
-    final status = await reader.read();
+    final status = await reader.read().timeout(
+      _batteryReadTimeout,
+      onTimeout: () => null,
+    );
     if (status == null) return point;
 
     final low = !status.charging && status.level <= lowBatteryThreshold;
@@ -335,17 +520,18 @@ class LiveLocationService with WidgetsBindingObserver {
       _lowBatteryNotified = false;
     } else if (!_lowBatteryNotified && notify != null && recipientUid != null) {
       _lowBatteryNotified = true;
-      try {
-        await notify(
+      // Not awaited: a slow or offline chat write must not hold up location.
+      unawaited(
+        notify(
           threadId: threadId,
           senderId: userId,
           recipientUid: recipientUid,
           level: status.level,
-        );
-      } catch (error) {
-        _lowBatteryNotified = false;
-        _reportError(error);
-      }
+        ).catchError((Object error) {
+          _lowBatteryNotified = false;
+          _reportError(error);
+        }),
+      );
     }
     return point.withBattery(level: status.level, charging: status.charging);
   }
@@ -356,6 +542,10 @@ class LiveLocationService with WidgetsBindingObserver {
     _locationRetryTimer?.cancel();
     _locationRetryTimer = null;
     _locationStreamGeneration++;
+    await _forgetPersisted();
+    final refreshSubscription = _refreshRequestSubscription;
+    _refreshRequestSubscription = null;
+    await refreshSubscription?.cancel();
     final subscription = _positionSubscription;
     _positionSubscription = null;
     await subscription?.cancel();
@@ -381,7 +571,11 @@ class LiveLocationService with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state != AppLifecycleState.resumed || !isSharing || _disposed) return;
+    if (state != AppLifecycleState.resumed || _disposed) return;
+    if (!isSharing) {
+      unawaited(restore());
+      return;
+    }
     unawaited(_recoverLocationUpdates());
   }
 
@@ -493,7 +687,27 @@ class LiveLocationService with WidgetsBindingObserver {
     _locationStreamGeneration++;
     unawaited(_positionSubscription?.cancel());
     _positionSubscription = null;
+    unawaited(_refreshRequestSubscription?.cancel());
+    _refreshRequestSubscription = null;
     _activeSessionController.close();
     _errorController.close();
   }
+}
+
+class _PersistedSession {
+  const _PersistedSession({
+    required this.sessionId,
+    required this.threadId,
+    required this.userId,
+    required this.recipientUid,
+    required this.startedAt,
+    required this.expiresAt,
+  });
+
+  final String sessionId;
+  final String threadId;
+  final String userId;
+  final String? recipientUid;
+  final DateTime startedAt;
+  final DateTime expiresAt;
 }

@@ -1365,6 +1365,13 @@ class _ThreadScreenState extends State<ThreadScreen>
                   liveLocationRepository: widget.liveLocationRepository,
                   notesRepository: widget.notesRepository,
                   onStopLiveLocation: _stopLiveLocation,
+                  onRefreshLiveLocation: _refreshLiveLocation,
+                  onRequestLiveLocationRefresh: (threadId, sessionId) =>
+                      _requestLiveLocationRefresh(
+                        threadId,
+                        sessionId,
+                        requesterUid: myUid,
+                      ),
                   sendStatus: sendStatus,
                   onPauseUpload: () => cubit.pauseUpload(msg.messageId),
                   onResumeUpload: () => cubit.resumeUpload(msg.messageId),
@@ -3539,6 +3546,52 @@ class _ThreadScreenState extends State<ThreadScreen>
       sessionId: sessionId,
       threadId: threadId,
       userId: userId,
+    );
+  }
+
+  Future<void> _refreshLiveLocation(
+    String threadId,
+    String userId,
+    String sessionId,
+  ) async {
+    final service = widget.liveLocationService;
+    final myUid = context.read<ActiveThreadCubit>().myUid;
+    if (userId != myUid || service == null) {
+      throw StateError(
+        'This device is not sharing that live-location session.',
+      );
+    }
+    if (service.activeThreadId != threadId ||
+        service.activeSessionId != sessionId) {
+      // The app may have been stopped by Android while sharing; re-attach
+      // to the saved session if it is still running.
+      await service.restore();
+    }
+    if (service.activeThreadId != threadId ||
+        service.activeSessionId != sessionId) {
+      throw StateError(
+        'Sharing stopped when the app was closed. Tap Share location to start again.',
+      );
+    }
+    await service.refreshSharing();
+  }
+
+  Future<void> _requestLiveLocationRefresh(
+    String threadId,
+    String sessionId, {
+    required String requesterUid,
+  }) async {
+    if (threadId != widget.thread.threadId) {
+      throw StateError('Cannot request a refresh for a different chat.');
+    }
+    final repository = widget.liveLocationRepository;
+    if (repository == null) {
+      throw StateError('Live location is currently unavailable.');
+    }
+    await repository.requestRefresh(
+      sessionId: sessionId,
+      threadId: threadId,
+      requesterUid: requesterUid,
     );
   }
 

@@ -9,6 +9,7 @@ import 'package:photo_vault/features/chat/application/services/device_battery.da
 import 'package:photo_vault/features/chat/application/services/live_location_service.dart';
 import 'package:photo_vault/features/chat/domain/entities/live_location.dart';
 import 'package:photo_vault/features/chat/domain/repositories/live_location_repository.dart';
+import 'package:photo_vault/features/vault/data/repositories/storage_string_kv.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -27,7 +28,7 @@ void main() {
 
   setUp(() {
     repository = _FakeLiveLocationRepository();
-    positions = StreamController<LiveLocationPoint>();
+    positions = StreamController<LiveLocationPoint>.broadcast();
     now = DateTime.utc(2026, 10, 21, 12);
     service = LiveLocationService(
       repository: repository,
@@ -42,6 +43,7 @@ void main() {
     }
     service.dispose();
     unawaited(positions.close());
+    repository.dispose();
   });
 
   test(
@@ -91,6 +93,72 @@ void main() {
       expect(repository.updated, [movedPoint]);
     },
   );
+
+  test('refresh request restarts updates and acknowledges its token', () async {
+    final locationStreams = <StreamController<LiveLocationPoint>>[];
+    final refreshService = LiveLocationService(
+      repository: repository,
+      locationUpdates: () {
+        final stream = StreamController<LiveLocationPoint>.broadcast();
+        locationStreams.add(stream);
+        return stream.stream;
+      },
+      clock: () => now,
+    );
+    addTearDown(() async {
+      if (refreshService.isSharing) await refreshService.stopSharing();
+      refreshService.dispose();
+      for (final stream in locationStreams) {
+        await stream.close();
+      }
+    });
+
+    await refreshService.startSharing(
+      threadId: 'alice_bob',
+      userId: 'alice',
+      duration: const Duration(minutes: 15),
+      initialPoint: firstPoint,
+    );
+    expect(locationStreams, hasLength(1));
+
+    now = now.add(const Duration(seconds: 91));
+    repository.refreshRequests.add(
+      LiveLocationRefreshRequest(
+        requestToken: 'request-1',
+        requestedBy: 'bob',
+        requestedAt: now,
+      ),
+    );
+    await Future<void>.delayed(Duration.zero);
+    await Future<void>.delayed(Duration.zero);
+
+    expect(locationStreams, hasLength(2));
+    final refreshedPoint = LiveLocationPoint(
+      latitude: firstPoint.latitude,
+      longitude: firstPoint.longitude,
+      accuracy: firstPoint.accuracy,
+      timestamp: now,
+    );
+    locationStreams.last.add(refreshedPoint);
+    await Future<void>.delayed(Duration.zero);
+    await Future<void>.delayed(Duration.zero);
+    expect(repository.updated, [refreshedPoint]);
+    expect(repository.acknowledgedRefreshRequests, [
+      ('request-1', 'alice_bob', repository.started.last.sessionId),
+    ]);
+  });
+
+  test('manual refresh is rejected after sharing stops', () async {
+    await service.startSharing(
+      threadId: 'alice_bob',
+      userId: 'alice',
+      duration: const Duration(minutes: 15),
+      initialPoint: firstPoint,
+    );
+    await service.stopSharing();
+
+    await expectLater(service.refreshSharing(), throwsStateError);
+  });
 
   test('publishes a heartbeat while the device is stationary', () async {
     await service.startSharing(
@@ -285,6 +353,160 @@ void main() {
     expect(session.stoppedAt, stoppedAt);
   });
 
+  group('restore after the app process was stopped', () {
+    test('re-attaches to an unexpired session and publishes again', () async {
+      final kv = _MemoryKv();
+      final first = LiveLocationService(
+        repository: repository,
+        locationUpdates: () => positions.stream,
+        clock: () => now,
+        store: kv,
+      );
+      await first.startSharing(
+        threadId: 'alice_bob',
+        userId: 'alice',
+        duration: const Duration(minutes: 15),
+        initialPoint: firstPoint,
+        recipientUid: 'bob',
+      );
+      final sessionId = first.activeSessionId;
+      // Simulates the process being killed: no stopSharing, no dispose.
+
+      final restarted = LiveLocationService(
+        repository: repository,
+        locationUpdates: () => positions.stream,
+        clock: () => now,
+        store: kv,
+      );
+      addTearDown(() async {
+        if (restarted.isSharing) await restarted.stopSharing();
+        restarted.dispose();
+        first.dispose();
+      });
+
+      await restarted.restore();
+
+      expect(restarted.isSharing, isTrue);
+      expect(restarted.activeSessionId, sessionId);
+      expect(restarted.activeThreadId, 'alice_bob');
+
+      now = now.add(const Duration(seconds: 11));
+      final moved = LiveLocationPoint(
+        latitude: firstPoint.latitude + 0.0002,
+        longitude: firstPoint.longitude,
+        accuracy: 6,
+        timestamp: now,
+      );
+      await restarted.onNewLocation(moved);
+      expect(repository.updated, [moved]);
+      expect(repository.updated.last.latitude, moved.latitude);
+    });
+
+    test('does not restore an expired session and clears it', () async {
+      final kv = _MemoryKv();
+      final first = LiveLocationService(
+        repository: repository,
+        locationUpdates: () => positions.stream,
+        clock: () => now,
+        store: kv,
+      );
+      await first.startSharing(
+        threadId: 'alice_bob',
+        userId: 'alice',
+        duration: const Duration(minutes: 1),
+        initialPoint: firstPoint,
+      );
+
+      now = now.add(const Duration(minutes: 2));
+      final restarted = LiveLocationService(
+        repository: repository,
+        locationUpdates: () => positions.stream,
+        clock: () => now,
+        store: kv,
+      );
+      addTearDown(restarted.dispose);
+
+      await restarted.restore();
+
+      expect(restarted.isSharing, isFalse);
+      expect(await kv.read(LiveLocationService.storageKey), isNull);
+      first.dispose();
+    });
+
+    test('a user-stopped session is not restored', () async {
+      final kv = _MemoryKv();
+      final first = LiveLocationService(
+        repository: repository,
+        locationUpdates: () => positions.stream,
+        clock: () => now,
+        store: kv,
+      );
+      await first.startSharing(
+        threadId: 'alice_bob',
+        userId: 'alice',
+        duration: const Duration(minutes: 15),
+        initialPoint: firstPoint,
+      );
+      await first.stopSharing();
+
+      final restarted = LiveLocationService(
+        repository: repository,
+        locationUpdates: () => positions.stream,
+        clock: () => now,
+        store: kv,
+      );
+      addTearDown(restarted.dispose);
+
+      await restarted.restore();
+
+      expect(restarted.isSharing, isFalse);
+      first.dispose();
+    });
+
+    test('a hanging battery read does not stop location publishing', () async {
+      final battery = _HangingBattery();
+      final hanging = LiveLocationService(
+        repository: repository,
+        locationUpdates: () => positions.stream,
+        clock: () => now,
+        battery: battery,
+        batteryReadTimeout: const Duration(milliseconds: 20),
+      );
+      addTearDown(hanging.dispose);
+
+      await hanging.startSharing(
+        threadId: 'alice_bob',
+        userId: 'alice',
+        duration: const Duration(minutes: 15),
+        initialPoint: firstPoint,
+      );
+
+      battery.hang = true;
+      now = now.add(const Duration(seconds: 11));
+      await hanging.onNewLocation(
+        LiveLocationPoint(
+          latitude: firstPoint.latitude + 0.0002,
+          longitude: firstPoint.longitude,
+          accuracy: 6,
+          timestamp: now,
+        ),
+      );
+      expect(repository.updated, hasLength(1));
+
+      now = now.add(const Duration(seconds: 11));
+      await hanging.onNewLocation(
+        LiveLocationPoint(
+          latitude: firstPoint.latitude + 0.0004,
+          longitude: firstPoint.longitude,
+          accuracy: 6,
+          timestamp: now,
+        ),
+      );
+      expect(repository.updated, hasLength(2));
+      await hanging.stopSharing();
+    });
+  });
+
   group('battery', () {
     test('adds battery to published points and notifies partner once when low', () async {
       final notices = <(String, String, String, int)>[];
@@ -366,6 +588,29 @@ void main() {
   });
 }
 
+class _HangingBattery implements BatteryReader {
+  bool hang = false;
+
+  @override
+  Future<BatteryStatus?> read() {
+    if (hang) return Completer<BatteryStatus?>().future;
+    return Future.value(const BatteryStatus(level: 80, charging: true));
+  }
+}
+
+class _MemoryKv implements StorageStringKv {
+  final _values = <String, String>{};
+
+  @override
+  Future<void> write(String key, String value) async => _values[key] = value;
+
+  @override
+  Future<String?> read(String key) async => _values[key];
+
+  @override
+  Future<void> delete(String key) async => _values.remove(key);
+}
+
 class _FakeBattery implements BatteryReader {
   _FakeBattery(this.status);
 
@@ -397,6 +642,9 @@ class _CapturingLocationSource implements LocationSource {
 }
 
 class _FakeLiveLocationRepository implements LiveLocationRepository {
+  final refreshRequests =
+      StreamController<LiveLocationRefreshRequest?>.broadcast();
+  final acknowledgedRefreshRequests = <(String, String, String)>[];
   final started =
       <
         ({
@@ -457,5 +705,29 @@ class _FakeLiveLocationRepository implements LiveLocationRepository {
   }) => Stream.value(const []);
 
   @override
-  void dispose() {}
+  Future<void> requestRefresh({
+    required String sessionId,
+    required String threadId,
+    required String requesterUid,
+  }) async {}
+
+  @override
+  Stream<LiveLocationRefreshRequest?> watchRefreshRequest({
+    required String sessionId,
+    required String threadId,
+  }) => refreshRequests.stream;
+
+  @override
+  Future<void> acknowledgeRefreshRequest({
+    required String sessionId,
+    required String threadId,
+    required String requestToken,
+  }) async {
+    acknowledgedRefreshRequests.add((requestToken, threadId, sessionId));
+  }
+
+  @override
+  void dispose() {
+    unawaited(refreshRequests.close());
+  }
 }

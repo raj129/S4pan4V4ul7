@@ -38,6 +38,26 @@ abstract class LiveLocationRepository {
     required String threadId,
   });
 
+  /// Ask the owner of an active session to refresh their location.
+  Future<void> requestRefresh({
+    required String sessionId,
+    required String threadId,
+    required String requesterUid,
+  });
+
+  /// Watch the refresh request associated with an active session.
+  Stream<LiveLocationRefreshRequest?> watchRefreshRequest({
+    required String sessionId,
+    required String threadId,
+  });
+
+  /// Mark [requestToken] as handled by the session owner.
+  Future<void> acknowledgeRefreshRequest({
+    required String sessionId,
+    required String threadId,
+    required String requestToken,
+  });
+
   /// Release listeners and resources.
   void dispose();
 }
