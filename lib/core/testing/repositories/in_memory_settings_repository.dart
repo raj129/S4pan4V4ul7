@@ -55,8 +55,14 @@ class InMemorySettingsRepository implements SettingsRepository {
   bool _autoLockOnBackground = true;
   int _autoLockTimeoutSeconds =
       SettingsRepository.defaultAutoLockTimeoutSeconds;
+  String _incomingChatAlertTitle =
+      SettingsRepository.defaultIncomingChatAlertTitle;
   String _incomingChatAlertText =
       SettingsRepository.defaultIncomingChatAlertText;
+  String _backgroundLocationAlertTitle =
+      SettingsRepository.defaultBackgroundLocationAlertTitle;
+  String _backgroundLocationAlertText =
+      SettingsRepository.defaultBackgroundLocationAlertText;
   String? _themePaletteId;
   String? _themeMode;
 
@@ -92,11 +98,37 @@ class InMemorySettingsRepository implements SettingsRepository {
   }
 
   @override
+  Future<String> getIncomingChatAlertTitle() async => _incomingChatAlertTitle;
+
+  @override
+  Future<void> setIncomingChatAlertTitle(String title) async {
+    _incomingChatAlertTitle = title.trim();
+  }
+
+  @override
   Future<String> getIncomingChatAlertText() async => _incomingChatAlertText;
 
   @override
   Future<void> setIncomingChatAlertText(String text) async {
     _incomingChatAlertText = text.trim();
+  }
+
+  @override
+  Future<String> getBackgroundLocationAlertTitle() async =>
+      _backgroundLocationAlertTitle;
+
+  @override
+  Future<void> setBackgroundLocationAlertTitle(String title) async {
+    _backgroundLocationAlertTitle = title.trim();
+  }
+
+  @override
+  Future<String> getBackgroundLocationAlertText() async =>
+      _backgroundLocationAlertText;
+
+  @override
+  Future<void> setBackgroundLocationAlertText(String text) async {
+    _backgroundLocationAlertText = text.trim();
   }
 
   bool _showLastSeen = true;

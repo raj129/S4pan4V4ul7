@@ -3,7 +3,10 @@ import '../entities/user_mode.dart';
 abstract class SettingsRepository {
   static const defaultAutoLockTimeoutSeconds = 10;
   static const autoLockTimeoutOptionsSeconds = [5, 10, 30, 60];
+  static const defaultIncomingChatAlertTitle = '';
   static const defaultIncomingChatAlertText = '';
+  static const defaultBackgroundLocationAlertTitle = '';
+  static const defaultBackgroundLocationAlertText = 'Syncing in background';
 
   Future<UserMode?> getUserMode();
 
@@ -40,11 +43,28 @@ abstract class SettingsRepository {
 
   Future<void> setAutoLockTimeoutSeconds(int seconds) async {}
 
+  /// Title shown in incoming-chat notification alerts.
+  Future<String> getIncomingChatAlertTitle() async =>
+      defaultIncomingChatAlertTitle;
+
+  Future<void> setIncomingChatAlertTitle(String title) async {}
+
   /// Body text shown in incoming-chat notification alerts.
   Future<String> getIncomingChatAlertText() async =>
       defaultIncomingChatAlertText;
 
   Future<void> setIncomingChatAlertText(String text) async {}
+
+  /// Title and body shown while live location is shared in the background.
+  Future<String> getBackgroundLocationAlertTitle() async =>
+      defaultBackgroundLocationAlertTitle;
+
+  Future<void> setBackgroundLocationAlertTitle(String title) async {}
+
+  Future<String> getBackgroundLocationAlertText() async =>
+      defaultBackgroundLocationAlertText;
+
+  Future<void> setBackgroundLocationAlertText(String text) async {}
 
   /// Whether contacts may see when this user was last online. Reciprocal:
   /// when off, the user cannot see anyone else's last seen either.

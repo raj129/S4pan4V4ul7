@@ -13,6 +13,12 @@ class StorageKeys {
       'settings.auto_lock_timeout_seconds';
   static const String incomingChatAlertText =
       'settings.incoming_chat_alert_text';
+  static const String incomingChatAlertTitle =
+      'settings.incoming_chat_alert_title';
+  static const String backgroundLocationAlertTitle =
+      'settings.background_location_alert_title';
+  static const String backgroundLocationAlertText =
+      'settings.background_location_alert_text';
   static const String showLastSeen = 'settings.show_last_seen';
   static const String screenshotProtectionEnabled =
       'settings.screenshot_protection_enabled';

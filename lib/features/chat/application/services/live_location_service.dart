@@ -7,13 +7,14 @@ import 'package:uuid/uuid.dart';
 
 import '../../../../core/location/app_location.dart';
 import '../../../../core/location/location_source.dart';
+import 'package:photo_vault/features/vault/domain/repositories/settings_repository.dart';
 import '../../../vault/data/repositories/storage_string_kv.dart';
 
 import '../../domain/entities/live_location.dart';
 import '../../domain/repositories/live_location_repository.dart';
 import 'device_battery.dart';
 
-typedef LiveLocationUpdates = Stream<LiveLocationPoint> Function();
+typedef LiveLocationUpdates = FutureOr<Stream<LiveLocationPoint>> Function();
 
 /// Tells the partner the sharer's battery is low. Sent once per session.
 typedef LowBatteryNotifier =
@@ -29,6 +30,7 @@ class LiveLocationService with WidgetsBindingObserver {
   LiveLocationService({
     required LiveLocationRepository repository,
     LiveLocationUpdates? locationUpdates,
+    SettingsRepository? settingsRepository,
     DateTime Function()? clock,
     BatteryReader? battery,
     LowBatteryNotifier? onLowBattery,
@@ -36,7 +38,7 @@ class LiveLocationService with WidgetsBindingObserver {
     Duration batteryReadTimeout = const Duration(seconds: 5),
   }) : _repository = repository,
        _locationUpdates =
-           locationUpdates ?? LiveLocationService._geolocatorUpdates,
+           locationUpdates ?? (() => _geolocatorUpdates(settingsRepository)),
        _clock = clock ?? DateTime.now,
        _battery = battery,
        _onLowBattery = onLowBattery,
@@ -164,7 +166,7 @@ class LiveLocationService with WidgetsBindingObserver {
     _sessionExpiryTimer = Timer(duration, () {
       unawaited(_stopAfterExpiry());
     });
-    _subscribeToLocationUpdates();
+    await _subscribeToLocationUpdates();
     _watchRefreshRequests();
     return sessionId;
   }
@@ -202,7 +204,7 @@ class LiveLocationService with WidgetsBindingObserver {
       _sessionExpiryTimer = Timer(saved.expiresAt.difference(now), () {
         unawaited(_stopAfterExpiry());
       });
-      _subscribeToLocationUpdates();
+      await _subscribeToLocationUpdates();
       _watchRefreshRequests();
     } catch (error) {
       _reportError(error);
@@ -337,11 +339,13 @@ class LiveLocationService with WidgetsBindingObserver {
     await _restartLocationUpdates();
   }
 
-  void _subscribeToLocationUpdates() {
+  Future<void> _subscribeToLocationUpdates() async {
     if (_disposed || !isSharing || _positionSubscription != null) return;
     final generation = ++_locationStreamGeneration;
     try {
-      _positionSubscription = _locationUpdates().listen(
+      final updates = await _locationUpdates();
+      if (generation != _locationStreamGeneration || !isSharing) return;
+      _positionSubscription = updates.listen(
         (point) {
           if (generation != _locationStreamGeneration || !isSharing) return;
           _locationRetryTimer?.cancel();
@@ -419,7 +423,7 @@ class LiveLocationService with WidgetsBindingObserver {
       await _stopAfterExpiry();
       return;
     }
-    _subscribeToLocationUpdates();
+    await _subscribeToLocationUpdates();
   }
 
   Future<void> _handleLocation(LiveLocationPoint point) async {
@@ -633,7 +637,25 @@ class LiveLocationService with WidgetsBindingObserver {
     );
   }
 
-  static Stream<LiveLocationPoint> _geolocatorUpdates() {
+  static Future<Stream<LiveLocationPoint>> _geolocatorUpdates(
+    SettingsRepository? settingsRepository,
+  ) async {
+    var notificationTitle =
+        SettingsRepository.defaultBackgroundLocationAlertTitle;
+    var notificationText =
+        SettingsRepository.defaultBackgroundLocationAlertText;
+    if (settingsRepository != null) {
+      try {
+        notificationTitle = await settingsRepository
+            .getBackgroundLocationAlertTitle();
+        notificationText = await settingsRepository
+            .getBackgroundLocationAlertText();
+      } catch (error) {
+        debugPrint(
+          'Could not read background-location notification settings: $error',
+        );
+      }
+    }
     return AppLocation.instance
         .updates(
           LocationUpdateConfig(
@@ -642,6 +664,8 @@ class LiveLocationService with WidgetsBindingObserver {
             distanceFilterMeters: 0,
             interval: minWriteInterval,
             backgroundNotification: true,
+            notificationTitle: notificationTitle,
+            notificationText: notificationText,
           ),
         )
         .map(

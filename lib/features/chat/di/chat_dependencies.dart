@@ -201,6 +201,7 @@ class ChatDependencies {
   late LiveLocationService? liveLocationService = Platform.isAndroid
       ? LiveLocationService(
           repository: liveLocationRepository,
+          settingsRepository: _settingsRepository,
           battery: ChannelBatteryReader(),
           onLowBattery: _sendLowBatteryNotice,
           store: FlutterSecureStringKv(const FlutterSecureStorage()),

@@ -27,7 +27,6 @@ class SettingsScreen extends StatefulWidget {
     this.screenshotProtection = const AndroidScreenshotProtection(),
     this.chatBackupService,
     this.onShowLastSeenChanged,
-    this.onTestNotification,
     this.batteryOptimization = const AndroidBatteryOptimization(),
     super.key,
   });
@@ -48,7 +47,6 @@ class SettingsScreen extends StatefulWidget {
   /// Lazily resolves the chat backup service (it touches Firebase), or null
   /// when chat is unavailable (local mode).
   final ChatBackupService Function()? chatBackupService;
-  final Future<void> Function()? onTestNotification;
 
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
@@ -61,13 +59,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _showLastSeen = true;
   bool _screenshotProtectionEnabled = true;
   bool? _backgroundAllowed;
-  final _incomingChatAlertController = TextEditingController();
-  Timer? _incomingChatAlertSaveTimer;
-  Future<void> _incomingChatAlertSaveTail = Future<void>.value();
-  int _incomingChatAlertRevision = 0;
-  bool _savingIncomingChatAlert = false;
-  String? _incomingChatAlertSaveError;
-  bool _testingNotification = false;
 
   Future<void> _loadBackgroundStatus() async {
     final allowed = await widget.batteryOptimization.isExempt();
@@ -117,8 +108,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
         .isAutoLockOnBackgroundEnabled();
     final autoLockTimeoutSeconds = await widget.settingsRepository
         .getAutoLockTimeoutSeconds();
-    final incomingChatAlertText = await widget.settingsRepository
-        .getIncomingChatAlertText();
     final showLastSeen = await widget.settingsRepository
         .isShowLastSeenEnabled();
     final screenshotProtectionEnabled = await widget.settingsRepository
@@ -134,7 +123,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _autoLockTimeoutSeconds = autoLockTimeoutSeconds;
       _showLastSeen = showLastSeen;
       _screenshotProtectionEnabled = screenshotProtectionEnabled;
-      _incomingChatAlertController.text = incomingChatAlertText;
       _themePalette = AppThemePalette.fromId(paletteId);
       _themeMode = switch (themeMode) {
         'light' || 'dark' => themeMode!,
@@ -146,28 +134,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   @override
   void dispose() {
-    final pendingSave = _incomingChatAlertSaveTimer;
-    pendingSave?.cancel();
-    if (pendingSave != null) {
-      final operation = _enqueueIncomingChatAlertSave(
-        _incomingChatAlertController.text.trim(),
-      );
-      unawaited(
-        operation.then<void>(
-          (_) {},
-          onError: (Object error, StackTrace stack) {
-            FlutterError.reportError(
-              FlutterErrorDetails(
-                exception: error,
-                stack: stack,
-                library: 'notification settings persistence',
-              ),
-            );
-          },
-        ),
-      );
-    }
-    _incomingChatAlertController.dispose();
     super.dispose();
   }
 
@@ -186,80 +152,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
       return;
     }
     await widget.onSettingsChanged();
-  }
-
-  void _scheduleIncomingChatAlertSave() {
-    _incomingChatAlertSaveTimer?.cancel();
-    final revision = ++_incomingChatAlertRevision;
-    setState(() {
-      _savingIncomingChatAlert = true;
-      _incomingChatAlertSaveError = null;
-    });
-    _incomingChatAlertSaveTimer = Timer(const Duration(milliseconds: 400), () {
-      _incomingChatAlertSaveTimer = null;
-      unawaited(_saveIncomingChatAlertText(revision).then<void>((_) {}));
-    });
-  }
-
-  Future<void> _testIncomingChatNotification() async {
-    final testNotification = widget.onTestNotification;
-    if (testNotification == null || _testingNotification) return;
-    setState(() => _testingNotification = true);
-    try {
-      if (!await _saveIncomingChatAlertText()) return;
-      await testNotification();
-      if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('Test notification sent.')));
-    } catch (error) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Could not send test notification: $error')),
-      );
-    } finally {
-      if (mounted) setState(() => _testingNotification = false);
-    }
-  }
-
-  Future<bool> _saveIncomingChatAlertText([int? revision]) async {
-    _incomingChatAlertSaveTimer?.cancel();
-    _incomingChatAlertSaveTimer = null;
-    final saveRevision = revision ?? ++_incomingChatAlertRevision;
-    try {
-      await _enqueueIncomingChatAlertSave(
-        _incomingChatAlertController.text.trim(),
-      );
-      if (mounted && saveRevision == _incomingChatAlertRevision) {
-        setState(() {
-          _savingIncomingChatAlert = false;
-          _incomingChatAlertSaveError = null;
-        });
-      }
-      return true;
-    } catch (error) {
-      if (mounted && saveRevision == _incomingChatAlertRevision) {
-        setState(() {
-          _savingIncomingChatAlert = false;
-          _incomingChatAlertSaveError = 'Could not save automatically.';
-        });
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Could not save alert message: $error')),
-        );
-      }
-      return false;
-    }
-  }
-
-  Future<void> _enqueueIncomingChatAlertSave(String text) {
-    final operation = _incomingChatAlertSaveTail.then(
-      (_) => widget.settingsRepository.setIncomingChatAlertText(text),
-    );
-    _incomingChatAlertSaveTail = operation.then<void>(
-      (_) {},
-      onError: (Object _, StackTrace _) {},
-    );
-    return operation;
   }
 
   ChatBackupService? _chatBackup() {
@@ -596,64 +488,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
           const SectionHeader('Notifications'),
           SettingsCard(
             children: [
-              Padding(
-                padding: const EdgeInsets.all(AppSpacing.lg),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    TextField(
-                      key: const Key('incoming-chat-alert-text-field'),
-                      controller: _incomingChatAlertController,
-                      maxLines: 1,
-                      textInputAction: TextInputAction.done,
-                      decoration: InputDecoration(
-                        labelText: 'Notification message',
-                        hintText: 'Leave blank for no message',
-                        helperText: _savingIncomingChatAlert
-                            ? 'Saving…'
-                            : _incomingChatAlertSaveError ??
-                                  'Saved automatically',
-                        border: const OutlineInputBorder(),
-                        suffixIcon: IconButton(
-                          key: const Key('clear-incoming-chat-alert-button'),
-                          tooltip: 'Clear notification message',
-                          onPressed: () {
-                            _incomingChatAlertController.clear();
-                            _scheduleIncomingChatAlertSave();
-                          },
-                          icon: const Icon(Icons.clear_rounded),
-                        ),
-                      ),
-                      onChanged: (_) => _scheduleIncomingChatAlertSave(),
-                      onSubmitted: (_) => unawaited(
-                        _saveIncomingChatAlertText().then<void>((_) {}),
-                      ),
-                    ),
-                    const SizedBox(height: AppSpacing.sm),
-                    Align(
-                      alignment: Alignment.centerRight,
-                      child: OutlinedButton.icon(
-                        key: const Key(
-                          'test-incoming-chat-notification-button',
-                        ),
-                        onPressed:
-                            widget.onTestNotification == null ||
-                                _testingNotification
-                            ? null
-                            : () => unawaited(_testIncomingChatNotification()),
-                        icon: _testingNotification
-                            ? const SizedBox.square(
-                                dimension: 18,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                ),
-                              )
-                            : const Icon(Icons.notifications_active_outlined),
-                        label: const Text('Test notification'),
-                      ),
-                    ),
-                  ],
+              ListTile(
+                key: const Key('notification-settings-navigation-tile'),
+                leading: const Icon(Icons.notifications_active_outlined),
+                title: const Text('Notification settings'),
+                subtitle: const Text(
+                  'Customize headers and messages for all notifications.',
                 ),
+                trailing: const Icon(Icons.chevron_right_rounded),
+                onTap: () => unawaited(context.push('/settings/notifications')),
               ),
             ],
           ),

@@ -31,6 +31,7 @@ import '../../features/vault/presentation/screens/onboarding/vault_creation_scre
 import '../../features/vault/presentation/screens/onboarding/welcome_screen.dart';
 import '../../features/vault/presentation/screens/restore/restore_flow_screen.dart';
 import '../../features/vault/presentation/screens/settings/change_pin_screen.dart';
+import '../../features/vault/presentation/screens/settings/notification_settings_screen.dart';
 import '../../features/vault/presentation/screens/settings/settings_screen.dart';
 import '../../features/vault/presentation/screens/trash/trash_screen.dart';
 import '../../features/chat/presentation/screens/notes_screen.dart';
@@ -499,8 +500,6 @@ GoRoute _settingsRoute(
       pinValidator: deps.pinValidator,
       onSettingsChanged: onSettingsChanged,
       chatBackupService: () => deps.chatDependencies.backupService,
-      onTestNotification: () =>
-          deps.chatDependencies.notificationService.showTestNotification(),
       onShowLastSeenChanged: (show) async {
         try {
           await deps.chatDependencies.presenceService.setShareLastSeen(show);
@@ -511,6 +510,20 @@ GoRoute _settingsRoute(
       },
     ),
     routes: [
+      GoRoute(
+        path: 'notifications',
+        builder: (context, state) => NotificationSettingsScreen(
+          settingsRepository: deps.settingsRepository,
+          onTestNotification: () =>
+              deps.chatDependencies.notificationService.showTestNotification(),
+          onNotificationSettingsChanged: () async {
+            final locationService = deps.chatDependencies.liveLocationService;
+            if (locationService?.isSharing == true) {
+              await locationService!.refreshSharing();
+            }
+          },
+        ),
+      ),
       GoRoute(
         path: 'change-pin',
         builder: (context, state) => ChangePinScreen(

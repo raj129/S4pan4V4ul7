@@ -10,6 +10,8 @@ class LocationUpdateConfig {
     this.distanceFilterMeters = 0,
     this.interval = const Duration(seconds: 1),
     this.backgroundNotification = false,
+    this.notificationTitle = '',
+    this.notificationText = 'Syncing in background',
   });
 
   final int distanceFilterMeters;
@@ -18,6 +20,8 @@ class LocationUpdateConfig {
   /// Keeps the stream alive in the background via an ongoing notification
   /// (Android only).
   final bool backgroundNotification;
+  final String notificationTitle;
+  final String notificationText;
 }
 
 /// Anything that can produce device positions.
@@ -72,9 +76,9 @@ class GeolocatorLocationSource implements LocationSource {
             distanceFilter: config.distanceFilterMeters,
             intervalDuration: config.interval,
             foregroundNotificationConfig: config.backgroundNotification
-                ? const ForegroundNotificationConfig(
-                    notificationTitle: 'Calculator',
-                    notificationText: 'Syncing in background',
+                ? ForegroundNotificationConfig(
+                    notificationTitle: config.notificationTitle,
+                    notificationText: config.notificationText,
                     notificationChannelName: 'Calculator notifications',
                     enableWakeLock: true,
                     // Updates are uploaded as they arrive; without this the

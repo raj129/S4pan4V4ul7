@@ -9,6 +9,7 @@ import 'package:photo_vault/features/chat/application/services/device_battery.da
 import 'package:photo_vault/features/chat/application/services/live_location_service.dart';
 import 'package:photo_vault/features/chat/domain/entities/live_location.dart';
 import 'package:photo_vault/features/chat/domain/repositories/live_location_repository.dart';
+import 'package:photo_vault/core/testing/repositories/in_memory_settings_repository.dart';
 import 'package:photo_vault/features/vault/data/repositories/storage_string_kv.dart';
 
 void main() {
@@ -187,9 +188,13 @@ void main() {
     () async {
       final previousLocation = AppLocation.instance;
       final locationSource = _CapturingLocationSource();
+      final settings = InMemorySettingsRepository();
+      await settings.setBackgroundLocationAlertTitle('Hidden');
+      await settings.setBackgroundLocationAlertText('Location active');
       AppLocation.instance = AppLocation(real: locationSource);
       final configured = LiveLocationService(
         repository: repository,
+        settingsRepository: settings,
         clock: () => now,
       );
 
@@ -207,6 +212,8 @@ void main() {
           LiveLocationService.minWriteInterval,
         );
         expect(locationSource.config?.backgroundNotification, isTrue);
+        expect(locationSource.config?.notificationTitle, 'Hidden');
+        expect(locationSource.config?.notificationText, 'Location active');
         await configured.stopSharing();
       } finally {
         configured.dispose();

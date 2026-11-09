@@ -136,10 +136,46 @@ class PersistentSettingsRepository implements SettingsRepository {
   }
 
   @override
+  Future<String> getIncomingChatAlertTitle() async {
+    final raw = await _kv.read(StorageKeys.incomingChatAlertTitle);
+    return raw == null
+        ? SettingsRepository.defaultIncomingChatAlertTitle
+        : raw.trim();
+  }
+
+  @override
+  Future<void> setIncomingChatAlertTitle(String title) =>
+      _kv.write(StorageKeys.incomingChatAlertTitle, title.trim());
+
+  @override
   Future<void> setIncomingChatAlertText(String text) async {
     final value = text.trim();
     await _kv.write(StorageKeys.incomingChatAlertText, value);
   }
+
+  @override
+  Future<String> getBackgroundLocationAlertTitle() async {
+    final raw = await _kv.read(StorageKeys.backgroundLocationAlertTitle);
+    return raw == null
+        ? SettingsRepository.defaultBackgroundLocationAlertTitle
+        : raw.trim();
+  }
+
+  @override
+  Future<void> setBackgroundLocationAlertTitle(String title) =>
+      _kv.write(StorageKeys.backgroundLocationAlertTitle, title.trim());
+
+  @override
+  Future<String> getBackgroundLocationAlertText() async {
+    final raw = await _kv.read(StorageKeys.backgroundLocationAlertText);
+    return raw == null
+        ? SettingsRepository.defaultBackgroundLocationAlertText
+        : raw.trim();
+  }
+
+  @override
+  Future<void> setBackgroundLocationAlertText(String text) =>
+      _kv.write(StorageKeys.backgroundLocationAlertText, text.trim());
 
   @override
   Future<bool> isShowLastSeenEnabled() async {

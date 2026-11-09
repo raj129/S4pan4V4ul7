@@ -33,9 +33,16 @@ Future<void> handleChatPushInBackground(RemoteMessage message) async {
 
   if (message.data['notify'] != 'false') {
     final notifications = FlutterLocalNotificationsPlugin();
+    var alertTitle = SettingsRepository.defaultIncomingChatAlertTitle;
     var alertBody = SettingsRepository.defaultIncomingChatAlertText;
     try {
       const secureStorage = FlutterSecureStorage();
+      final configuredTitle = await secureStorage.read(
+        key: StorageKeys.incomingChatAlertTitle,
+      );
+      if (configuredTitle != null) {
+        alertTitle = configuredTitle.trim();
+      }
       final configured = await secureStorage.read(
         key: StorageKeys.incomingChatAlertText,
       );
@@ -43,7 +50,7 @@ Future<void> handleChatPushInBackground(RemoteMessage message) async {
         alertBody = configured.trim();
       }
     } catch (error) {
-      debugPrint('Could not read custom notification alert text: $error');
+      debugPrint('Could not read custom notification settings: $error');
     }
     await notifications.initialize(
       settings: const InitializationSettings(
@@ -52,7 +59,7 @@ Future<void> handleChatPushInBackground(RemoteMessage message) async {
     );
     await notifications.show(
       id: 0,
-      title: 'Calculator',
+      title: alertTitle,
       body: alertBody,
       notificationDetails: NotificationDetails(
         android: AndroidNotificationDetails(

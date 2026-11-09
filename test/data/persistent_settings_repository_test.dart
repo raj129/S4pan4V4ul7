@@ -39,16 +39,37 @@ void main() {
     final repository = PersistentSettingsRepository(kv);
 
     expect(await repository.getAutoLockTimeoutSeconds(), 10);
+    expect(await repository.getIncomingChatAlertTitle(), isEmpty);
     expect(await repository.getIncomingChatAlertText(), isEmpty);
+    expect(await repository.getBackgroundLocationAlertTitle(), isEmpty);
+    expect(
+      await repository.getBackgroundLocationAlertText(),
+      'Syncing in background',
+    );
 
     await repository.setAutoLockTimeoutSeconds(30);
+    await repository.setIncomingChatAlertTitle('  Private  ');
     await repository.setIncomingChatAlertText('  New message  ');
+    await repository.setBackgroundLocationAlertTitle('  Location  ');
+    await repository.setBackgroundLocationAlertText('  Sharing location  ');
 
     expect(await repository.getAutoLockTimeoutSeconds(), 30);
+    expect(await repository.getIncomingChatAlertTitle(), 'Private');
     expect(await repository.getIncomingChatAlertText(), 'New message');
+    expect(await repository.getBackgroundLocationAlertTitle(), 'Location');
+    expect(
+      await repository.getBackgroundLocationAlertText(),
+      'Sharing location',
+    );
 
+    await repository.setIncomingChatAlertTitle('');
     await repository.setIncomingChatAlertText('');
+    await repository.setBackgroundLocationAlertTitle('');
+    await repository.setBackgroundLocationAlertText('');
+    expect(await repository.getIncomingChatAlertTitle(), isEmpty);
     expect(await repository.getIncomingChatAlertText(), isEmpty);
+    expect(await repository.getBackgroundLocationAlertTitle(), isEmpty);
+    expect(await repository.getBackgroundLocationAlertText(), isEmpty);
   });
 
   test('migrates a prior minute-based timeout to one minute', () async {

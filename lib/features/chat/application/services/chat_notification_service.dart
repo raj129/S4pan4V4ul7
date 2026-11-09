@@ -166,13 +166,13 @@ class ChatNotificationService {
   }
 
   Future<void> _notify(ChatThread thread) async {
-    final title = 'Calculator';
+    final title = await _incomingChatAlertTitle();
     final body = await _incomingChatAlertText();
 
     if (_isForeground) {
       foregroundNotification.value = ForegroundChatNotification(
         threadId: thread.threadId,
-        title: 'New message',
+        title: title,
         body: body,
       );
       return;
@@ -198,22 +198,36 @@ class ChatNotificationService {
 
   Future<void> showTestNotification() async {
     await init();
+    final title = await _incomingChatAlertTitle();
     final body = await _incomingChatAlertText();
     final presentNotification = _presentNotification;
     if (presentNotification != null) {
       await presentNotification(
         threadId: 'test-notification',
-        title: 'Calculator',
+        title: title,
         body: body,
       );
       return;
     }
     await _plugin.show(
       id: _testNotificationId,
-      title: 'Calculator',
+      title: title,
       body: body,
       notificationDetails: _notificationDetails(),
     );
+  }
+
+  Future<String> _incomingChatAlertTitle() async {
+    final settingsRepository = _settingsRepository;
+    if (settingsRepository == null) {
+      return SettingsRepository.defaultIncomingChatAlertTitle;
+    }
+    try {
+      return (await settingsRepository.getIncomingChatAlertTitle()).trim();
+    } catch (error) {
+      debugPrint('Could not read custom notification alert title: $error');
+      return SettingsRepository.defaultIncomingChatAlertTitle;
+    }
   }
 
   Future<String> _incomingChatAlertText() async {

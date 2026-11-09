@@ -34,14 +34,14 @@ void main() {
     () async {
       final repository = _ThreadRepository();
       var now = DateTime.utc(2026);
-      final notifications = <({String threadId, String body})>[];
+      final notifications = <({String threadId, String title, String body})>[];
       final service = ChatNotificationService(
         threadRepository: repository,
         isAppForeground: () => false,
         clock: () => now,
         presentNotification:
             ({required threadId, required title, required body}) async {
-              notifications.add((threadId: threadId, body: body));
+              notifications.add((threadId: threadId, title: title, body: body));
             },
       );
 
@@ -53,12 +53,14 @@ void main() {
 
       expect(notifications, hasLength(1));
       expect(notifications.single.threadId, 'alice_bob');
+      expect(notifications.single.title, isEmpty);
       expect(notifications.single.body, isEmpty);
 
       now = now.add(const Duration(seconds: 31));
       repository.updates.add([_thread('alice_bob', 3)]);
       await Future<void>.delayed(Duration.zero);
       expect(notifications, hasLength(2));
+      expect(notifications.last.title, isEmpty);
       expect(notifications.last.body, isEmpty);
 
       await service.dispose();
@@ -69,15 +71,16 @@ void main() {
   test('uses the saved incoming-chat alert text', () async {
     final repository = _ThreadRepository();
     final settings = InMemorySettingsRepository();
+    await settings.setIncomingChatAlertTitle('Private');
     await settings.setIncomingChatAlertText('New message received');
-    final notifications = <String>[];
+    final notifications = <({String title, String body})>[];
     final service = ChatNotificationService(
       threadRepository: repository,
       settingsRepository: settings,
       isAppForeground: () => false,
       presentNotification:
           ({required threadId, required title, required body}) async {
-            notifications.add(body);
+            notifications.add((title: title, body: body));
           },
     );
 
@@ -86,7 +89,7 @@ void main() {
     repository.updates.add([_thread('alice_bob', 1)]);
     await Future<void>.delayed(Duration.zero);
 
-    expect(notifications, ['New message received']);
+    expect(notifications, [(title: 'Private', body: 'New message received')]);
 
     await service.dispose();
     await repository.updates.close();
@@ -96,14 +99,14 @@ void main() {
     final repository = _ThreadRepository();
     final settings = InMemorySettingsRepository();
     await settings.setIncomingChatAlertText('');
-    final notifications = <({String threadId, String body})>[];
+    final notifications = <({String threadId, String title, String body})>[];
     final service = ChatNotificationService(
       threadRepository: repository,
       settingsRepository: settings,
       isAppForeground: () => false,
       presentNotification:
           ({required threadId, required title, required body}) async {
-            notifications.add((threadId: threadId, body: body));
+            notifications.add((threadId: threadId, title: title, body: body));
           },
     );
 
@@ -114,8 +117,8 @@ void main() {
     await service.showTestNotification();
 
     expect(notifications, [
-      (threadId: 'alice_bob', body: ''),
-      (threadId: 'test-notification', body: ''),
+      (threadId: 'alice_bob', title: '', body: ''),
+      (threadId: 'test-notification', title: '', body: ''),
     ]);
 
     await service.dispose();
@@ -176,7 +179,7 @@ void main() {
 
     expect(service.foregroundNotification.value, isNotNull);
     expect(service.foregroundNotification.value!.threadId, 'alice_bob');
-    expect(service.foregroundNotification.value!.title, 'New message');
+    expect(service.foregroundNotification.value!.title, isEmpty);
     expect(service.isActiveThread('alice_bob'), isFalse);
 
     service.setChatSectionVisible(true);
