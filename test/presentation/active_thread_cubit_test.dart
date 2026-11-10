@@ -953,8 +953,23 @@ void main() {
         messages.failNextSend = StateError('offline');
         outbox.markFailedError = StateError('database is locked');
 
-        await expectLater(cubit.sendText('hello'), completes);
+        final previousDebugPrint = debugPrint;
+        final debugMessages = <String>[];
+        debugPrint = (message, {wrapWidth}) {
+          if (message != null) debugMessages.add(message);
+        };
+        try {
+          await expectLater(cubit.sendText('hello'), completes);
+        } finally {
+          debugPrint = previousDebugPrint;
+        }
 
+        final debugOutput = debugMessages.join('\n');
+        expect(
+          debugOutput,
+          contains('Could not persist failed outbox attempt'),
+        );
+        expect(debugOutput, contains('database is locked'));
         expect(outbox.items, hasLength(1));
         expect(
           (cubit.state as ActiveThreadLoaded).actionError,

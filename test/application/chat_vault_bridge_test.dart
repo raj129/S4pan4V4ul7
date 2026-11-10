@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:crypto/crypto.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
@@ -419,17 +420,31 @@ void main() {
     );
     await File(first.item.encryptedFilePath).writeAsString('{}');
     var cleaned = false;
-    await expectLater(
-      bridge.moveToVault(
-        bytes: document,
-        filename: 'document.pdf',
-        sourceId: 'alice/thread/second',
-        onMarkMoved: () async {},
-        onSourceCleanup: () async {
-          cleaned = true;
-        },
-      ),
-      throwsA(anything),
+    final previousDebugPrint = debugPrint;
+    final debugMessages = <String>[];
+    debugPrint = (message, {wrapWidth}) {
+      if (message != null) debugMessages.add(message);
+    };
+    try {
+      await expectLater(
+        bridge.moveToVault(
+          bytes: document,
+          filename: 'document.pdf',
+          sourceId: 'alice/thread/second',
+          onMarkMoved: () async {},
+          onSourceCleanup: () async {
+            cleaned = true;
+          },
+        ),
+        throwsA(anything),
+      );
+    } finally {
+      debugPrint = previousDebugPrint;
+    }
+
+    expect(
+      debugMessages.join('\n'),
+      contains('Error loading photo bytes'),
     );
     expect(cleaned, isFalse);
   });
