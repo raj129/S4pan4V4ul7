@@ -58,6 +58,26 @@ class _Messages implements MessageRepository {
   Completer<List<ChatMessage>>? nextOlderPage;
   int loadBeforeCalls = 0;
 
+  final deletedForUser = <({String threadId, String messageId, String uid})>[];
+  final deletedForEveryone = <({String threadId, String messageId})>[];
+
+  @override
+  Future<void> deleteMessageForUser({
+    required String threadId,
+    required String messageId,
+    required String uid,
+  }) async {
+    deletedForUser.add((threadId: threadId, messageId: messageId, uid: uid));
+  }
+
+  @override
+  Future<void> deleteMessageForEveryone({
+    required String threadId,
+    required String messageId,
+  }) async {
+    deletedForEveryone.add((threadId: threadId, messageId: messageId));
+  }
+
   @override
   Stream<List<ChatMessage>> watchMessages(String threadId, {int limit = 30}) =>
       live.stream;
@@ -780,6 +800,125 @@ void main() {
 
       await tester.binding.handlePopRoute();
       await tester.pump(const Duration(milliseconds: 400));
+      await cubit.close();
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
+  testWidgets(
+    'can select multiple messages and delete them',
+    (tester) async {
+      tester.view.physicalSize = const Size(1080, 2400);
+      tester.view.devicePixelRatio = 3.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      final messages = _Messages();
+      final unused = _Unused();
+      final cubit = ActiveThreadCubit(
+        messageRepository: messages,
+        threadRepository: _Threads(),
+        userRepository: unused,
+        typingRepository: _Typing(),
+        presenceRepository: _Presence(),
+        mediaRepository: unused,
+        messageCache: const NoopMessageCacheRepository(),
+        outbox: _Outbox(),
+        cryptoService: _Crypto(),
+        myUid: 'me',
+      );
+      final thread = ChatThread(
+        threadId: 't',
+        participantIds: const ['me', 'other'],
+        lastMessage: '',
+        createdAt: DateTime.utc(2024),
+        lastMessageAt: DateTime.utc(2024),
+        unreadCounts: const {},
+      );
+      final other = ChatUser(
+        uid: 'other',
+        email: 'other@example.com',
+        displayName: 'Other',
+        publicKey: '',
+        createdAt: DateTime.utc(2024),
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: BlocProvider.value(
+            value: cubit,
+            child: ThreadScreen(
+              thread: thread,
+              otherUser: other,
+              mediaLoader: ChatMediaLoader(
+                mediaRepository: unused,
+                cryptoService: _Crypto(),
+              ),
+              vaultBridge: unused,
+              onLock: () {},
+              chatDraftRepository: _Drafts(),
+              stickerPackFactory: (uid) =>
+                  LocalStickerPackRepository(userId: uid),
+            ),
+          ),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 50));
+      messages.live.add([
+        _msg('msg-1', 'First message', sender: 'me'),
+        _msg('msg-2', 'Second message', sender: 'me'),
+      ]);
+      await tester.pump(const Duration(milliseconds: 50));
+      await tester.pump(const Duration(milliseconds: 500));
+
+      expect(find.text('First message'), findsOneWidget);
+      expect(find.text('Second message'), findsOneWidget);
+
+      // Invoke select on first bubble
+      final bubble1 = tester.widget<MessageBubble>(
+        find.byKey(const ValueKey('bubble-msg-1')),
+      );
+      expect(bubble1.onSelect, isNotNull);
+      bubble1.onSelect!.call();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+
+      // Selection mode active
+      expect(find.text('1 selected'), findsOneWidget);
+      expect(find.byTooltip('Delete selected messages'), findsOneWidget);
+
+      // Select second bubble
+      final bubble2 = tester.widget<MessageBubble>(
+        find.byKey(const ValueKey('bubble-msg-2')),
+      );
+      expect(bubble2.onSelect, isNotNull);
+      bubble2.onSelect!.call();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(find.text('2 selected'), findsOneWidget);
+
+      // Tap delete button
+      await tester.tap(find.byTooltip('Delete selected messages'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 200));
+
+      expect(find.text('Delete 2 messages?'), findsOneWidget);
+      expect(find.text('Delete for me'), findsOneWidget);
+      expect(find.text('Delete for everyone'), findsOneWidget);
+
+      // Tap "Delete for everyone"
+      await tester.tap(find.text('Delete for everyone'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 200));
+
+      // Verify messages were deleted for everyone
+      expect(
+        messages.deletedForEveryone.map((e) => e.messageId),
+        unorderedEquals(['msg-1', 'msg-2']),
+      );
+      // Verify selection mode exited
+      expect(find.text('2 selected'), findsNothing);
+
       await cubit.close();
       await tester.pumpWidget(const SizedBox.shrink());
     },

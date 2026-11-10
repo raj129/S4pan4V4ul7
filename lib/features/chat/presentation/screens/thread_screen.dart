@@ -260,6 +260,26 @@ class _ThreadScreenState extends State<ThreadScreen>
   bool _renderedDetached = false;
   ModalRoute<void>? _observedRoute;
 
+  final Set<String> _selectedMessageIds = <String>{};
+  bool get _isSelectionMode => _selectedMessageIds.isNotEmpty;
+
+  void _toggleMessageSelection(String messageId) {
+    if (_searching) _stopSearch();
+    _inputFocus.unfocus();
+    setState(() {
+      if (_selectedMessageIds.contains(messageId)) {
+        _selectedMessageIds.remove(messageId);
+      } else {
+        _selectedMessageIds.add(messageId);
+      }
+    });
+  }
+
+  void _clearMessageSelection() {
+    if (_selectedMessageIds.isEmpty) return;
+    setState(() => _selectedMessageIds.clear());
+  }
+
   @override
   void initState() {
     super.initState();
@@ -898,47 +918,55 @@ class _ThreadScreenState extends State<ThreadScreen>
           },
         ),
       ],
-      child: Scaffold(
-        appBar: _buildAppBar(context),
-        body: Column(
-          children: [
-            Expanded(
-              child: ChatWallpaper(
-                child: Column(
-                  children: [
-                    Expanded(
-                      child: Stack(
-                        fit: StackFit.expand,
-                        children: [
-                          Positioned.fill(child: _buildMessageList()),
-                          Positioned(
-                            top: AppSpacing.sm,
-                            bottom: AppSpacing.sm,
-                            right: 0,
-                            width: 200,
-                            child: ChatScrollbar(
-                              position: _historyPosition,
-                              visible: _scrollbarVisible,
-                              dateAt: context
-                                  .read<ActiveThreadCubit>()
-                                  .dateAtFraction,
-                              onDragPreview: _jumpFromScrollbar,
-                              onJump: _jumpFromScrollbar,
+      child: PopScope(
+        canPop: !_isSelectionMode,
+        onPopInvokedWithResult: (didPop, _) {
+          if (!didPop && _isSelectionMode) {
+            _clearMessageSelection();
+          }
+        },
+        child: Scaffold(
+          appBar: _buildAppBar(context),
+          body: Column(
+            children: [
+              Expanded(
+                child: ChatWallpaper(
+                  child: Column(
+                    children: [
+                      Expanded(
+                        child: Stack(
+                          fit: StackFit.expand,
+                          children: [
+                            Positioned.fill(child: _buildMessageList()),
+                            Positioned(
+                              top: AppSpacing.sm,
+                              bottom: AppSpacing.sm,
+                              right: 0,
+                              width: 200,
+                              child: ChatScrollbar(
+                                position: _historyPosition,
+                                visible: _scrollbarVisible,
+                                dateAt: context
+                                    .read<ActiveThreadCubit>()
+                                    .dateAtFraction,
+                                onDragPreview: _jumpFromScrollbar,
+                                onJump: _jumpFromScrollbar,
+                              ),
                             ),
-                          ),
-                          _buildLoadingNewer(),
-                          _buildJumpToLatest(),
-                        ],
+                            _buildLoadingNewer(),
+                            _buildJumpToLatest(),
+                          ],
+                        ),
                       ),
-                    ),
-                    _buildTypingBanner(),
-                  ],
+                      _buildTypingBanner(),
+                    ],
+                  ),
                 ),
               ),
-            ),
-            _buildOfflineBanner(),
-            _buildComposerSurface(context),
-          ],
+              _buildOfflineBanner(),
+              if (!_isSelectionMode) _buildComposerSurface(context),
+            ],
+          ),
         ),
       ),
     );
@@ -987,6 +1015,29 @@ class _ThreadScreenState extends State<ThreadScreen>
   }
 
   PreferredSizeWidget _buildAppBar(BuildContext context) {
+    if (_isSelectionMode) {
+      final count = _selectedMessageIds.length;
+      return AppBar(
+        leading: IconButton(
+          icon: const Icon(Icons.close),
+          tooltip: 'Cancel selection',
+          onPressed: _clearMessageSelection,
+        ),
+        title: Text(
+          '$count selected',
+          style: Theme.of(context).textTheme.titleMedium?.copyWith(
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.delete_outline_rounded),
+            tooltip: 'Delete selected messages',
+            onPressed: () => _confirmDeleteSelectedMessages(context),
+          ),
+        ],
+      );
+    }
     if (_searching) {
       return AppBar(
         leading: IconButton(
@@ -1363,6 +1414,9 @@ class _ThreadScreenState extends State<ThreadScreen>
                   myUid: myUid,
                   otherUid: widget.otherUser.uid,
                   isOffline: state.isOffline,
+                  isSelectionMode: _isSelectionMode,
+                  isSelected: _selectedMessageIds.contains(msg.messageId),
+                  onSelect: () => _toggleMessageSelection(msg.messageId),
                   mediaLoader: widget.mediaLoader,
                   liveLocationRepository: widget.liveLocationRepository,
                   notesRepository: widget.notesRepository,
@@ -1767,6 +1821,79 @@ class _ThreadScreenState extends State<ThreadScreen>
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _inputFocus.requestFocus();
     });
+  }
+
+  Future<void> _confirmDeleteSelectedMessages(BuildContext context) async {
+    final cubit = this.context.read<ActiveThreadCubit>();
+    final state = cubit.state;
+    if (state is! ActiveThreadLoaded) return;
+    final selectedMsgs = state.visibleMessages
+        .where((m) => _selectedMessageIds.contains(m.messageId))
+        .toList();
+    if (selectedMsgs.isEmpty) return;
+
+    final allMine = selectedMsgs.every((m) => m.senderId == cubit.myUid);
+    final count = selectedMsgs.length;
+    final titleText = count == 1 ? 'Delete message?' : 'Delete $count messages?';
+
+    final choice = await showDialog<String>(
+      context: this.context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(titleText),
+        content: Text(
+          allMine
+              ? (count == 1
+                  ? 'Delete this message for yourself or for everyone in this chat?'
+                  : 'Delete these messages for yourself or for everyone in this chat?')
+              : (count == 1
+                  ? 'Remove this message from your copy of the chat? '
+                      'The other person will still see it.'
+                  : 'Remove these messages from your copy of the chat? '
+                      'The other person will still see them.'),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, null),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, 'forMe'),
+            child: const Text('Delete for me'),
+          ),
+          if (allMine)
+            FilledButton(
+              style: FilledButton.styleFrom(
+                backgroundColor: Theme.of(dialogContext).colorScheme.error,
+                foregroundColor: Theme.of(dialogContext).colorScheme.onError,
+              ),
+              onPressed: () => Navigator.pop(dialogContext, 'forEveryone'),
+              child: const Text('Delete for everyone'),
+            ),
+        ],
+      ),
+    );
+
+    if (choice == null || !mounted) return;
+
+    final messagesToDelete = List<ChatMessage>.from(selectedMsgs);
+    _clearMessageSelection();
+
+    try {
+      for (final msg in messagesToDelete) {
+        await _stopOwnLiveLocationBeforeDelete(msg, cubit);
+        if (choice == 'forEveryone') {
+          await cubit.deleteMessageForEveryone(msg);
+        } else {
+          await cubit.deleteMessageForMe(msg);
+        }
+      }
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(this.context).showSnackBar(
+          SnackBar(content: Text('Could not delete messages: $error')),
+        );
+      }
+    }
   }
 
   /// "Delete for me" only ever needs a lightweight confirmation since it is

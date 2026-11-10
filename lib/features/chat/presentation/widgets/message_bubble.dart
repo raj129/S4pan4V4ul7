@@ -50,6 +50,9 @@ class MessageBubble extends StatelessWidget {
     required this.otherUid,
     required this.mediaLoader,
     required this.onDeleteForMe,
+    this.isSelectionMode = false,
+    this.isSelected = false,
+    this.onSelect,
     this.isOffline = false,
     this.isFirstInGroup = true,
     this.isLastInGroup = true,
@@ -120,6 +123,15 @@ class MessageBubble extends StatelessWidget {
 
   /// Copy the decrypted text to the clipboard.
   final VoidCallback? onCopy;
+
+  /// Whether the chat is currently in message selection mode.
+  final bool isSelectionMode;
+
+  /// Whether this specific message is selected in selection mode.
+  final bool isSelected;
+
+  /// Invoked when selecting this message or toggling selection in selection mode.
+  final VoidCallback? onSelect;
 
   /// Force every reply swipe to use the same left-to-right gesture.
   final bool canReplyFromLeftToRight;
@@ -380,7 +392,7 @@ class MessageBubble extends StatelessWidget {
             children: [
               Dismissible(
                 key: ValueKey('swipe_${message.messageId}'),
-                direction: onReply == null || !canReplyFromLeftToRight
+                direction: isSelectionMode || onReply == null || !canReplyFromLeftToRight
                     ? DismissDirection.none
                     : DismissDirection.startToEnd,
                 dismissThresholds: const {DismissDirection.startToEnd: 0.25},
@@ -393,14 +405,46 @@ class MessageBubble extends StatelessWidget {
                 secondaryBackground: const SizedBox.shrink(),
                 child: GestureDetector(
                   behavior: HitTestBehavior.opaque,
-                  onLongPress: () => _showActionSheet(context),
-                  onDoubleTap: isMine ? onEdit : null,
-                  child: ConstrainedBox(
-                    constraints: BoxConstraints(
-                      maxWidth: MediaQuery.sizeOf(context).width * 0.78,
-                      minWidth: 0,
-                    ),
-                    child: bubble,
+                  onTap: isSelectionMode ? onSelect : null,
+                  onLongPress: isSelectionMode
+                      ? onSelect
+                      : () => _showActionSheet(context),
+                  onDoubleTap: (isMine && !isSelectionMode) ? onEdit : null,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      if (isSelectionMode && !isMine)
+                        Padding(
+                          padding: const EdgeInsets.only(right: AppSpacing.sm),
+                          child: Icon(
+                            isSelected
+                                ? Icons.check_circle_rounded
+                                : Icons.radio_button_unchecked_rounded,
+                            color: isSelected ? cs.primary : cs.outline,
+                            size: 22,
+                          ),
+                        ),
+                      ConstrainedBox(
+                        constraints: BoxConstraints(
+                          maxWidth: MediaQuery.sizeOf(context).width *
+                              (isSelectionMode ? 0.70 : 0.78),
+                          minWidth: 0,
+                        ),
+                        child: bubble,
+                      ),
+                      if (isSelectionMode && isMine)
+                        Padding(
+                          padding: const EdgeInsets.only(left: AppSpacing.sm),
+                          child: Icon(
+                            isSelected
+                                ? Icons.check_circle_rounded
+                                : Icons.radio_button_unchecked_rounded,
+                            color: isSelected ? cs.primary : cs.outline,
+                            size: 22,
+                          ),
+                        ),
+                    ],
                   ),
                 ),
               ),
@@ -556,6 +600,15 @@ class MessageBubble extends StatelessWidget {
                 onTap: () {
                   Navigator.pop(sheetContext);
                   onSaveAsSticker!();
+                },
+              ),
+            if (onSelect != null)
+              ListTile(
+                leading: const Icon(Icons.check_circle_outline_rounded),
+                title: const Text('Select'),
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  onSelect!();
                 },
               ),
             ListTile(

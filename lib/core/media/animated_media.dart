@@ -26,6 +26,13 @@ class MediaAnimationPreference {
     };
   }
 
+  @visibleForTesting
+  void resetForTesting() {
+    _load = null;
+    _hasExplicitMode = false;
+    mode.value = MediaAnimationMode.loop;
+  }
+
   Future<void> setMode(MediaAnimationMode next) async {
     final previous = mode.value;
     _hasExplicitMode = true;

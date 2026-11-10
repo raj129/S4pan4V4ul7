@@ -426,14 +426,35 @@ class _InlineMotionPhotoPreviewState extends State<InlineMotionPhotoPreview>
       return;
     }
     if (_channel == null) {
-      _pendingPause = !_pendingPause;
-      setState(() => _isPlaying = !_isPlaying);
+      _pendingPause = false;
+      _releasePlatformBytes();
+      setState(() {
+        _showStill = true;
+        _isPlaying = false;
+      });
       return;
     }
     final wasPlaying = _isPlaying;
+    if (wasPlaying) {
+      unawaited(_setRememberedMode(MediaAnimationMode.once));
+      try {
+        await _channel?.invokeMethod<void>('close');
+      } catch (error) {
+        debugPrint('Could not stop Motion Photo playback: $error');
+      }
+      _releasePlatformBytes();
+      _channel?.setMethodCallHandler(null);
+      _channel = null;
+      if (mounted) {
+        setState(() {
+          _showStill = true;
+          _isPlaying = false;
+        });
+      }
+      return;
+    }
     try {
       await _channel?.invokeMethod<void>('toggle');
-      if (wasPlaying) unawaited(_setRememberedMode(MediaAnimationMode.once));
     } on PlatformException catch (error) {
       debugPrint('Could not toggle Motion Photo playback: ${error.message}');
       _showPlaybackFallback();
