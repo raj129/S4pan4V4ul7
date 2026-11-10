@@ -314,6 +314,7 @@ class _FakePresenceRepository implements PresenceRepository {
 
 class _MemoryOutbox implements OutboxRepository {
   final Map<String, OutboxItem> items = {};
+  Object? markFailedError;
 
   @override
   Future<void> enqueue(OutboxItem item) async => items[item.messageId] = item;
@@ -330,6 +331,7 @@ class _MemoryOutbox implements OutboxRepository {
 
   @override
   Future<void> markFailed(String messageId, String error) async {
+    if (markFailedError case final failure?) throw failure;
     final item = items[messageId];
     if (item != null) {
       items[messageId] = item.copyWith(
@@ -943,6 +945,27 @@ void main() {
       expect(shown.status, MessageStatus.failed);
       expect(shown.localDecryptedText, 'hello');
     });
+
+    test(
+      'a failed outbox status write does not escape as an async error',
+      () async {
+        await open();
+        messages.failNextSend = StateError('offline');
+        outbox.markFailedError = StateError('database is locked');
+
+        await expectLater(cubit.sendText('hello'), completes);
+
+        expect(outbox.items, hasLength(1));
+        expect(
+          (cubit.state as ActiveThreadLoaded).actionError,
+          'Not sent — the local retry status could not be saved.',
+        );
+        expect(
+          (cubit.state as ActiveThreadLoaded).messages.single.status,
+          MessageStatus.failed,
+        );
+      },
+    );
 
     test('retry delivers a previously failed message', () async {
       await open();

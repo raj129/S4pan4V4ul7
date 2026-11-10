@@ -962,13 +962,26 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
         _emitMessages();
       }
     } catch (e) {
-      await outbox.markFailed(item.messageId, e.toString());
+      Object? persistenceError;
+      try {
+        await outbox.markFailed(item.messageId, e.toString());
+      } catch (writeError, stackTrace) {
+        persistenceError = writeError;
+        debugPrint(
+          'Could not persist failed outbox attempt for ${item.messageId}: '
+          '$writeError\n$stackTrace',
+        );
+      }
       _showPending(
         item.copyWith(attempts: item.attempts + 1),
         decryptedPreview,
       );
       if (item.threadId == _currentThreadId) {
-        _reportActionError('Not sent — will retry when you are back online.');
+        _reportActionError(
+          persistenceError == null
+              ? 'Not sent — will retry when you are back online.'
+              : 'Not sent — the local retry status could not be saved.',
+        );
       }
     } finally {
       _inFlightMessageIds.remove(item.messageId);
