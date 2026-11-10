@@ -108,7 +108,11 @@ class CreateVaultUseCase {
 
       for (final repo in _backupRepositories) {
         try {
-          await repo.backupVmk(vaultId: vaultId, payload: backupPayload);
+          await repo.backupVmk(
+            vaultId: vaultId,
+            payload: backupPayload,
+            interactive: true,
+          );
         } catch (e) {
           // Backup failure shouldn't necessarily block vault creation,
           // but we should probably log it or handle it based on UserMode.

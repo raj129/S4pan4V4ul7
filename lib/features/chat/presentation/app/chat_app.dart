@@ -60,8 +60,7 @@ class _ChatAppState extends State<ChatApp> with WidgetsBindingObserver {
     if (_sessionPrepared || _preparing) return;
     _preparing = true;
     try {
-      // One silent Drive authorization up front; every later Drive call then
-      // reuses the cached headers instead of authenticating again.
+      // Check for a saved Drive connection without requesting consent.
       await _deps.authRepository.warmUpDriveAuthorization();
       await _deps.backupService.prepareForSession();
     } catch (_) {

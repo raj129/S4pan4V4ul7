@@ -11,6 +11,10 @@ import { FieldPath, getFirestore } from "firebase-admin/firestore";
 import { getMessaging } from "firebase-admin/messaging";
 import { logger, setGlobalOptions } from "firebase-functions/v2";
 import { onDocumentCreated } from "firebase-functions/v2/firestore";
+import {
+  connectGoogleDrive,
+  getGoogleDriveAccessToken,
+} from "./google_drive_tokens";
 
 initializeApp();
 
@@ -145,3 +149,5 @@ export const onChatMessageCreated = onDocumentCreated(
     });
   },
 );
+
+export { connectGoogleDrive, getGoogleDriveAccessToken };

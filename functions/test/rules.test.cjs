@@ -152,6 +152,22 @@ test('Firestore denies writing another participant’s live location', async () 
   );
 });
 
+test('Firestore denies client access to Google Drive refresh tokens', async () => {
+  const ownerDb = testEnvironment.authenticatedContext('alice').firestore();
+  const tokenDocument = doc(ownerDb, 'googleDriveAuthTokens/alice');
+
+  await testEnvironment.withSecurityRulesDisabled(async (context) => {
+    await setDoc(doc(context.firestore(), 'googleDriveAuthTokens/alice'), {
+      ciphertext: 'encrypted',
+      iv: 'initialization-vector',
+      tag: 'authentication-tag',
+    });
+  });
+
+  await assertFails(getDoc(tokenDocument));
+  await assertFails(setDoc(tokenDocument, { ciphertext: 'forged' }));
+});
+
 test('Storage lets thread participants upload and read encrypted attachments', async () => {
   const participantStorage = testEnvironment.authenticatedContext('alice').storage();
   const attachment = ref(

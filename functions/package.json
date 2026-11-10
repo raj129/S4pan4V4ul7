@@ -11,6 +11,7 @@
     "build:watch": "tsc --watch",
     "lint": "tsc --noEmit",
     "test:rules": "node --test test/rules.test.cjs",
+    "test:drive-auth": "npm run build && node --test test/google_drive_token_crypto.test.cjs",
     "serve": "npm run build && firebase emulators:start --only functions,firestore",
     "deploy": "firebase deploy --only functions",
     "logs": "firebase functions:log"

@@ -350,6 +350,11 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // OAuth refresh tokens are encrypted and managed only by Cloud Functions.
+    match /googleDriveAuthTokens/{uid} {
+      allow read, write: if false;
+    }
+
     // Anything not matched above is denied.
     match /{document=**} {
       allow read, write: if false;

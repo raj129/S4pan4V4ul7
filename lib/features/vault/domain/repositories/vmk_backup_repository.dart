@@ -8,15 +8,19 @@ abstract class VmkBackupRepository {
   Future<void> backupVmk({
     required String vaultId,
     required Map<String, String> payload,
+    bool interactive = false,
   });
 
   /// Attempts to restore the wrapped VMK for the given [vaultId].
   /// Returns null if no backup is found.
-  Future<Map<String, String>?> restoreVmk(String vaultId);
+  Future<Map<String, String>?> restoreVmk(
+    String vaultId, {
+    bool interactive = false,
+  });
 
   /// Checks if a backup exists for the given [vaultId].
-  Future<bool> hasBackup(String vaultId);
+  Future<bool> hasBackup(String vaultId, {bool interactive = false});
 
   /// Lists all vault IDs that have a backup in this repository.
-  Future<List<String>> listVaultIds();
+  Future<List<String>> listVaultIds({bool interactive = false});
 }

@@ -26,8 +26,8 @@ abstract class AuthRepository {
   /// [interactive], the user may be prompted to grant missing scopes.
   Future<http.Client?> getAuthenticatedClient({bool interactive = false});
 
-  /// Authorises Google Drive ahead of time so later Drive calls reuse the
-  /// cached grant instead of authenticating again. Never throws.
+  /// Reuses an existing Google Drive authorization ahead of a Drive operation.
+  /// Non-interactive calls never request consent.
   Future<void> warmUpDriveAuthorization({bool interactive = false}) async {}
 }
 

@@ -33,10 +33,10 @@ class BackupRestoreFlowService implements RestoreFlowService {
 
     for (final repo in _backupRepositories) {
       try {
-        final ids = await repo.listVaultIds();
+        final ids = await repo.listVaultIds(interactive: true);
         if (ids.isNotEmpty) {
           foundVaultId = ids.first; // For now, just take the first one found
-          payload = await repo.restoreVmk(foundVaultId);
+          payload = await repo.restoreVmk(foundVaultId, interactive: true);
           if (payload != null) break;
         }
       } catch (_) {

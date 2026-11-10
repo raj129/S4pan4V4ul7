@@ -10,7 +10,7 @@ class GoogleDriveVmkRepository implements VmkBackupRepository {
   final AuthRepository _authRepository;
   static const String _fileName = 'vmk_backup.json';
 
-  Future<drive.DriveApi?> _getDriveApi({bool interactive = false}) async {
+  Future<drive.DriveApi?> _getDriveApi({required bool interactive}) async {
     final client = await _authRepository.getAuthenticatedClient(
       interactive: interactive,
     );
@@ -33,8 +33,9 @@ class GoogleDriveVmkRepository implements VmkBackupRepository {
   Future<void> backupVmk({
     required String vaultId,
     required Map<String, String> payload,
+    bool interactive = false,
   }) async {
-    final api = await _getDriveApi(interactive: true);
+    final api = await _getDriveApi(interactive: interactive);
     if (api == null) throw Exception('Not authenticated with Google');
 
     final existingFile = await _findBackupFile(api);
@@ -71,8 +72,11 @@ class GoogleDriveVmkRepository implements VmkBackupRepository {
   }
 
   @override
-  Future<Map<String, String>?> restoreVmk(String vaultId) async {
-    final api = await _getDriveApi(interactive: true);
+  Future<Map<String, String>?> restoreVmk(
+    String vaultId, {
+    bool interactive = false,
+  }) async {
+    final api = await _getDriveApi(interactive: interactive);
     if (api == null) return null;
 
     final existingFile = await _findBackupFile(api);
@@ -95,8 +99,8 @@ class GoogleDriveVmkRepository implements VmkBackupRepository {
   }
 
   @override
-  Future<bool> hasBackup(String vaultId) async {
-    final api = await _getDriveApi(interactive: true);
+  Future<bool> hasBackup(String vaultId, {bool interactive = false}) async {
+    final api = await _getDriveApi(interactive: interactive);
     if (api == null) return false;
 
     final existingFile = await _findBackupFile(api);
@@ -117,8 +121,8 @@ class GoogleDriveVmkRepository implements VmkBackupRepository {
   }
 
   @override
-  Future<List<String>> listVaultIds() async {
-    final api = await _getDriveApi(interactive: true);
+  Future<List<String>> listVaultIds({bool interactive = false}) async {
+    final api = await _getDriveApi(interactive: interactive);
     if (api == null) return [];
 
     final existingFile = await _findBackupFile(api);

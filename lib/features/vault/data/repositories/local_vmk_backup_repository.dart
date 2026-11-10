@@ -23,6 +23,7 @@ class LocalVmkBackupRepository implements VmkBackupRepository {
   Future<void> backupVmk({
     required String vaultId,
     required Map<String, String> payload,
+    bool interactive = false,
   }) async {
     final path = await _getBackupPath();
     final file = File(path);
@@ -42,7 +43,10 @@ class LocalVmkBackupRepository implements VmkBackupRepository {
   }
 
   @override
-  Future<Map<String, String>?> restoreVmk(String vaultId) async {
+  Future<Map<String, String>?> restoreVmk(
+    String vaultId, {
+    bool interactive = false,
+  }) async {
     final path = await _getBackupPath();
     final file = File(path);
     if (!await file.exists()) return null;
@@ -61,7 +65,7 @@ class LocalVmkBackupRepository implements VmkBackupRepository {
   }
 
   @override
-  Future<bool> hasBackup(String vaultId) async {
+  Future<bool> hasBackup(String vaultId, {bool interactive = false}) async {
     final path = await _getBackupPath();
     final file = File(path);
     if (!await file.exists()) return false;
@@ -76,7 +80,7 @@ class LocalVmkBackupRepository implements VmkBackupRepository {
   }
 
   @override
-  Future<List<String>> listVaultIds() async {
+  Future<List<String>> listVaultIds({bool interactive = false}) async {
     final path = await _getBackupPath();
     final file = File(path);
     if (!await file.exists()) return [];

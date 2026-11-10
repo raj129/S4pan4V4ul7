@@ -113,14 +113,20 @@ class _NoopVmkBackupRepository implements VmkBackupRepository {
   Future<void> backupVmk({
     required String vaultId,
     required Map<String, String> payload,
+    bool interactive = false,
   }) async {}
 
   @override
-  Future<bool> hasBackup(String vaultId) async => false;
+  Future<bool> hasBackup(String vaultId, {bool interactive = false}) async =>
+      false;
 
   @override
-  Future<List<String>> listVaultIds() async => const [];
+  Future<List<String>> listVaultIds({bool interactive = false}) async =>
+      const [];
 
   @override
-  Future<Map<String, String>?> restoreVmk(String vaultId) async => null;
+  Future<Map<String, String>?> restoreVmk(
+    String vaultId, {
+    bool interactive = false,
+  }) async => null;
 }

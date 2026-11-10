@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:photo_vault/core/data/repositories/firebase_auth_repository.dart';
@@ -28,6 +29,9 @@ class _FakeUser implements User {
 }
 
 void main() {
+  setUp(FirebaseAuthRepository.clearDriveAuthorizationCacheForTesting);
+  tearDown(FirebaseAuthRepository.clearDriveAuthorizationCacheForTesting);
+
   group('FirebaseAuthRepository.isSignedIn', () {
     test('waits for Firebase to restore the persisted user', () async {
       final events = StreamController<User?>.broadcast();
@@ -56,5 +60,71 @@ void main() {
 
       expect(await repository.isSignedIn(), isFalse);
     });
+  });
+
+  group('FirebaseAuthRepository Drive authorization', () {
+    test(
+      'startup warm-up checks the backend without requesting consent',
+      () async {
+        final calls = <String>[];
+        var requestedServerAuthCode = false;
+        final repository = FirebaseAuthRepository(
+          firebaseAuth: _FakeFirebaseAuth(Stream<User?>.value(null)),
+          driveTokenFunctionInvoker: (name, {data}) async {
+            calls.add(name);
+            throw FirebaseFunctionsException(
+              code: 'failed-precondition',
+              message: 'Google Drive has not been connected.',
+            );
+          },
+          driveServerAuthCodeProvider: () async {
+            requestedServerAuthCode = true;
+            return 'authorization-code';
+          },
+        );
+
+        await repository.warmUpDriveAuthorization();
+
+        expect(calls, ['getGoogleDriveAccessToken']);
+        expect(requestedServerAuthCode, isFalse);
+      },
+    );
+
+    test(
+      'first explicit Drive use connects once and later calls reuse the token',
+      () async {
+        final calls = <String>[];
+        var requestedServerAuthCode = false;
+        final repository = FirebaseAuthRepository(
+          firebaseAuth: _FakeFirebaseAuth(Stream<User?>.value(null)),
+          driveTokenFunctionInvoker: (name, {data}) async {
+            calls.add(name);
+            if (name == 'getGoogleDriveAccessToken') {
+              throw FirebaseFunctionsException(
+                code: 'failed-precondition',
+                message: 'Google Drive has not been connected.',
+              );
+            }
+            expect(name, 'connectGoogleDrive');
+            expect(data, {'serverAuthCode': 'authorization-code'});
+            return {'accessToken': 'short-lived-token', 'expiresIn': 3600};
+          },
+          driveServerAuthCodeProvider: () async {
+            requestedServerAuthCode = true;
+            return 'authorization-code';
+          },
+        );
+
+        final firstClient = await repository.getAuthenticatedClient(
+          interactive: true,
+        );
+        final laterClient = await repository.getAuthenticatedClient();
+
+        expect(firstClient, isNotNull);
+        expect(laterClient, isNotNull);
+        expect(calls, ['getGoogleDriveAccessToken', 'connectGoogleDrive']);
+        expect(requestedServerAuthCode, isTrue);
+      },
+    );
   });
 }
