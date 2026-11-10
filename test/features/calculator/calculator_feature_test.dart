@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:photo_vault/core/presentation/theme/app_theme.dart';
 import 'package:photo_vault/features/calculator/presentation/calculator_feature.dart';
 import 'package:photo_vault/features/calculator/presentation/theme/calculator_theme.dart';
+import 'package:photo_vault/features/calculator/presentation/widgets/calc_button.dart';
 import 'package:photo_vault/features/calculator/presentation/widgets/display_panel.dart';
 import 'package:photo_vault/features/calculator/presentation/widgets/keypad_layouts.dart';
 
@@ -72,6 +73,47 @@ void main() {
     expect(digit.color, CalculatorTheme.keyBackground);
     expect(operator.color, CalculatorTheme.accent);
     expect(find.byType(FilledButton), findsNothing);
+  });
+
+  testWidgets('pointer-up after removal does not update disposed button', (
+    tester,
+  ) async {
+    var showButton = true;
+    var pressEndCount = 0;
+    late StateSetter setParentState;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: StatefulBuilder(
+          builder: (context, setState) {
+            setParentState = setState;
+            return Scaffold(
+              body: showButton
+                  ? Center(
+                      child: CalcButton(
+                        label: '1',
+                        onTap: () {},
+                        onPressEnd: () => pressEndCount++,
+                      ),
+                    )
+                  : const SizedBox.shrink(),
+            );
+          },
+        ),
+      ),
+    );
+
+    final gesture = await tester.startGesture(
+      tester.getCenter(find.byType(CalcButton)),
+    );
+    setParentState(() => showButton = false);
+    await tester.pump();
+
+    await gesture.up();
+    await tester.pump();
+
+    expect(tester.takeException(), isNull);
+    expect(pressEndCount, 1);
   });
 
   testWidgets('AC clears the display', (tester) async {

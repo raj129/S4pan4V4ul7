@@ -40,7 +40,7 @@ class _CalcButtonState extends State<CalcButton> {
   bool _pressed = false;
 
   void _setPressed(bool pressed) {
-    if (_pressed == pressed) return;
+    if (!mounted || _pressed == pressed) return;
     setState(() => _pressed = pressed);
   }
 
