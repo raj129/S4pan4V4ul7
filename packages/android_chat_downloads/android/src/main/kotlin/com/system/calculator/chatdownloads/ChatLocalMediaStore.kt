@@ -300,11 +300,19 @@ internal class ChatLocalMediaStore private constructor(context: Context) : SQLit
 
     companion object {
         private val monitor = Any()
+
+        // Crash recovery only matters at process start. Running it per call
+        // decrypted every journal row through the Keystore each time, which
+        // made each local read take seconds once a chat held many attachments.
+        private var recovered = false
         fun <T> locked(context: Context, action: (ChatLocalMediaStore) -> T): T = synchronized(monitor) {
             RandomAccessFile(File(context.noBackupFilesDir, "chat_local_media.lock"), "rw").use { lock ->
                 lock.channel.lock().use {
                     ChatLocalMediaStore(context).use { store ->
-                        store.recover()
+                        if (!recovered) {
+                            store.recover()
+                            recovered = true
+                        }
                         action(store)
                     }
                 }

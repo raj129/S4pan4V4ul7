@@ -10,8 +10,10 @@ import './media_send_status.dart';
 class AndroidChatUploads {
   AndroidChatUploads({
     MethodChannel channel = const MethodChannel('photo_vault/chat_uploads'),
+    this.queuedWakeAfter = const Duration(seconds: 8),
   }) : _channel = channel;
 
+  final Duration queuedWakeAfter;
   final MethodChannel _channel;
   final _changes = StreamController<List<AndroidUploadJob>>.broadcast();
   Stream<List<AndroidUploadJob>> get changes => _changes.stream;
@@ -61,6 +63,7 @@ class AndroidChatUploads {
           .toList();
       _changes.add(_jobs);
       _lastReadFailure = null;
+      _watchQueue();
     } on PlatformException catch (error, stack) {
       _readError(uid, error, stack);
     } on MissingPluginException catch (error, stack) {
@@ -70,6 +73,36 @@ class AndroidChatUploads {
     } finally {
       _refreshing = false;
     }
+  }
+
+  /// Self-heal: queued work with nothing transferring means the native drain
+  /// exited without seeing it, so re-wake the native queue.
+  DateTime? _idleQueuedSince;
+  DateTime? _lastWake;
+  void _watchQueue() {
+    final queued = _jobs.any(
+      (j) => j.status.lifecycle == MediaUploadLifecycle.queued,
+    );
+    final active = _jobs.any(
+      (j) => j.status.lifecycle == MediaUploadLifecycle.uploading,
+    );
+    final uid = _uid;
+    if (!queued || active || uid == null) {
+      _idleQueuedSince = null;
+      return;
+    }
+    final now = DateTime.now();
+    _idleQueuedSince ??= now;
+    if (now.difference(_idleQueuedSince!) < queuedWakeAfter) return;
+    if (_lastWake != null && now.difference(_lastWake!) < queuedWakeAfter) {
+      return;
+    }
+    _lastWake = now;
+    unawaited(
+      _command('wake').catchError((Object error, StackTrace stack) {
+        if (_uid == uid && !_changes.isClosed) _changes.addError(error, stack);
+      }),
+    );
   }
 
   void _readError(String? uid, Object error, StackTrace stack) {

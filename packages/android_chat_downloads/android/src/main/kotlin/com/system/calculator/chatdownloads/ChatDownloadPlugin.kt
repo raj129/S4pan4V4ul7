@@ -79,6 +79,9 @@ class ChatDownloadPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
                                     }
                                 }
                                 if (job == null) {
+                                    // Cancelled jobs hold no data; don't let them fill the cap.
+                                    store.all().filter { it.getString("state") == "cancelled" }
+                                        .forEach { store.remove(it.getString("id")) }
                                     require(store.all().size < 128) { "Download queue full" }
                                     store.put(
                                         JSONObject().put("id", id).put("uid", uid)
@@ -88,6 +91,18 @@ class ChatDownloadPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
                                             .put("updatedAt", System.currentTimeMillis()).apply {
                                                 if (senderId != null) put("senderId", senderId)
                                             })
+                                } else if (job.getString("state") in setOf("cancelled", "failed")) {
+                                    // A dead job would otherwise fail every future request for this file.
+                                    job.put("state", "queued").put("revision", job.optInt("revision") + 1)
+                                        .put("attempts", 0).put("error", "").put("eligibleAt", 0L)
+                                        .put("requestedAt", System.currentTimeMillis())
+                                        .put("updatedAt", System.currentTimeMillis())
+                                    job.remove("acknowledgedAt")
+                                    store.put(job)
+                                } else if (ChatDownloadPolicy.runnable(job.getString("state"))) {
+                                    // Re-requested (e.g. scrolled back into view): serve it first.
+                                    job.put("requestedAt", System.currentTimeMillis())
+                                    store.put(job)
                                 }
                                 null
                             }

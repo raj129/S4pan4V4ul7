@@ -52,7 +52,11 @@ object ChatUploadRuntime {
                         return false
                     }
                     var retry = false
-                    for (record in store.all()) {
+                    // Re-scan after each pass: jobs enqueued mid-drain must not be stranded.
+                    var progressed = true
+                    while (progressed) {
+                    progressed = false
+                    for (record in locked { store.all() }) {
                         if (stopped()) return false
                         val id = record.getString("messageId")
                         val state = record.getString("state")
@@ -60,13 +64,14 @@ object ChatUploadRuntime {
                             !ChatUploadPolicy.runnable(state)) continue
                         if (record.optLong("eligibleAt") > System.currentTimeMillis()) { retry = true; continue }
                         val revision = locked {
-                            val job = store.get(id)!!
+                            val job = store.get(id) ?: return@locked null
                             if (!ChatUploadPolicy.runnable(job.getString("state")) ||
                                 FirebaseAuth.getInstance().currentUser?.uid != uid) return@locked null
                             job.put("state", "uploading").put("error", "").put("delivering", false)
                             store.put(job)
                             job.optInt("revision")
                         } ?: continue
+                        progressed = true
                         try {
                             if (record.optBoolean("hasThumb")) upload(context, store, id, uid, revision, true, stopped, progress)
                             upload(context, store, id, uid, revision, false, stopped, progress)
@@ -118,6 +123,7 @@ object ChatUploadRuntime {
                                 running[id]?.let { if (it.isComplete || it.isPaused) running.remove(id) }
                             }
                         }
+                    }
                     }
                     return !retry
                 }

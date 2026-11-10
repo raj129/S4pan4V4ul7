@@ -13,12 +13,14 @@ class AndroidChatDownloads extends ChangeNotifier {
     MethodChannel channel = const MethodChannel('photo_vault/chat_downloads'),
     this.pollInterval = const Duration(milliseconds: 500),
     this.stallTimeout = const Duration(minutes: 2),
+    this.queuedWakeAfter = const Duration(seconds: 15),
   }) : _channel = channel;
 
   final String? Function() currentUid;
   final MethodChannel _channel;
   final Duration pollInterval;
   final Duration stallTimeout;
+  final Duration queuedWakeAfter;
   final Map<String, AndroidDownloadJob> _jobs = {};
   final Map<String, _DownloadAcquisition> _acquisitions = {};
   Timer? _timer;
@@ -42,18 +44,13 @@ class AndroidChatDownloads extends ChangeNotifier {
   }
 
   Future<void> _refresh() async {
-    if (_disposed || _refreshing) {
-      debugPrint('ChatMediaDebug refresh-skipped disposed=$_disposed refreshing=$_refreshing');
-      return;
-    }
+    if (_disposed || _refreshing) return;
     final uid = currentUid();
     if (uid == null || uid.isEmpty) return;
     final generation = _generation;
     _refreshing = true;
     try {
-      debugPrint('ChatMediaDebug list-call');
       final values = await _channel.invokeListMethod<Object?>('list');
-      debugPrint('ChatMediaDebug list-ok count=${values?.length}');
       _check(uid, generation);
       final next = <String, AndroidDownloadJob>{};
       for (final value in values ?? const []) {
@@ -89,7 +86,6 @@ class AndroidChatDownloads extends ChangeNotifier {
     required String storagePath,
     String? senderId,
   }) async {
-    debugPrint('ChatMediaDebug step acquire-enter path=$storagePath');
     _check(uid);
     if (senderId == uid) {
       throw const ChatDownloadFailed(
@@ -108,7 +104,6 @@ class AndroidChatDownloads extends ChangeNotifier {
     Uint8List? source;
     try {
       source = await acquisition.future;
-      debugPrint('ChatMediaDebug acquire-result len=${source.length}');
       _check(uid, generation);
       return Uint8List.fromList(source);
     } finally {
@@ -133,28 +128,21 @@ class AndroidChatDownloads extends ChangeNotifier {
     int generation,
     String? senderId,
   ) async {
-    try {
-      await _channel.invokeMethod<void>('enqueue', {
-        'uid': uid,
-        'threadId': thread,
-        'storagePath': path,
-        'senderId': ?senderId,
-      });
-      debugPrint('ChatMediaDebug enqueue ok path=$path');
-    } catch (error) {
-      debugPrint('ChatMediaDebug enqueue failed path=$path error=$error');
-      rethrow;
-    }
+    await _channel.invokeMethod<void>('enqueue', {
+      'uid': uid,
+      'threadId': thread,
+      'storagePath': path,
+      'senderId': ?senderId,
+    });
     _check(uid, generation);
     _timer ??= Timer.periodic(pollInterval, (_) => unawaited(_refresh()));
     var lastProgress = -1;
     var observed = false;
     var stalledSince = DateTime.now();
+    var queuedSince = DateTime.now();
     while (true) {
       _check(uid, generation);
-      debugPrint('ChatMediaDebug poll-start path=$path');
       await _refresh();
-      debugPrint('ChatMediaDebug poll-after-refresh path=$path job=${_jobs[_key(uid, path)]?.state}');
       _check(uid, generation);
       if (_readError case final Object error) throw error;
       final current = _jobs[_key(uid, path)];
@@ -193,6 +181,17 @@ class AndroidChatDownloads extends ChangeNotifier {
           throw ChatDownloadFailed(
             current.error ?? 'Attachment download failed.',
           );
+        }
+        // Self-heal a job the native drain never claimed: re-kick it.
+        if (current.state != MediaUploadLifecycle.queued) {
+          queuedSince = DateTime.now();
+        } else if (DateTime.now().difference(queuedSince) > queuedWakeAfter) {
+          queuedSince = DateTime.now();
+          try {
+            await _channel.invokeMethod<void>('wake', {'uid': uid});
+          } on PlatformException {
+            // The next poll reports a real failure if the journal is gone.
+          }
         }
         // A paused/offline queue has no whole-file deadline. Only a running
         // transfer with no byte movement is considered stalled.
@@ -234,6 +233,7 @@ class AndroidChatDownloads extends ChangeNotifier {
   Future<void> command(String path, String action) async {
     final uid = currentUid();
     if (uid == null || uid.isEmpty) throw const ChatDownloadCancelled();
+    if (kDebugMode) debugPrint('ChatMediaDebug command $action path=$path');
     if (!const {
       'pause',
       'resume',

@@ -40,6 +40,12 @@ class _AnimatedMediaImageState extends State<AnimatedMediaImage> {
   void initState() {
     super.initState();
     MediaAnimationPreference.instance.mode.addListener(_onModeChanged);
+    // A tile built after the preference loaded gets no change event, so it
+    // must decode itself or it stays blank.
+    if (MediaAnimationPreference.instance.mode.value ==
+        MediaAnimationMode.once) {
+      unawaited(_decode());
+    }
     unawaited(_loadAnimationPreference());
   }
 

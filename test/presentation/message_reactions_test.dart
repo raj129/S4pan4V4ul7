@@ -31,6 +31,7 @@ class _TestMediaLoader extends ChatMediaLoader {
     required String threadId,
     required String storagePath,
     String? senderId,
+    ChatMediaLoadToken? token,
   }) async => Uint8List.fromList([0]);
 }
 

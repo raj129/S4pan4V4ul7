@@ -213,7 +213,10 @@ class _ChatAppState extends State<ChatApp> with WidgetsBindingObserver {
               } catch (_) {
                 // Firebase unavailable (tests); local notifications still work.
               }
-            } else {
+            } else if (authState is ChatAuthUnauthenticated ||
+                authState is ChatAuthError) {
+              // Loading/Initial are transient: tearing down here would cancel
+              // every visible attachment each time the session is re-checked.
               _deps.uploads?.stop();
               _deps.mediaLoader.setAccount('');
               _deps.notificationService.stop();

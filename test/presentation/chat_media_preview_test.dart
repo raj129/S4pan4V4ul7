@@ -39,6 +39,7 @@ class _Loader extends ChatMediaLoader {
     required String threadId,
     required String storagePath,
     String? senderId,
+    ChatMediaLoadToken? token,
   }) {
     calls++;
     senders.add(senderId);

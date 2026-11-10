@@ -383,7 +383,7 @@ class ChatCryptoService {
     required Uint8List encryptedBytes,
   }) async {
     final key = await _loadThreadKey(threadId);
-    if (Platform.isAndroid && encryptedBytes.length >= 512 * 1024) {
+    if (Platform.isAndroid && encryptedBytes.length >= 64 * 1024) {
       return decryptChatMediaInWorker(encryptedBytes, key);
     }
     final plain = await _aesGcm.decrypt(

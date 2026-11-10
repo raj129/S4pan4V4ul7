@@ -6,6 +6,8 @@ import 'package:flutter/services.dart';
 import 'package:mime/mime.dart';
 
 import '../../application/media/chat_media_loader.dart';
+import '../../application/media/android_chat_downloads.dart'
+    show ChatDownloadCancelled;
 import '../../application/media/android_chat_local_media.dart';
 import '../../application/media/android_chat_secure_media_service.dart';
 import '../../domain/entities/chat_message.dart';
@@ -78,8 +80,11 @@ class _ChatMediaPreviewState extends State<ChatMediaPreview> {
   Object? _error;
   int _generation = 0;
   int _attempt = 0;
+  int _cancelledRetries = 0;
+  ChatMediaLoadToken? _token;
 
   static const _maxAutoRetries = 3;
+  static const _maxCancelledRetries = 20;
 
   Timer? _retryTimer;
 
@@ -112,7 +117,6 @@ class _ChatMediaPreviewState extends State<ChatMediaPreview> {
   }
 
   void _onLoaderChanged() {
-    debugPrint('ChatMediaDebug loader-notify id=${widget.message.messageId} hasBytes=${_bytes != null}');
     if (!mounted || _bytes != null) return;
     final ref = widget.message.previewRef;
     final bytes = ref == null ? null : widget.loader.cached(ref);
@@ -130,9 +134,7 @@ class _ChatMediaPreviewState extends State<ChatMediaPreview> {
   void dispose() {
     widget.loader.removeListener(_onLoaderChanged);
     _retryTimer?.cancel();
-    if (_loading) {
-      debugPrint('ChatMediaDebug dispose-while-loading id=${widget.message.messageId}');
-    }
+    _token?.cancel();
     _generation++;
     _releaseBytes();
     super.dispose();
@@ -166,16 +168,13 @@ class _ChatMediaPreviewState extends State<ChatMediaPreview> {
   /// While uploading there is no object to fetch; show a placeholder instead.
   void _start() {
     final generation = ++_generation;
+    _token?.cancel();
+    _token = null;
     _loading = false;
     _failed = false;
     _error = null;
     final message = widget.message;
     final ref = message.previewRef;
-    debugPrint(
-      'ChatMediaDebug start id=${message.messageId} type=${message.mediaType} '
-      'previewRef=${ref == null ? 'null' : 'set'} mediaRef=${message.mediaRef == null ? 'null' : 'set'} '
-      'sending=${widget.sendStatus != null}',
-    );
     if (ref == null) return;
     if (_bytes != null) return;
     final cached = widget.loader.cached(ref);
@@ -197,24 +196,43 @@ class _ChatMediaPreviewState extends State<ChatMediaPreview> {
   Future<void> _load(ChatMessage message, String ref, int generation) async {
     try {
       final bytes = await _loadBounded(message, ref);
-      debugPrint('ChatMediaDebug tile-got len=${bytes.length} path=$ref');
       if (!mounted || generation != _generation || _bytes != null) {
         bytes.fillRange(0, bytes.length, 0);
         return;
       }
+      _cancelledRetries = 0;
       setState(() {
         _bytes = bytes;
         _loading = false;
         _failed = bytes.isEmpty;
       });
     } catch (error) {
-      debugPrint('ChatMediaDebug load error=${error.runtimeType} $error');
+      if (kDebugMode) {
+        debugPrint(
+          'ChatMedia tile id=${message.messageId} error=${error.runtimeType} $error',
+        );
+      }
       if (!mounted || generation != _generation || _bytes != null) return;
-      if (error is ChatMediaLoadCancelled) {
-        // Cancelled by a cache reset, not a failure: re-request quietly.
-        setState(() => _loading = false);
+      if (error is ChatMediaLoadCancelled || error is ChatDownloadCancelled) {
+        // A cache reset, not a failure: keep the spinner up through the gap
+        // so the tile never flashes an idle placeholder, then re-request.
+        if (_cancelledRetries >= _maxCancelledRetries) {
+          setState(() {
+            _loading = false;
+            _failed = true;
+            _error = error;
+          });
+          return;
+        }
+        final delay = Duration(
+          milliseconds: (300 * (1 << _cancelledRetries.clamp(0, 4))).clamp(
+            300,
+            3000,
+          ),
+        );
+        _cancelledRetries++;
         _retryTimer?.cancel();
-        _retryTimer = Timer(const Duration(milliseconds: 300), _retryNow);
+        _retryTimer = Timer(delay, _retryNow);
         return;
       }
       setState(() {
@@ -228,11 +246,12 @@ class _ChatMediaPreviewState extends State<ChatMediaPreview> {
   /// Waits for the loader without a wall-clock limit. Queued downloads can
   /// wait behind others; the native stall check fails genuinely stuck jobs.
   Future<Uint8List> _loadBounded(ChatMessage message, String ref) {
-    debugPrint('ChatMediaDebug tile-request path=$ref');
+    final token = _token = ChatMediaLoadToken();
     return widget.loader.load(
       threadId: message.threadId,
       storagePath: ref,
       senderId: message.senderId,
+      token: token,
     );
   }
 
@@ -328,7 +347,6 @@ class _ChatMediaPreviewState extends State<ChatMediaPreview> {
   }
 
   Widget _buildImage(double width, double height) {
-    debugPrint('ChatMediaDebug render id=${widget.message.messageId} bytes=${_bytes?.length} loading=$_loading failed=$_failed');
     // Still uploading: no object exists yet, so show a neutral tile that the
     // progress overlay sits on.
     if (_bytes == null && !_loading && !_failed) {

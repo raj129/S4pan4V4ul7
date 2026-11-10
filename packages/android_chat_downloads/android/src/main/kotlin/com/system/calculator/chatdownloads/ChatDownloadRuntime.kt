@@ -14,15 +14,21 @@ import java.io.IOException
 import java.io.RandomAccessFile
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import javax.net.ssl.HttpsURLConnection
 
 internal object ChatDownloadRuntime {
+    private const val PARALLELISM = 3
     private val gate = Any()
+    private val wakeups = AtomicInteger()
     private val foreground = Executors.newSingleThreadExecutor()
     fun <T> locked(action: () -> T): T = synchronized(gate) { action() }
     fun kick(context: Context) {
+        wakeups.incrementAndGet()
         foreground.execute {
             try {
                 drain(context)
@@ -42,7 +48,16 @@ internal object ChatDownloadRuntime {
         return job
     }
 
+    /** Re-runs while a wake-up arrived mid-drain, so no enqueued job is stranded. */
     fun drain(context: Context, stopping: () -> Boolean = { false }): Boolean {
+        while (true) {
+            val seen = wakeups.get()
+            val finished = drainOnce(context, stopping)
+            if (wakeups.get() == seen || stopping()) return finished
+        }
+    }
+
+    private fun drainOnce(context: Context, stopping: () -> Boolean): Boolean {
         if (FirebaseApp.getApps(context).isEmpty()) FirebaseApp.initializeApp(context)
         val uid = FirebaseAuth.getInstance().currentUser?.uid ?: return true
         val network = context.getSystemService(ConnectivityManager::class.java)
@@ -60,24 +75,66 @@ internal object ChatDownloadRuntime {
                 if (lock == null) return false
                 lock.use {
                     locked { store.reconcile() }
-                    var retry = false
-                    for (record in locked { store.all() }) {
-                        if (stopping() || System.nanoTime() >= deadline) return false
-                        if (record.getString("uid") != uid || !ChatDownloadPolicy.runnable(record.getString("state"))) continue
-                        if (record.optLong("eligibleAt") > System.currentTimeMillis()) {
-                            retry = true; continue
-                        }
-                        val id = record.getString("id")
-                        val revision = locked {
-                            val job = store.get(id) ?: return@locked null
-                            if (!ChatDownloadPolicy.runnable(job.getString("state"))) return@locked null
-                            job.put("state", "uploading")
-                            store.put(job)
-                            job.optInt("revision")
-                        } ?: continue
-                        try {
+                    val retryNeeded = AtomicBoolean(false)
+                    val cutShort = AtomicBoolean(false)
+                    val active = ConcurrentHashMap.newKeySet<String>()
+                    val workers = (1..PARALLELISM).map { index ->
+                        Thread({
+                            try {
+                                worker(store, uid, deadline, stopping, active, retryNeeded, cutShort)
+                            } catch (error: Exception) {
+                                android.util.Log.e("ChatDownloads", "Download worker failed: ${error.javaClass.simpleName}")
+                                retryNeeded.set(true)
+                            }
+                        }, "chat-download-$index").apply { start() }
+                    }
+                    workers.forEach { it.join() }
+                    if (cutShort.get()) return false
+                    return !retryNeeded.get()
+                }
+            }
+        }
+    }
+
+    /** Claims the most recently requested runnable job until none is left. */
+    private fun worker(
+        store: ChatDownloadStore, uid: String, deadline: Long,
+        stopping: () -> Boolean, active: MutableSet<String>,
+        retryNeeded: AtomicBoolean, cutShort: AtomicBoolean
+    ) {
+        val yielded = HashSet<String>()
+        while (true) {
+            if (stopping() || System.nanoTime() >= deadline) {
+                cutShort.set(true); return
+            }
+            if (FirebaseAuth.getInstance().currentUser?.uid != uid) return
+            var waiting = false
+            val claimed = locked {
+                val now = System.currentTimeMillis()
+                val runnable = store.all().filter {
+                    it.getString("uid") == uid && ChatDownloadPolicy.runnable(it.getString("state")) &&
+                            it.getString("id") !in active && it.getString("id") !in yielded
+                }
+                waiting = runnable.any { it.optLong("eligibleAt") > now }
+                val pick = runnable.filter { it.optLong("eligibleAt") <= now }
+                    .maxByOrNull { maxOf(it.optLong("requestedAt"), it.optLong("createdAt")) }
+                    ?: return@locked null
+                val id = pick.getString("id")
+                if (!active.add(id)) return@locked null
+                pick.put("state", "uploading")
+                store.put(pick)
+                id to pick.optInt("revision")
+            }
+            if (claimed == null) {
+                if (waiting) retryNeeded.set(true)
+                return
+            }
+            val (id, revision) = claimed
+            var retry = false
+            try {
                             transfer(store, id, uid, revision) { stopping() || System.nanoTime() >= deadline }
                         } catch (_: Yield) {
+                            yielded.add(id)
                             locked {
                                 val job = store.get(id)
                                 if (job != null && job.optInt("revision") == revision &&
@@ -132,11 +189,10 @@ internal object ChatDownloadRuntime {
                                 store.put(job)
                                 if (!terminal) retry = true
                             }
+                        } finally {
+                            active.remove(id)
                         }
-                    }
-                    return !retry
-                }
-            }
+            if (retry) retryNeeded.set(true)
         }
     }
 
@@ -299,18 +355,22 @@ internal object ChatDownloadRuntime {
                     var lastFlush = System.nanoTime()
                     try {
                         connection.inputStream.use { input ->
+                            var lastCheck = 0L
                             while (received < expected) {
                                 if (stopping()) throw Yield()
-                                locked { check(store, id, uid, revision) }
+                                // A journal read decrypts a Keystore-sealed row; throttle it
+                                // so chunk writes don't starve the channel handlers.
+                                val tick = System.nanoTime()
+                                if (tick - lastCheck >= 250_000_000L) {
+                                    locked { check(store, id, uid, revision) }
+                                    lastCheck = tick
+                                }
                                 val count =
                                     input.read(buffer, 0, minOf(buffer.size.toLong(), expected - received).toInt())
                                 if (count < 0) throw IOException("Attachment download was truncated")
                                 if (count == 0) continue
                                 // Serialize the file mutation with cancel/delete.
-                                locked {
-                                    check(store, id, uid, revision)
-                                    output.write(buffer, 0, count)
-                                }
+                                locked { output.write(buffer, 0, count) }
                                 received += count
                                 val position = start + received
                                 if (position - durableAt >= 256 * 1024 || System.nanoTime() - lastFlush >= 500_000_000) {
@@ -345,10 +405,15 @@ internal object ChatDownloadRuntime {
         val md5 = java.security.MessageDigest.getInstance("MD5")
         store.blob(id).inputStream().use { input ->
             val buffer = ByteArray(64 * 1024)
+            var lastHashCheck = 0L
             try {
-                while (true) {
-                    if (stopping()) throw Yield()
-                    locked { check(store, id, uid, revision) }
+                    while (true) {
+                        if (stopping()) throw Yield()
+                        val tick = System.nanoTime()
+                        if (tick - lastHashCheck >= 250_000_000L) {
+                            locked { check(store, id, uid, revision) }
+                            lastHashCheck = tick
+                        }
                     val count = input.read(buffer)
                     if (count < 0) break
                     sha.update(buffer, 0, count)

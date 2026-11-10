@@ -90,6 +90,19 @@ void main() {
     },
   );
 
+  test('re-wakes native uploads when queued work stalls with nothing active', () async {
+    uploads.dispose();
+    uploads = AndroidChatUploads(
+      channel: channel,
+      queuedWakeAfter: const Duration(milliseconds: 1),
+    );
+    uploads.start('alice');
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    calls.clear();
+    await Future<void>.delayed(const Duration(milliseconds: 2300));
+    expect(calls.where((c) => c.method == 'wake'), isNotEmpty);
+  });
+
   test('malformed journal records fail explicitly without inventing jobs', () {
     for (final change in [
       {'state': 'unknown'},

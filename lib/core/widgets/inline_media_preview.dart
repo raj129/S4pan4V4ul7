@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 
 import '../media/animated_media.dart';
@@ -88,7 +89,15 @@ class _InlineHdrImagePreviewState extends State<InlineHdrImagePreview>
 
   void _onHdrPreferenceChanged() {
     if (!mounted) return;
-    setState(() {});
+    setState(() {
+      // A fresh native view per toggle re-applies (or restores) colour mode.
+      _releasePlatformBytes();
+      _channel?.setMethodCallHandler(null);
+      _channel = null;
+      _useFallback = false;
+      if (_useNative) _copyPlatformBytes();
+      _viewRevision++;
+    });
   }
 
   void _copyPlatformBytes() {
@@ -160,16 +169,34 @@ class _InlineHdrImagePreviewState extends State<InlineHdrImagePreview>
         fit: StackFit.expand,
         children: [
           sdr,
-          AndroidView(
-            key: const ValueKey('hdr-native-view'),
+          // Hybrid composition draws the real native view in the window, so
+          // the HDR colour mode and gainmap apply; a texture-composited
+          // AndroidView renders SDR, making HDR on/off look identical.
+          PlatformViewLink(
+            key: ValueKey('hdr-native-view-$_viewRevision'),
             viewType: _inlineMediaViewType,
-            creationParams: {
-              'kind': 'hdrImage',
-              'bytes': _platformBytes,
-              'fit': widget.fit == BoxFit.cover ? 'cover' : 'contain',
+            surfaceFactory: (context, controller) => AndroidViewSurface(
+              controller: controller as AndroidViewController,
+              gestureRecognizers: const {},
+              hitTestBehavior: PlatformViewHitTestBehavior.transparent,
+            ),
+            onCreatePlatformView: (params) {
+              return PlatformViewsService.initExpensiveAndroidView(
+                  id: params.id,
+                  viewType: _inlineMediaViewType,
+                  layoutDirection: TextDirection.ltr,
+                  creationParams: {
+                    'kind': 'hdrImage',
+                    'bytes': _platformBytes,
+                    'fit': widget.fit == BoxFit.cover ? 'cover' : 'contain',
+                  },
+                  creationParamsCodec: const StandardMessageCodec(),
+                  onFocus: () => params.onFocusChanged(true),
+                )
+                ..addOnPlatformViewCreatedListener(params.onPlatformViewCreated)
+                ..addOnPlatformViewCreatedListener(_onPlatformViewCreated)
+                ..create();
             },
-            creationParamsCodec: const StandardMessageCodec(),
-            onPlatformViewCreated: _onPlatformViewCreated,
           ),
         ],
       );

@@ -20,12 +20,16 @@ class ChatMediaLoader extends ChangeNotifier {
     ChatMediaCache? diskCache,
     this.maxMemoryBytes = 32 * 1024 * 1024,
     this.loadTimeout = const Duration(seconds: 45),
+    this.maxConcurrentLoads = 6,
     String accountId = '',
     this.downloads,
     this.localMedia,
   }) : diskCache = diskCache ?? ChatMediaCache(),
+       _scheduler = _MediaScheduler(maxConcurrentLoads),
        _accountId = accountId;
 
+  final _MediaScheduler _scheduler;
+  final int maxConcurrentLoads;
   final MediaRepository mediaRepository;
   final ChatCryptoService cryptoService;
   final ChatMediaCache diskCache;
@@ -56,6 +60,7 @@ class ChatMediaLoader extends ChangeNotifier {
 
   final Map<String, Uint8List> _cache = {};
   final Map<String, _MediaAcquisition> _inFlight = {};
+  final Map<String, int> _pathEpoch = {};
   String _accountId;
   int _generation = 0;
   int _memoryBytes = 0;
@@ -101,61 +106,103 @@ class ChatMediaLoader extends ChangeNotifier {
     required String threadId,
     required String storagePath,
     String? senderId,
+    ChatMediaLoadToken? token,
   }) {
     if (localMedia != null && senderId == _accountId) {
       _sentPaths.add(storagePath);
     }
     final hit = cached(storagePath);
-    debugPrint('ChatMediaDebug load-enter path=$storagePath hit=${hit != null}');
     if (hit != null) return Future.value(hit);
     final key = '$threadId:$storagePath:$senderId';
     final running = _inFlight[key];
-    if (running != null) return _own(running);
-    final ticket = _LoadTicket(_generation, diskKey(storagePath));
+    if (running != null) {
+      // A re-request (tile scrolled back into view) moves it to the front.
+      _scheduler.promote(running.task);
+      return _own(running, token);
+    }
+    final ticket = _ticket(storagePath);
+    late final _MediaAcquisition acquisition;
     late final Future<Uint8List> future;
-    final download = _download(
-      threadId,
-      storagePath,
-      ticket,
-      cachePlaintext: true,
-      senderId: senderId,
-    );
-    future =
-        (downloads == null
-                ? download.timeout(
-                    loadTimeout,
-                    onTimeout: () {
-                      ticket.active = false;
-                      throw TimeoutException(
-                        'Attachment download timed out.',
-                        loadTimeout,
-                      );
-                    },
-                  )
-                : download)
-            .whenComplete(() {
-              ticket.active = false;
-              if (identical(_inFlight[key]?.future, future)) {
-                _inFlight.remove(key);
-              }
-            });
-    final acquisition = _MediaAcquisition(future, _generation);
+    final started = Stopwatch()..start();
+    final sent = senderId == _accountId;
+    final task = _scheduler.submit(() {
+      if (_disposed || ticket.generation != _generation) {
+        throw const ChatMediaLoadCancelled();
+      }
+      _log(
+        'ChatMedia start path=$storagePath sent=$sent queuedMs=${started.elapsedMilliseconds}',
+      );
+      final download =
+          _download(
+            threadId,
+            storagePath,
+            ticket,
+            cachePlaintext: true,
+            senderId: senderId,
+          ).then<Uint8List>(
+            (bytes) {
+              _log(
+                'ChatMedia ok path=$storagePath sent=$sent bytes=${bytes.length} ms=${started.elapsedMilliseconds}',
+              );
+              return bytes;
+            },
+            onError: (Object error, StackTrace stack) {
+              _log(
+                  'ChatMedia fail path=$storagePath sent=$sent stage=${_stages[storagePath]} '
+                  'error=${error.runtimeType} $error ms=${started.elapsedMilliseconds}',
+                );
+              throw error;
+            },
+          );
+      return downloads == null
+          ? download.timeout(
+              loadTimeout,
+              onTimeout: () {
+                ticket.active = false;
+                throw TimeoutException(
+                  'Attachment download timed out.',
+                  loadTimeout,
+                );
+              },
+            )
+          : download;
+    });
+    future = task.future.whenComplete(() {
+      ticket.active = false;
+      if (identical(_inFlight[key], acquisition)) _inFlight.remove(key);
+    });
+    acquisition = _MediaAcquisition(future, _generation, task);
     _inFlight[key] = acquisition;
-    return _own(acquisition);
+    return _own(acquisition, token);
   }
 
-  Future<Uint8List> _own(_MediaAcquisition acquisition) async {
+  Future<Uint8List> _own(
+    _MediaAcquisition acquisition,
+    ChatMediaLoadToken? token,
+  ) async {
     acquisition.consumers++;
-    debugPrint('ChatMediaDebug own-enter consumers=${acquisition.consumers}');
+    var released = false;
+    void release() {
+      if (released) return;
+      released = true;
+      acquisition.waiting--;
+      // Nobody wants it any more and it has not started: drop it.
+      if (acquisition.waiting == 0) {
+        _scheduler.cancelQueued(acquisition.task);
+      }
+    }
+
+    acquisition.waiting++;
+    token?._attach(release);
     Uint8List? source;
     try {
       source = await acquisition.future;
-      debugPrint('ChatMediaDebug own-got len=${source.length}');
       if (_disposed || acquisition.generation != _generation) {
         throw const ChatMediaLoadCancelled();
       }
       return Uint8List.fromList(source);
     } finally {
+      release();
       if (--acquisition.consumers == 0) {
         source?.fillRange(0, source.length, 0);
       }
@@ -232,13 +279,23 @@ class ChatMediaLoader extends ChangeNotifier {
   }
 
   void _check(_LoadTicket ticket) {
-    if (_disposed || !ticket.active || ticket.generation != _generation) {
-      debugPrint(
-        'ChatMediaDebug cancelled disposed=$_disposed active=${ticket.active} '
-        'ticketGen=${ticket.generation} gen=$_generation',
-      );
+    if (_disposed ||
+        !ticket.active ||
+        ticket.generation != _generation ||
+        ticket.pathEpoch != (_pathEpoch[ticket.path] ?? 0)) {
       throw const ChatMediaLoadCancelled();
     }
+  }
+
+  _LoadTicket _ticket(String path) =>
+      _LoadTicket(_generation, diskKey(path), path, _pathEpoch[path] ?? 0);
+
+  /// Cancels only the loads of one attachment, leaving every other tile alone.
+  void _fencePath(String path) {
+    _pathEpoch[path] = (_pathEpoch[path] ?? 0) + 1;
+    _inFlight.removeWhere((key, _) => key.contains(':$path:'));
+    _stages.remove(path);
+    _failures.remove(path);
   }
 
   void _stage(String path, String value) {
@@ -253,15 +310,19 @@ class ChatMediaLoader extends ChangeNotifier {
     _LoadTicket ticket,
     String? senderId,
   ) async {
-  debugPrint('ChatMediaDebug acquire-ciphertext path=$path native=${downloads != null}');
-  return downloads == null
-        ? mediaRepository.downloadEncryptedMedia(path)
-        : downloads!.acquire(
-            uid: _accountId,
-            threadId: thread,
-            storagePath: path,
-            senderId: senderId,
-          );
+    try {
+      return downloads == null
+          ? await mediaRepository.downloadEncryptedMedia(path)
+          : await downloads!.acquire(
+              uid: _accountId,
+              threadId: thread,
+              storagePath: path,
+              senderId: senderId,
+            );
+    } on ChatDownloadCancelled {
+      // An account/session flip is transient for the tile: re-request.
+      throw const ChatMediaLoadCancelled();
+    }
   }
 
   Future<Uint8List> _download(
@@ -272,7 +333,6 @@ class ChatMediaLoader extends ChangeNotifier {
     String? senderId,
   }) async {
     diskCache.pin(ticket.diskKey);
-    debugPrint('ChatMediaDebug download-enter path=$storagePath');
     Uint8List? plain;
     var returned = false;
     try {
@@ -299,7 +359,6 @@ class ChatMediaLoader extends ChangeNotifier {
       final cachedCiphertext = plain == null
           ? await diskCache.read(ticket.diskKey)
           : null;
-      debugPrint('ChatMediaDebug step after-cache-read path=$storagePath hit=${cachedCiphertext != null}');
       ChatMediaTimings.record(
         'cache-read',
         acquisition,
@@ -336,12 +395,9 @@ class ChatMediaLoader extends ChangeNotifier {
           await diskCache.remove(ticket.diskKey);
         }
       }
-      debugPrint('ChatMediaDebug step before-stage path=$storagePath');
       if (plain == null) {
         _stage(storagePath, 'Downloading attachment…');
-        debugPrint('ChatMediaDebug step after-stage path=$storagePath');
         final download = Stopwatch()..start();
-        debugPrint('ChatMediaDebug step calling-acquire path=$storagePath');
         final encrypted = await _acquireCiphertext(
           threadId,
           storagePath,
@@ -428,7 +484,6 @@ class ChatMediaLoader extends ChangeNotifier {
       rethrow;
     } finally {
       if (!returned) plain?.fillRange(0, plain.length, 0);
-      debugPrint('ChatMediaDebug download-finally returned=$returned path=$storagePath');
       diskCache.unpin(ticket.diskKey);
     }
   }
@@ -441,7 +496,7 @@ class ChatMediaLoader extends ChangeNotifier {
     if (localMedia != null && senderId == _accountId) {
       _sentPaths.add(storagePath);
     }
-    final ticket = _LoadTicket(_generation, diskKey(storagePath));
+    final ticket = _ticket(storagePath);
     final download = _download(
       threadId,
       storagePath,
@@ -472,18 +527,14 @@ class ChatMediaLoader extends ChangeNotifier {
       removed.fillRange(0, removed.length, 0);
     }
 
-    // Fence any outstanding loader that would otherwise publish old bytes.
-    _generation++;
-    _inFlight.clear();
-    _stages.clear();
-    _failures.clear();
+    // Fence only this attachment's loaders that would publish old bytes.
+    _fencePath(storagePath);
     if (!_disposed) notifyListeners();
   }
 
   /// Vault lock only zeroes plaintext. In-flight downloads keep running, so
   /// one lock does not cancel every visible tile at once.
   void lockPlaintext() {
-    debugPrint('ChatMediaDebug lockPlaintext cache=${_cache.length}');
     for (final bytes in _cache.values) {
       bytes.fillRange(0, bytes.length, 0);
     }
@@ -493,8 +544,9 @@ class ChatMediaLoader extends ChangeNotifier {
   }
 
   void clear({String reason = 'unspecified'}) {
-    debugPrint('ChatMediaDebug clear reason=$reason inFlight=${_inFlight.length} cache=${_cache.length}');
     _generation++;
+    _scheduler.cancelAll();
+    _pathEpoch.clear();
     for (final bytes in _cache.values) {
       bytes.fillRange(0, bytes.length, 0);
     }
@@ -508,8 +560,7 @@ class ChatMediaLoader extends ChangeNotifier {
   }
 
   Future<void> removeLocal(String storagePath) async {
-    _generation++;
-    _inFlight.clear();
+    _fencePath(storagePath);
     if (downloads != null) await downloads!.command(storagePath, 'cancel');
     await diskCache.remove(diskKey(storagePath));
     final removed = _cache.remove(storagePath);
@@ -517,8 +568,6 @@ class ChatMediaLoader extends ChangeNotifier {
       _memoryBytes -= removed.length;
       removed.fillRange(0, removed.length, 0);
     }
-    _stages.remove(storagePath);
-    _failures.remove(storagePath);
     if (!_disposed) notifyListeners();
   }
 
@@ -535,18 +584,109 @@ class ChatMediaLoader extends ChangeNotifier {
   }
 }
 
+void _log(String message) {
+  if (kDebugMode) {
+    debugPrint(message);
+  }
+}
+
 class _LoadTicket {
-  _LoadTicket(this.generation, this.diskKey);
+  _LoadTicket(this.generation, this.diskKey, this.path, this.pathEpoch);
   final int generation;
   final String diskKey;
+  final String path;
+  final int pathEpoch;
   bool active = true;
 }
 
 class _MediaAcquisition {
-  _MediaAcquisition(this.future, this.generation);
+  _MediaAcquisition(this.future, this.generation, this.task);
   final Future<Uint8List> future;
   final int generation;
+  final _MediaTask task;
   int consumers = 0;
+  int waiting = 0;
+}
+
+/// Lets a tile withdraw interest when it is disposed or scrolled away.
+class ChatMediaLoadToken {
+  VoidCallback? _release;
+  bool _cancelled = false;
+
+  void _attach(VoidCallback release) {
+    if (_cancelled) {
+      release();
+    } else {
+      _release = release;
+    }
+  }
+
+  void cancel() {
+    _cancelled = true;
+    final release = _release;
+    _release = null;
+    release?.call();
+  }
+}
+
+class _MediaTask {
+  _MediaTask(this.run, this.order);
+  final Future<Uint8List> Function() run;
+  final Completer<Uint8List> _completer = Completer<Uint8List>();
+  int order;
+  bool started = false;
+  Future<Uint8List> get future => _completer.future;
+}
+
+/// Bounded parallelism, most recently requested first: the newest request is
+/// the tile that just scrolled into view.
+class _MediaScheduler {
+  _MediaScheduler(this.maxConcurrent);
+  final int maxConcurrent;
+  final List<_MediaTask> _queue = [];
+  int _running = 0;
+  int _order = 0;
+
+  _MediaTask submit(Future<Uint8List> Function() run) {
+    final task = _MediaTask(run, ++_order);
+    _queue.add(task);
+    _pump();
+    return task;
+  }
+
+  void promote(_MediaTask task) => task.order = ++_order;
+
+  void cancelQueued(_MediaTask task) {
+    if (task.started || !_queue.remove(task)) return;
+    task._completer.completeError(const ChatMediaLoadCancelled());
+  }
+
+  void cancelAll() {
+    for (final task in List.of(_queue)) {
+      cancelQueued(task);
+    }
+  }
+
+  void _pump() {
+    while (_running < maxConcurrent && _queue.isNotEmpty) {
+      var next = _queue.first;
+      for (final task in _queue) {
+        if (task.order > next.order) next = task;
+      }
+      _queue.remove(next);
+      next.started = true;
+      _running++;
+      Future<Uint8List>.sync(next.run)
+          .then(
+            next._completer.complete,
+            onError: next._completer.completeError,
+          )
+          .whenComplete(() {
+            _running--;
+            _pump();
+          });
+    }
+  }
 }
 
 class ChatMediaLoadCancelled implements Exception {
