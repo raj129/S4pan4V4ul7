@@ -1397,8 +1397,11 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
   Future<void> jumpToFraction(double fraction) async {
     final threadId = _currentThreadId;
     if (threadId == null) return;
+    final started = DateTime.now();
+    debugPrint('ChatMediaDebug jump begin fraction=$fraction');
     try {
       final hit = await _history.atFraction(threadId, fraction);
+      debugPrint('ChatMediaDebug jump atFraction done ms=${DateTime.now().difference(started).inMilliseconds} hit=${hit != null}');
       if (hit == null) return;
       if (hit.offset >= hit.total - _pageSize) {
         await jumpToLatest();
@@ -1406,7 +1409,11 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
       }
       final target = hit.message;
       if (target != null) await jumpToMessage(target.messageId);
-    } catch (_) {}
+    } catch (error) {
+      debugPrint('ChatMediaDebug jump error=$error');
+    } finally {
+      debugPrint('ChatMediaDebug jump end ms=${DateTime.now().difference(started).inMilliseconds}');
+    }
   }
 
   /// Where [message] sits in the cached history, 0 (first) .. 1 (latest),

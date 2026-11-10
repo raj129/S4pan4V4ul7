@@ -143,7 +143,7 @@ class ChatDependencies {
   void _onVaultSessionChanged() {
     if (!_vaultSession.isUnlocked) {
       cryptoService.clearKeyCache();
-      mediaLoader.clear();
+      mediaLoader.lockPlaintext();
       if (Platform.isAndroid) {
         const AndroidChatSecureMediaService().close().catchError((
           Object error,

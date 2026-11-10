@@ -42,13 +42,18 @@ class AndroidChatDownloads extends ChangeNotifier {
   }
 
   Future<void> _refresh() async {
-    if (_disposed || _refreshing) return;
+    if (_disposed || _refreshing) {
+      debugPrint('ChatMediaDebug refresh-skipped disposed=$_disposed refreshing=$_refreshing');
+      return;
+    }
     final uid = currentUid();
     if (uid == null || uid.isEmpty) return;
     final generation = _generation;
     _refreshing = true;
     try {
+      debugPrint('ChatMediaDebug list-call');
       final values = await _channel.invokeListMethod<Object?>('list');
+      debugPrint('ChatMediaDebug list-ok count=${values?.length}');
       _check(uid, generation);
       final next = <String, AndroidDownloadJob>{};
       for (final value in values ?? const []) {
@@ -103,6 +108,7 @@ class AndroidChatDownloads extends ChangeNotifier {
     Uint8List? source;
     try {
       source = await acquisition.future;
+      debugPrint('ChatMediaDebug acquire-result len=${source.length}');
       _check(uid, generation);
       return Uint8List.fromList(source);
     } finally {
@@ -146,7 +152,9 @@ class AndroidChatDownloads extends ChangeNotifier {
     var stalledSince = DateTime.now();
     while (true) {
       _check(uid, generation);
+      debugPrint('ChatMediaDebug poll-start path=$path');
       await _refresh();
+      debugPrint('ChatMediaDebug poll-after-refresh path=$path job=${_jobs[_key(uid, path)]?.state}');
       _check(uid, generation);
       if (_readError case final Object error) throw error;
       final current = _jobs[_key(uid, path)];

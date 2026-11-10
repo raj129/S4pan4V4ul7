@@ -106,6 +106,7 @@ class ChatMediaLoader extends ChangeNotifier {
       _sentPaths.add(storagePath);
     }
     final hit = cached(storagePath);
+    debugPrint('ChatMediaDebug load-enter path=$storagePath hit=${hit != null}');
     if (hit != null) return Future.value(hit);
     final key = '$threadId:$storagePath:$senderId';
     final running = _inFlight[key];
@@ -145,9 +146,11 @@ class ChatMediaLoader extends ChangeNotifier {
 
   Future<Uint8List> _own(_MediaAcquisition acquisition) async {
     acquisition.consumers++;
+    debugPrint('ChatMediaDebug own-enter consumers=${acquisition.consumers}');
     Uint8List? source;
     try {
       source = await acquisition.future;
+      debugPrint('ChatMediaDebug own-got len=${source.length}');
       if (_disposed || acquisition.generation != _generation) {
         throw const ChatMediaLoadCancelled();
       }
@@ -239,8 +242,9 @@ class ChatMediaLoader extends ChangeNotifier {
   }
 
   void _stage(String path, String value) {
+    // Stage text is read on rebuild only; notifying here never returned on
+    // device and stalled every download after cache-read.
     _stages[path] = value;
-    if (!_disposed && downloads != null) notifyListeners();
   }
 
   Future<Uint8List> _acquireCiphertext(
@@ -249,7 +253,8 @@ class ChatMediaLoader extends ChangeNotifier {
     _LoadTicket ticket,
     String? senderId,
   ) async {
-    return downloads == null
+  debugPrint('ChatMediaDebug acquire-ciphertext path=$path native=${downloads != null}');
+  return downloads == null
         ? mediaRepository.downloadEncryptedMedia(path)
         : downloads!.acquire(
             uid: _accountId,
@@ -267,6 +272,7 @@ class ChatMediaLoader extends ChangeNotifier {
     String? senderId,
   }) async {
     diskCache.pin(ticket.diskKey);
+    debugPrint('ChatMediaDebug download-enter path=$storagePath');
     Uint8List? plain;
     var returned = false;
     try {
@@ -330,8 +336,10 @@ class ChatMediaLoader extends ChangeNotifier {
           await diskCache.remove(ticket.diskKey);
         }
       }
+      debugPrint('ChatMediaDebug step before-stage path=$storagePath');
       if (plain == null) {
         _stage(storagePath, 'Downloading attachment…');
+        debugPrint('ChatMediaDebug step after-stage path=$storagePath');
         final download = Stopwatch()..start();
         debugPrint('ChatMediaDebug step calling-acquire path=$storagePath');
         final encrypted = await _acquireCiphertext(
@@ -420,6 +428,7 @@ class ChatMediaLoader extends ChangeNotifier {
       rethrow;
     } finally {
       if (!returned) plain?.fillRange(0, plain.length, 0);
+      debugPrint('ChatMediaDebug download-finally returned=$returned path=$storagePath');
       diskCache.unpin(ticket.diskKey);
     }
   }
@@ -471,7 +480,20 @@ class ChatMediaLoader extends ChangeNotifier {
     if (!_disposed) notifyListeners();
   }
 
-  void clear() {
+  /// Vault lock only zeroes plaintext. In-flight downloads keep running, so
+  /// one lock does not cancel every visible tile at once.
+  void lockPlaintext() {
+    debugPrint('ChatMediaDebug lockPlaintext cache=${_cache.length}');
+    for (final bytes in _cache.values) {
+      bytes.fillRange(0, bytes.length, 0);
+    }
+    _cache.clear();
+    _memoryBytes = 0;
+    if (!_disposed) notifyListeners();
+  }
+
+  void clear({String reason = 'unspecified'}) {
+    debugPrint('ChatMediaDebug clear reason=$reason inFlight=${_inFlight.length} cache=${_cache.length}');
     _generation++;
     for (final bytes in _cache.values) {
       bytes.fillRange(0, bytes.length, 0);

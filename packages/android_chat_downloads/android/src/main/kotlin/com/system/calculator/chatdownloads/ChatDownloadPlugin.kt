@@ -51,7 +51,9 @@ class ChatDownloadPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
             var response: Any? = null
             try {
                 response = ChatDownloadRuntime.locked {
-                    android.util.Log.i("ChatMediaDebug", "native ${call.method} lock acquired after ${(System.nanoTime() - started) / 1_000_000}ms")
+                    val acquiredAt = System.nanoTime()
+                    android.util.Log.i("ChatMediaDebug", "native ${call.method} lock acquired after ${(acquiredAt - started) / 1_000_000}ms")
+                    try {
                     val uid = FirebaseAuth.getInstance().currentUser?.uid
                         ?: throw SecurityException("Chat sign-in required")
                     if (call.method !in listOf("list", "wake")) {
@@ -131,8 +133,11 @@ class ChatDownloadPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
                             else -> throw IllegalArgumentException("Unknown download action")
                         }
                     }
+                    } finally {
+                        android.util.Log.i("ChatMediaDebug", "native ${call.method} lock held ${(System.nanoTime() - acquiredAt) / 1_000_000}ms")
+                    }
                 }
-                if (call.method == "acknowledge") scheduleCleanup(context)
+
                 if (call.method in listOf("enqueue", "wake", "resume", "retry")) {
                     schedule(context)
                     ChatDownloadRuntime.kick(context)
