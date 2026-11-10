@@ -12,11 +12,11 @@ import 'package:photo_vault/features/chat/domain/repositories/message_repository
 
 class _Media implements MediaRepository {
   int downloads = 0;
-  Future<Uint8List> Function()? response;
+  Future<Uint8List> Function(String path)? response;
   @override
   Future<Uint8List> downloadEncryptedMedia(String path) async {
     downloads++;
-    return response == null ? Uint8List.fromList([1, 2]) : response!();
+    return response == null ? Uint8List.fromList([1, 2]) : response!(path);
   }
 
   @override
@@ -82,18 +82,18 @@ void main() {
   );
 
   test('times out and permits retry without navigating', () async {
-    media.response = () => Completer<Uint8List>().future;
+    media.response = (_) => Completer<Uint8List>().future;
     await expectLater(
       loader.load(threadId: 't', storagePath: 'p'),
       throwsA(isA<TimeoutException>()),
     );
-    media.response = () async => Uint8List.fromList([9]);
+    media.response = (_) async => Uint8List.fromList([9]);
     expect(await loader.load(threadId: 't', storagePath: 'p'), [9]);
   });
 
   test('rejects late plaintext publication after account changes', () async {
     final pending = Completer<Uint8List>();
-    media.response = () => pending.future;
+    media.response = (_) => pending.future;
     final old = loader.load(threadId: 't', storagePath: 'p');
     final assertion = expectLater(old, throwsA(isA<ChatMediaLoadCancelled>()));
     await Future<void>.delayed(const Duration(milliseconds: 5));
@@ -154,29 +154,60 @@ void main() {
     );
     final gates = <String, Completer<Uint8List>>{};
     final started = <String>[];
-    media.response = () {
-      final id = 'd${started.length}';
-      started.add(id);
-      return (gates[id] = Completer<Uint8List>()).future;
+    final startWaiters = <int, Completer<void>>{};
+    var activeDownloads = 0;
+    var maxActiveDownloads = 0;
+
+    Future<void> waitForStartedCount(int count) {
+      if (started.length >= count) return Future<void>.value();
+      final waiter = startWaiters.putIfAbsent(count, () => Completer<void>());
+      if (started.length >= count && !waiter.isCompleted) waiter.complete();
+      return waiter.future;
+    }
+
+    void notifyStartWaiters() {
+      for (final entry in startWaiters.entries) {
+        if (started.length >= entry.key && !entry.value.isCompleted) {
+          entry.value.complete();
+        }
+      }
+    }
+
+    media.response = (path) {
+      started.add(path);
+      final gate = gates[path] = Completer<Uint8List>();
+      activeDownloads++;
+      if (activeDownloads > maxActiveDownloads) {
+        maxActiveDownloads = activeDownloads;
+      }
+      notifyStartWaiters();
+      return gate.future.whenComplete(() => activeDownloads--);
     };
     final results = [
       for (var i = 0; i < 5; i++) loader.load(threadId: 't', storagePath: 'p$i'),
     ];
-    await Future<void>.delayed(const Duration(milliseconds: 20));
-    expect(started, hasLength(2));
-    gates['d0']!.complete(Uint8List.fromList([1]));
-    await Future<void>.delayed(const Duration(milliseconds: 20));
-    expect(started, hasLength(3));
-    for (var i = 1; i < 5; i++) {
-      await Future<void>.delayed(const Duration(milliseconds: 20));
-      for (final gate in gates.values) {
-        if (!gate.isCompleted) gate.complete(Uint8List.fromList([1]));
-      }
-    }
+    await waitForStartedCount(2);
+    expect(started, ['p0', 'p1']);
+
+    gates['p0']!.complete(Uint8List.fromList([1]));
+    await waitForStartedCount(3);
+    expect(started, ['p0', 'p1', 'p4']);
+
+    gates['p1']!.complete(Uint8List.fromList([1]));
+    await waitForStartedCount(4);
+    expect(started, ['p0', 'p1', 'p4', 'p3']);
+
+    gates['p4']!.complete(Uint8List.fromList([1]));
+    await waitForStartedCount(5);
+    expect(started, ['p0', 'p1', 'p4', 'p3', 'p2']);
+
+    gates['p3']!.complete(Uint8List.fromList([1]));
+    gates['p2']!.complete(Uint8List.fromList([1]));
     for (final result in results) {
       expect(await result, [1]);
     }
     expect(media.downloads, 5);
+    expect(maxActiveDownloads, 2);
   });
 
   test('a withdrawn queued request never starts', () async {
@@ -189,7 +220,7 @@ void main() {
       maxConcurrentLoads: 1,
     );
     final gate = Completer<Uint8List>();
-    media.response = () => gate.future;
+    media.response = (_) => gate.future;
     final running = loader.load(threadId: 't', storagePath: 'a');
     final token = ChatMediaLoadToken();
     final queued = loader.load(threadId: 't', storagePath: 'b', token: token);
@@ -204,7 +235,7 @@ void main() {
 
   test('moving one attachment to the vault does not cancel the others', () async {
     final gate = Completer<Uint8List>();
-    media.response = () => gate.future;
+    media.response = (_) => gate.future;
     final other = loader.load(threadId: 't', storagePath: 'other');
     final moved = loader.load(threadId: 't', storagePath: 'moved');
     final movedCancelled = expectLater(

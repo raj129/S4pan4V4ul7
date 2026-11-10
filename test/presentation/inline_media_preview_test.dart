@@ -56,16 +56,12 @@ void main() {
       final previousPlatform = debugDefaultTargetPlatformOverride;
       debugDefaultTargetPlatformOverride = TargetPlatform.android;
 
-      var closedCalled = false;
       for (var id = 0; id < 10; id++) {
         tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
           MethodChannel('photo_vault/inline_media/$id'),
           (call) async {
             if (call.method == 'getStatus') {
               return {'status': 'ready', 'playing': true};
-            } else if (call.method == 'close') {
-              closedCalled = true;
-              return null;
             }
             return null;
           },

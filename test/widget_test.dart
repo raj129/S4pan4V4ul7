@@ -66,14 +66,28 @@ void main() {
       );
     }
 
+    Future<void> scrollDrawerToBottom() async {
+      await tester.drag(
+        find.descendant(
+          of: find.byType(NavigationDrawer),
+          matching: find.byType(ListView),
+        ),
+        const Offset(0, -600),
+      );
+      await tester.pumpAndSettle();
+    }
+
     await pump();
+    await scrollDrawerToBottom();
     expect(find.text('Mock location'), findsOneWidget);
     expect(find.text('My locations'), findsNothing);
 
     await pump(show: true);
+    await scrollDrawerToBottom();
     expect(find.text('My locations'), findsOneWidget);
 
     await pump(scoped: true);
+    await scrollDrawerToBottom();
     expect(find.text('My locations'), findsOneWidget);
   });
 
