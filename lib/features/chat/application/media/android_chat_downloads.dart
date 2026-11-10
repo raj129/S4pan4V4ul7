@@ -84,6 +84,7 @@ class AndroidChatDownloads extends ChangeNotifier {
     required String storagePath,
     String? senderId,
   }) async {
+    debugPrint('ChatMediaDebug step acquire-enter path=$storagePath');
     _check(uid);
     if (senderId == uid) {
       throw const ChatDownloadFailed(
@@ -126,12 +127,18 @@ class AndroidChatDownloads extends ChangeNotifier {
     int generation,
     String? senderId,
   ) async {
-    await _channel.invokeMethod<void>('enqueue', {
-      'uid': uid,
-      'threadId': thread,
-      'storagePath': path,
-      'senderId': ?senderId,
-    });
+    try {
+      await _channel.invokeMethod<void>('enqueue', {
+        'uid': uid,
+        'threadId': thread,
+        'storagePath': path,
+        'senderId': ?senderId,
+      });
+      debugPrint('ChatMediaDebug enqueue ok path=$path');
+    } catch (error) {
+      debugPrint('ChatMediaDebug enqueue failed path=$path error=$error');
+      rethrow;
+    }
     _check(uid, generation);
     _timer ??= Timer.periodic(pollInterval, (_) => unawaited(_refresh()));
     var lastProgress = -1;

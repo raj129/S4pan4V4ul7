@@ -230,6 +230,10 @@ class ChatMediaLoader extends ChangeNotifier {
 
   void _check(_LoadTicket ticket) {
     if (_disposed || !ticket.active || ticket.generation != _generation) {
+      debugPrint(
+        'ChatMediaDebug cancelled disposed=$_disposed active=${ticket.active} '
+        'ticketGen=${ticket.generation} gen=$_generation',
+      );
       throw const ChatMediaLoadCancelled();
     }
   }
@@ -289,6 +293,7 @@ class ChatMediaLoader extends ChangeNotifier {
       final cachedCiphertext = plain == null
           ? await diskCache.read(ticket.diskKey)
           : null;
+      debugPrint('ChatMediaDebug step after-cache-read path=$storagePath hit=${cachedCiphertext != null}');
       ChatMediaTimings.record(
         'cache-read',
         acquisition,
@@ -328,6 +333,7 @@ class ChatMediaLoader extends ChangeNotifier {
       if (plain == null) {
         _stage(storagePath, 'Downloading attachment…');
         final download = Stopwatch()..start();
+        debugPrint('ChatMediaDebug step calling-acquire path=$storagePath');
         final encrypted = await _acquireCiphertext(
           threadId,
           storagePath,

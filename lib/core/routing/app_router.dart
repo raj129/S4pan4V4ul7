@@ -70,7 +70,10 @@ GoRouter buildAppRouter({
           title: 'Calculator',
           child: CalculatorFeature(
             onVaultTriggerRequested: () {
-              context.push('/lock?returnTo=%2Fchat');
+              final returnTo = deps.importManager.hasPendingShareFiles
+                  ? '/import/share-intent'
+                  : '/chat';
+              context.go('/lock?returnTo=${Uri.encodeComponent(returnTo)}');
             },
           ),
         ),

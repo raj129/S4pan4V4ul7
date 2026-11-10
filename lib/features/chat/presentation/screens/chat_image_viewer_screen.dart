@@ -3,6 +3,10 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 
+import 'package:photo_vault/core/media/animated_media.dart';
+import 'package:photo_vault/core/widgets/animated_media_image.dart';
+import 'package:photo_vault/core/widgets/inline_media_preview.dart';
+import 'package:photo_vault/core/widgets/hdr_preview_toggle_button.dart';
 import '../../domain/entities/chat_message.dart';
 import '../widgets/chat_media_preview.dart';
 import '../widgets/attachment_download_progress.dart';
@@ -59,6 +63,8 @@ class _ChatImageViewerScreenState extends State<ChatImageViewerScreen>
   Future<Uint8List>? _full;
   Uint8List? _fullBytes;
   Uint8List? _thumbBytes;
+  Uint8List? _motionPhotoVideo;
+  bool _containsHdrPhoto = false;
   int _generation = 0;
 
   static const _doubleTapScale = 2.5;
@@ -85,6 +91,8 @@ class _ChatImageViewerScreenState extends State<ChatImageViewerScreen>
     if (initialBytes != null && initialBytes.isNotEmpty) {
       final owned = Uint8List.fromList(initialBytes);
       _fullBytes = owned;
+      _motionPhotoVideo = extractMotionPhotoVideo(owned);
+      _containsHdrPhoto = _isHdrContent(owned, _motionPhotoVideo);
       _full = Future.value(owned);
       return;
     }
@@ -109,9 +117,21 @@ class _ChatImageViewerScreenState extends State<ChatImageViewerScreen>
       return Uint8List(0);
     }
     if (bytes.isEmpty) throw StateError('Image is unavailable.');
-    _fullBytes = bytes;
+    if (mounted) {
+      setState(() {
+        _fullBytes = bytes;
+        _motionPhotoVideo = extractMotionPhotoVideo(bytes);
+        _containsHdrPhoto = _isHdrContent(bytes, _motionPhotoVideo);
+      });
+    }
     return bytes;
   }
+
+  /// A Motion Photo can have an SDR still with an HDR embedded video, so the
+  /// video is checked too; otherwise the HDR toggle would stay hidden.
+  bool _isHdrContent(Uint8List still, Uint8List? motionVideo) =>
+      isHdrImage(still) ||
+      (motionVideo != null && isHdrVideo(motionVideo));
 
   void _onMediaChanged() {
     if (!mounted || _fullBytes != null) return;
@@ -126,6 +146,8 @@ class _ChatImageViewerScreenState extends State<ChatImageViewerScreen>
       if (thumb != null) _thumbBytes = thumb;
       if (bytes != null) {
         _fullBytes = bytes;
+        _motionPhotoVideo = extractMotionPhotoVideo(bytes);
+        _containsHdrPhoto = _isHdrContent(bytes, _motionPhotoVideo);
         _full = Future.value(bytes);
       }
     });
@@ -162,6 +184,7 @@ class _ChatImageViewerScreenState extends State<ChatImageViewerScreen>
         oldWidget.initialBytes != widget.initialBytes ||
         oldWidget.loader != widget.loader) {
       _releaseBytes();
+      _containsHdrPhoto = false;
       _loadFull();
     }
   }
@@ -184,6 +207,8 @@ class _ChatImageViewerScreenState extends State<ChatImageViewerScreen>
     }
     _fullBytes = null;
     _thumbBytes = null;
+    _motionPhotoVideo?.fillRange(0, _motionPhotoVideo!.length, 0);
+    _motionPhotoVideo = null;
   }
 
   void _handleDoubleTap(TapDownDetails details) {
@@ -223,11 +248,17 @@ class _ChatImageViewerScreenState extends State<ChatImageViewerScreen>
               // here; the work happens in onDoubleTapDown, which carries the
               // tap position.
               onDoubleTap: () {},
-              child: InteractiveViewer(
-                transformationController: _controller,
-                minScale: 1,
-                maxScale: 5,
-                child: Center(child: _buildImage(_thumbBytes)),
+              child: LayoutBuilder(
+                builder: (context, constraints) => InteractiveViewer(
+                  transformationController: _controller,
+                  minScale: 1,
+                  maxScale: 5,
+                  child: SizedBox(
+                    width: constraints.maxWidth,
+                    height: constraints.maxHeight,
+                    child: Center(child: _buildImage(_thumbBytes)),
+                  ),
+                ),
               ),
             ),
           ),
@@ -239,6 +270,13 @@ class _ChatImageViewerScreenState extends State<ChatImageViewerScreen>
               onPressed: () => Navigator.of(context).pop(),
               tooltip: 'Close',
             ),
+          ),
+          Positioned(
+            top: MediaQuery.of(context).padding.top + 4,
+            right: 4,
+            child: _containsHdrPhoto
+                ? const HdrPreviewToggleButton()
+                : const SizedBox.shrink(),
           ),
         ],
       ),
@@ -259,8 +297,27 @@ class _ChatImageViewerScreenState extends State<ChatImageViewerScreen>
       future: future,
       builder: (context, snap) {
         if (snap.hasData && snap.data!.isNotEmpty) {
-          return Image.memory(
-            snap.data!,
+          final motionVideo = _motionPhotoVideo;
+          if (motionVideo != null) {
+            return InlineMotionPhotoPreview(
+              videoBytes: motionVideo,
+              stillBytes: snap.data!,
+              fit: BoxFit.contain,
+              controlAlignment: Alignment.topRight,
+              controlPadding: EdgeInsets.only(
+                top: MediaQuery.of(context).padding.top + 4,
+                right: 56,
+              ),
+            );
+          }
+          if (_containsHdrPhoto) {
+            return InlineHdrImagePreview(
+              bytes: snap.data!,
+              fit: BoxFit.contain,
+            );
+          }
+          return AnimatedMediaImage(
+            bytes: snap.data!,
             fit: BoxFit.contain,
             errorBuilder: (_, _, _) => const Column(
               mainAxisSize: MainAxisSize.min,
@@ -302,8 +359,8 @@ class _ChatImageViewerScreenState extends State<ChatImageViewerScreen>
           alignment: Alignment.center,
           children: [
             if (thumb != null)
-              Image.memory(
-                thumb,
+              AnimatedMediaImage(
+                bytes: thumb,
                 fit: BoxFit.contain,
                 errorBuilder: (_, _, _) => const SizedBox.shrink(),
               )

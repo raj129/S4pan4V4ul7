@@ -88,6 +88,7 @@ dependencies:
   firebase_messaging: ^16.7.0
   file_picker: ^13.1.0
   open_filex: ^5.0.0
+  shared_preferences: ^2.5.6
   provider: ^6.1.5+1
   android_chat_downloads:
     path: packages/android_chat_downloads
@@ -102,7 +103,6 @@ dev_dependencies:
   drift_dev: ^2.34.0
   build_runner: ^2.15.1
   bloc_test: ^10.0.0
-  shared_preferences: ^2.5.6
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec

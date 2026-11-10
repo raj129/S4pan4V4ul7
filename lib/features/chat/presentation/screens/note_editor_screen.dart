@@ -27,7 +27,8 @@ class NoteEditorScreen extends StatefulWidget {
   State<NoteEditorScreen> createState() => _NoteEditorScreenState();
 }
 
-class _NoteEditorScreenState extends State<NoteEditorScreen> {
+class _NoteEditorScreenState extends State<NoteEditorScreen>
+    with WidgetsBindingObserver {
   late TextEditingController _titleCtrl;
   late TextEditingController _contentCtrl;
   late AppNote _currentNote;
@@ -35,6 +36,9 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
   final Map<String, FocusNode> _itemFocusNodes = {};
   Timer? _debounceTimer;
   StreamSubscription<List<AppNote>>? _threadNotesSub;
+  Stream<List<String>>? _noteEditorsStream;
+  Timer? _editingHeartbeat;
+  Future<void> _presenceWrite = Future<void>.value();
   bool _isSaving = false;
   bool _showCompletedSection = true;
   int _editRevision = 0;
@@ -56,6 +60,16 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
 
     // If shared note, listen to real-time changes from other user
     if (_currentNote.isShared && _currentNote.threadId != null) {
+      _noteEditorsStream = widget.notesRepository.watchThreadNoteEditors(
+        threadId: _currentNote.threadId!,
+        noteId: _currentNote.id,
+      );
+      WidgetsBinding.instance.addObserver(this);
+      _renewEditingPresence();
+      _editingHeartbeat = Timer.periodic(
+        const Duration(seconds: 12),
+        (_) => _renewEditingPresence(),
+      );
       _threadNotesSub = widget.notesRepository
           .watchThreadNotes(_currentNote.threadId!)
           .listen((notes) {
@@ -84,6 +98,23 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _editingHeartbeat?.cancel();
+    final threadId = _currentNote.threadId;
+    if (_currentNote.isShared && threadId != null) {
+      _presenceWrite = _presenceWrite
+          .then(
+            (_) => widget.notesRepository.setThreadNoteEditing(
+              threadId: threadId,
+              noteId: _currentNote.id,
+              uid: widget.currentUserId,
+              isEditing: false,
+            ),
+          )
+          .catchError((Object error) {
+            debugPrint('Could not release shared note edit presence: $error');
+          });
+    }
     _debounceTimer?.cancel();
     _threadNotesSub?.cancel();
     for (final node in _itemFocusNodes.values) {
@@ -92,6 +123,28 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
     _titleCtrl.dispose();
     _contentCtrl.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _renewEditingPresence();
+  }
+
+  void _renewEditingPresence() {
+    final threadId = _currentNote.threadId;
+    if (!_currentNote.isShared || threadId == null) return;
+    _presenceWrite = _presenceWrite
+        .then(
+          (_) => widget.notesRepository.setThreadNoteEditing(
+            threadId: threadId,
+            noteId: _currentNote.id,
+            uid: widget.currentUserId,
+            isEditing: true,
+          ),
+        )
+        .catchError((Object error) {
+          debugPrint('Could not renew shared note edit presence: $error');
+        });
   }
 
   void _triggerSave({bool immediate = false}) {
@@ -359,6 +412,44 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
       body: SafeArea(
         child: Column(
           children: [
+            if (_noteEditorsStream != null)
+              StreamBuilder<List<String>>(
+                stream: _noteEditorsStream,
+                builder: (context, snapshot) {
+                  final otherEditors = snapshot.data
+                      ?.where((uid) => uid != widget.currentUserId)
+                      .toList();
+                  if (otherEditors == null || otherEditors.isEmpty) {
+                    return const SizedBox.shrink();
+                  }
+                  return Padding(
+                    padding: const EdgeInsets.fromLTRB(
+                      AppSpacing.lg,
+                      AppSpacing.xs,
+                      AppSpacing.lg,
+                      AppSpacing.xs,
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(
+                          Icons.edit_outlined,
+                          size: 16,
+                          color: theme.colorScheme.primary,
+                        ),
+                        const SizedBox(width: AppSpacing.xs),
+                        Text(
+                          otherEditors.length == 1
+                              ? 'Someone else is editing this note'
+                              : '${otherEditors.length} people are editing this note',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.primary,
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              ),
             Padding(
               padding: const EdgeInsets.fromLTRB(
                 AppSpacing.lg,

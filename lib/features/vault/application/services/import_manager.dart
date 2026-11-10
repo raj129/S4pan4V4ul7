@@ -5,6 +5,7 @@ import 'dart:isolate';
 
 import 'package:crypto/crypto.dart' as crypto;
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:image/image.dart' as img;
 import 'package:image_picker/image_picker.dart';
 import 'package:path/path.dart' as p;
@@ -324,6 +325,11 @@ class ImportManager extends ChangeNotifier {
   List<XFile> takePendingShareFiles() {
     final copy = List<XFile>.from(_pendingShareFiles);
     _pendingShareFiles.clear();
+    if (_pendingImportSource == 'share-intent') {
+      _pendingImportFiles.clear();
+      _pendingImportSource = null;
+    }
+    notifyListeners();
     return copy;
   }
 
@@ -345,6 +351,7 @@ class ImportManager extends ChangeNotifier {
     required List<XFile> files,
     required String source,
   }) {
+    if (source != 'share-intent') _pendingShareFiles.clear();
     _pendingImportFiles
       ..clear()
       ..addAll(files);
@@ -355,11 +362,14 @@ class ImportManager extends ChangeNotifier {
   List<XFile> takePendingImportSelection() {
     final copy = List<XFile>.from(_pendingImportFiles);
     _pendingImportFiles.clear();
+    if (_pendingImportSource == 'share-intent') _pendingShareFiles.clear();
     _pendingImportSource = null;
+    notifyListeners();
     return copy;
   }
 
   void clearPendingImportSelection() {
+    if (_pendingImportSource == 'share-intent') _pendingShareFiles.clear();
     _pendingImportFiles.clear();
     _pendingImportSource = null;
     notifyListeners();
@@ -550,10 +560,13 @@ class ImportManager extends ChangeNotifier {
             final now = DateTime.now().millisecondsSinceEpoch;
             final id = _uuid.v4();
             final plainBytes = prepared['photoBytes'] as Uint8List;
-            final thumbnailBytes = prepared['thumbnailBytes'] as Uint8List;
+            var thumbnailBytes = prepared['thumbnailBytes'] as Uint8List;
             final fileSize = prepared['fileSize'] as int;
             final mimeType = prepared['mimeType'] as String;
             final originalFilename = prepared['originalFilename'] as String;
+            if (mimeType.startsWith('video/')) {
+              thumbnailBytes = await extractVideoThumbnail(plainBytes);
+            }
 
             final dek = await _cryptoService.generateSymmetricKey();
             try {
@@ -679,6 +692,22 @@ class ImportManager extends ChangeNotifier {
     }
   }
 
+  Future<Uint8List> extractVideoThumbnail(Uint8List bytes) async {
+    try {
+      final result = await const MethodChannel('photo_vault/chat_secure_media')
+          .invokeMapMethod<Object?, Object?>('extractVideoMetadata', {
+            'bytes': bytes,
+          });
+      final thumbnail = result?['thumbnail'];
+      if (thumbnail is Uint8List && thumbnail.isNotEmpty) return thumbnail;
+    } on PlatformException catch (error) {
+      debugPrint('Video thumbnail extraction failed: ${error.message}');
+    } on MissingPluginException {
+      debugPrint('Video thumbnail extraction is unavailable on this platform.');
+    }
+    return Uint8List.fromList(img.encodeJpg(img.Image(width: 1, height: 1)));
+  }
+
   Future<Uint8List> _regenerateThumbnail({
     required VaultPhoto photo,
     required List<int> dek,
@@ -695,7 +724,10 @@ class ImportManager extends ChangeNotifier {
       aad: utf8.encode('${photo.id}:photo:v${photo.encryptionVersion}'),
     );
     final thumbBytes = await Isolate.run(
-      () => _generateThumbnailBytes(Uint8List.fromList(plainPhoto)),
+      () => _generateThumbnailBytes(
+        Uint8List.fromList(plainPhoto),
+        mimeType: photo.mimeType,
+      ),
     );
     final encryptedThumb = await _cryptoService.encrypt(
       thumbBytes,
@@ -892,7 +924,9 @@ Map<String, Object> _prepareImportFile(String filePath) {
   if (!_isSupportedMimeType(mimeType)) {
     throw UnsupportedError('Unsupported file type: $mimeType');
   }
-  final thumbnailBytes = _generateThumbnailBytes(plainBytes);
+  final thumbnailBytes = mimeType.startsWith('video/')
+      ? Uint8List(0)
+      : _generateThumbnailBytes(plainBytes, mimeType: mimeType);
   return <String, Object>{
     'originalFilename': originalFilename,
     'mimeType': mimeType,
@@ -903,9 +937,17 @@ Map<String, Object> _prepareImportFile(String filePath) {
   };
 }
 
-Uint8List _generateThumbnailBytes(Uint8List plainBytes) {
+Uint8List _generateThumbnailBytes(
+  Uint8List plainBytes, {
+  String mimeType = 'image/jpeg',
+}) {
   final decoded = img.decodeImage(plainBytes);
   if (decoded == null) {
+    if (mimeType == 'image/heic' ||
+        mimeType == 'image/avif' ||
+        mimeType == 'image/heif') {
+      return Uint8List.fromList(img.encodeJpg(img.Image(width: 1, height: 1)));
+    }
     throw UnsupportedError('Unable to decode image.');
   }
   final normalized = img.bakeOrientation(decoded);
@@ -925,9 +967,14 @@ Uint8List _generateThumbnailBytes(Uint8List plainBytes) {
 
 String _mimeFromFileName(String filename) {
   final lower = filename.toLowerCase();
+  if (lower.endsWith('.gif')) return 'image/gif';
   if (lower.endsWith('.png')) return 'image/png';
   if (lower.endsWith('.webp')) return 'image/webp';
   if (lower.endsWith('.heic') || lower.endsWith('.heif')) return 'image/heic';
+  if (lower.endsWith('.avif')) return 'image/avif';
+  if (lower.endsWith('.mp4') || lower.endsWith('.m4v')) return 'video/mp4';
+  if (lower.endsWith('.mov')) return 'video/quicktime';
+  if (lower.endsWith('.webm')) return 'video/webm';
   return 'image/jpeg';
 }
 
@@ -935,5 +982,10 @@ bool _isSupportedMimeType(String mimeType) {
   return mimeType == 'image/jpeg' ||
       mimeType == 'image/png' ||
       mimeType == 'image/webp' ||
-      mimeType == 'image/heic';
+      mimeType == 'image/heic' ||
+      mimeType == 'image/gif' ||
+      mimeType == 'image/avif' ||
+      mimeType == 'video/mp4' ||
+      mimeType == 'video/quicktime' ||
+      mimeType == 'video/webm';
 }

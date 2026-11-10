@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:math';
 import 'package:flutter/services.dart';
 
+import '../../../../core/media/animated_media.dart';
+
 /// How much an outgoing video is compressed/downscaled before encryption and upload.
 enum VideoQuality { original, high, medium, low }
 
@@ -119,7 +121,9 @@ class VideoCompressor {
   }) async {
     final meta = await extractMetadata(bytes);
 
-    if (quality == VideoQuality.original || quality.targetHeight == null) {
+    if (quality == VideoQuality.original ||
+        quality.targetHeight == null ||
+        isHdrVideo(bytes)) {
       return PreparedVideo(
         bytes: bytes,
         thumbnail: meta.thumbnail,
@@ -130,14 +134,12 @@ class VideoCompressor {
     }
 
     try {
-      final result = await _channel.invokeMapMethod<Object?, Object?>(
-        'compressVideo',
-        {
-          'bytes': bytes,
-          'targetHeight': quality.targetHeight,
-          'targetBitrate': quality.targetBitrate,
-        },
-      );
+      final result = await _channel
+          .invokeMapMethod<Object?, Object?>('compressVideo', {
+            'bytes': bytes,
+            'targetHeight': quality.targetHeight,
+            'targetBitrate': quality.targetBitrate,
+          });
       if (result != null) {
         final compressedBytes = result['bytes'] as Uint8List?;
         if (compressedBytes != null &&
@@ -173,15 +175,17 @@ class VideoCompressor {
     required int originalBytes,
     int? durationMs,
   }) {
-    final result = <VideoQuality, int>{
-      VideoQuality.original: originalBytes,
-    };
+    final result = <VideoQuality, int>{VideoQuality.original: originalBytes};
 
     final durationSec = (durationMs != null && durationMs > 0)
         ? durationMs / 1000.0
         : null;
 
-    for (final q in [VideoQuality.high, VideoQuality.medium, VideoQuality.low]) {
+    for (final q in [
+      VideoQuality.high,
+      VideoQuality.medium,
+      VideoQuality.low,
+    ]) {
       if (durationSec != null && q.targetBitrate != null) {
         final estimatedBytes = ((q.targetBitrate! * durationSec) / 8).round();
         // Capped so compression estimate never exceeds original size

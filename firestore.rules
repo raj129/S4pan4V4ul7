@@ -320,6 +320,28 @@ service cloud.firestore {
                       && request.resource.data.creatorId == resource.data.creatorId;
         allow delete: if isExistingThreadParticipant(threadId)
                       && isSelf(resource.data.creatorId);
+
+        match /editors/{uid} {
+          allow read: if isExistingThreadParticipant(threadId);
+          allow create, update: if isExistingThreadParticipant(threadId)
+                                && isSelf(uid)
+                                && request.resource.data.keys().hasOnly([
+                                  'userId', 'heartbeatAt', 'expiresAt'
+                                ])
+                                && request.resource.data.userId == uid
+                                && request.resource.data.heartbeatAt is int
+                                && isWithinClientClockSkew(
+                                  request.resource.data.heartbeatAt
+                                )
+                                && request.resource.data.expiresAt is int
+                                && request.resource.data.expiresAt >
+                                   request.resource.data.heartbeatAt
+                                && request.resource.data.expiresAt <=
+                                   request.resource.data.heartbeatAt + 60000
+                                && request.resource.data.expiresAt >
+                                   request.time.toMillis();
+          allow delete: if isExistingThreadParticipant(threadId) && isSelf(uid);
+        }
       }
     }
 

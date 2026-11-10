@@ -1,8 +1,14 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
+import 'package:photo_vault/core/media/animated_media.dart';
+import 'package:photo_vault/core/widgets/animated_media_image.dart';
+import 'package:photo_vault/core/widgets/hdr_preview_toggle_button.dart';
+import 'package:photo_vault/core/widgets/inline_media_preview.dart';
+import 'package:photo_vault/features/chat/application/media/android_chat_secure_media_service.dart';
 import 'package:photo_vault/features/vault/application/usecases/export_photo_usecase.dart';
 import 'package:photo_vault/features/vault/application/usecases/unlock_vault_usecase.dart';
 import 'package:photo_vault/features/vault/application/services/import_manager.dart';
@@ -53,6 +59,9 @@ class GalleryPhotoViewerScreen extends StatefulWidget {
 class _GalleryPhotoViewerScreenState extends State<GalleryPhotoViewerScreen> {
   late final TransformationController _transformationController;
   Uint8List? _photoBytes;
+  Uint8List? _videoBytes;
+  Uint8List? _motionPhotoVideo;
+  bool _containsHdrPhoto = false;
   bool _loading = true;
   String? _error;
 
@@ -66,25 +75,58 @@ class _GalleryPhotoViewerScreenState extends State<GalleryPhotoViewerScreen> {
   @override
   void dispose() {
     _transformationController.dispose();
+    _photoBytes?.fillRange(0, _photoBytes!.length, 0);
+    _videoBytes?.fillRange(0, _videoBytes!.length, 0);
+    _motionPhotoVideo?.fillRange(0, _motionPhotoVideo!.length, 0);
     super.dispose();
   }
 
   Future<void> _loadPhoto() async {
+    Uint8List? bytes;
+    Uint8List? thumbnail;
     try {
-      final bytes = await widget.importManager.loadPhotoBytes(widget.photo);
-      if (!mounted) return;
+      bytes = await widget.importManager.loadPhotoBytes(widget.photo);
+      if (!mounted) {
+        bytes?.fillRange(0, bytes.length, 0);
+        return;
+      }
+      final isVideo = widget.photo.mimeType.startsWith('video/');
+      thumbnail = isVideo
+          ? await widget.importManager.loadThumbnailBytes(widget.photo)
+          : null;
+      if (!mounted) {
+        bytes?.fillRange(0, bytes.length, 0);
+        thumbnail?.fillRange(0, thumbnail.length, 0);
+        return;
+      }
       setState(() {
-        _photoBytes = bytes;
+        if (isVideo) {
+          _videoBytes = bytes;
+          _photoBytes = thumbnail;
+          _containsHdrPhoto = false;
+        } else {
+          _photoBytes = bytes;
+          _motionPhotoVideo = bytes == null
+              ? null
+              : extractMotionPhotoVideo(bytes);
+          _containsHdrPhoto = bytes != null && isHdrImage(bytes);
+        }
         _loading = false;
         _error = null;
       });
+      bytes = null;
+      thumbnail = null;
     } on VaultLockedException {
+      bytes?.fillRange(0, bytes.length, 0);
+      thumbnail?.fillRange(0, thumbnail.length, 0);
       if (!mounted) return;
       setState(() {
         _error = 'Vault session is locked. Please unlock to view.';
         _loading = false;
       });
     } catch (e) {
+      bytes?.fillRange(0, bytes.length, 0);
+      thumbnail?.fillRange(0, thumbnail.length, 0);
       if (!mounted) return;
       setState(() {
         _error = 'Failed to load photo: $e';
@@ -132,6 +174,13 @@ class _GalleryPhotoViewerScreenState extends State<GalleryPhotoViewerScreen> {
                 onPressed: () => context.pop(),
               ),
               actions: [
+                if (_videoBytes != null)
+                  IconButton(
+                    tooltip: 'Play video',
+                    onPressed: _playVaultVideo,
+                    icon: const Icon(Icons.play_circle_outline_rounded),
+                  ),
+                if (_containsHdrPhoto) const HdrPreviewToggleButton(),
                 if (widget.isTrashPreview) ...[
                   IconButton(
                     icon: const Icon(Icons.restore_outlined),
@@ -209,6 +258,29 @@ class _GalleryPhotoViewerScreenState extends State<GalleryPhotoViewerScreen> {
       );
     }
 
+    final Widget mediaContent;
+    if (_motionPhotoVideo case final video?) {
+      mediaContent = InlineMotionPhotoPreview(
+        videoBytes: video,
+        stillBytes: _photoBytes!,
+        fit: BoxFit.contain,
+      );
+    } else if (_containsHdrPhoto) {
+      mediaContent = InlineHdrImagePreview(
+        bytes: _photoBytes!,
+        fit: BoxFit.contain,
+      );
+    } else {
+      mediaContent = AnimatedMediaImage(
+        bytes: _photoBytes!,
+        fit: BoxFit.contain,
+        errorBuilder: (context, error, stackTrace) => const ErrorView(
+          title: 'Unsupported image',
+          message: 'Cannot display photo',
+        ),
+      );
+    }
+
     return LayoutBuilder(
       builder: (context, constraints) {
         return GestureDetector(
@@ -224,19 +296,28 @@ class _GalleryPhotoViewerScreenState extends State<GalleryPhotoViewerScreen> {
             child: SizedBox(
               width: constraints.maxWidth,
               height: constraints.maxHeight,
-              child: Image.memory(
-                _photoBytes!,
-                fit: BoxFit.contain,
-                errorBuilder: (context, error, stackTrace) => const ErrorView(
-                  title: 'Unsupported image',
-                  message: 'Cannot display photo',
-                ),
-              ),
+              child: mediaContent,
             ),
           ),
         );
       },
     );
+  }
+
+  Future<void> _playVaultVideo() async {
+    final bytes = _videoBytes;
+    if (bytes == null) return;
+    final playerBytes = Uint8List.fromList(bytes);
+    try {
+      await const AndroidChatSecureMediaService().showVideo(playerBytes);
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not play this media: $error')),
+      );
+    } finally {
+      playerBytes.fillRange(0, playerBytes.length, 0);
+    }
   }
 
   void _handleDoubleTap(Offset localPosition, BoxConstraints constraints) {

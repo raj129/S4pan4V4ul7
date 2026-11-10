@@ -56,6 +56,7 @@ class ChatSecureMediaPlugin : FlutterPlugin, ActivityAware, MethodChannel.Method
     private var permissionAction: (() -> Unit)? = null
     private var viewer: Dialog? = null
     private var viewerCleanup: (() -> Unit)? = null
+    private val inlineMediaViews = linkedSetOf<InlineMediaPreview>()
     private var recorder: ChatEncryptedRecorder? = null
     private var recordingBusy = false
     private var recordingEpoch = 0
@@ -75,6 +76,14 @@ class ChatSecureMediaPlugin : FlutterPlugin, ActivityAware, MethodChannel.Method
         context = binding.applicationContext
         channel = MethodChannel(binding.binaryMessenger, "photo_vault/chat_secure_media")
         channel.setMethodCallHandler(this)
+        binding.platformViewRegistry.registerViewFactory(
+            INLINE_MEDIA_VIEW_TYPE,
+            InlineMediaPreviewFactory(
+                binding.binaryMessenger,
+                { view -> inlineMediaViews.add(view) },
+                { view -> inlineMediaViews.remove(view) },
+            ),
+        )
         engineAttached = true
         FirebaseAuth.getInstance().addAuthStateListener(sourceAuthListener)
         (context as Application).registerActivityLifecycleCallbacks(this)
@@ -187,7 +196,12 @@ class ChatSecureMediaPlugin : FlutterPlugin, ActivityAware, MethodChannel.Method
                     } else if (call.method == "showPdf") {
                         showPdf(bytes, result)
                     } else {
-                        if (call.method == "showVideo") showVideoPlayer(bytes, result, call.argument<Boolean>("measureStartup") == true)
+                        if (call.method == "showVideo") showVideoPlayer(
+                            bytes,
+                            result,
+                            call.argument<Boolean>("measureStartup") == true,
+                            call.argument<Boolean>("loop") == true
+                        )
                         else showAudioPlayer(bytes, result)
                     }
                 }
@@ -737,7 +751,12 @@ class ChatSecureMediaPlugin : FlutterPlugin, ActivityAware, MethodChannel.Method
     }
 
     @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
-    private fun showVideoPlayer(bytes: ByteArray, result: MethodChannel.Result, measureStartup: Boolean) {
+    private fun showVideoPlayer(
+        bytes: ByteArray,
+        result: MethodChannel.Result,
+        measureStartup: Boolean,
+        loop: Boolean
+    ) {
         val openedAt = SystemClock.elapsedRealtime()
         val host = activity
         if (host == null || viewer != null || camera != null) {
@@ -780,6 +799,11 @@ class ChatSecureMediaPlugin : FlutterPlugin, ActivityAware, MethodChannel.Method
                 androidx.media3.datasource.DataSource.Factory { ChatMedia3DataSource(source) }
             ).createMediaSource(androidx.media3.common.MediaItem.fromUri("chat-memory://video"))
             val playback = androidx.media3.exoplayer.ExoPlayer.Builder(host).build()
+            playback.repeatMode = if (loop) {
+                androidx.media3.common.Player.REPEAT_MODE_ONE
+            } else {
+                androidx.media3.common.Player.REPEAT_MODE_OFF
+            }
             player = playback
             val view = androidx.media3.ui.PlayerView(host).apply {
                 resizeMode = androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
@@ -1234,6 +1258,7 @@ class ChatSecureMediaPlugin : FlutterPlugin, ActivityAware, MethodChannel.Method
         generation++
         viewer?.dismiss()
         releaseViewer()
+        inlineMediaViews.toList().forEach { it.close() }
         camera?.close()
         camera = null
         cancelRecording()

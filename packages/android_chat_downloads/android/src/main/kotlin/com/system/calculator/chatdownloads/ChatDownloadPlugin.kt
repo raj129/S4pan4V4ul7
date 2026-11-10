@@ -25,7 +25,7 @@ class ChatDownloadPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
     private lateinit var channel: MethodChannel
     private lateinit var localMediaChannel: MethodChannel
     private lateinit var localMediaHandler: ChatLocalMediaChannel
-    private val io = Executors.newSingleThreadExecutor()
+    private val io = Executors.newFixedThreadPool(4)
     private val main = Handler(Looper.getMainLooper())
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         context = binding.applicationContext
@@ -46,9 +46,12 @@ class ChatDownloadPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
 
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
         io.execute {
+            val started = System.nanoTime()
+            android.util.Log.i("ChatMediaDebug", "native ${call.method} begin")
             var response: Any? = null
             try {
                 response = ChatDownloadRuntime.locked {
+                    android.util.Log.i("ChatMediaDebug", "native ${call.method} lock acquired after ${(System.nanoTime() - started) / 1_000_000}ms")
                     val uid = FirebaseAuth.getInstance().currentUser?.uid
                         ?: throw SecurityException("Chat sign-in required")
                     if (call.method !in listOf("list", "wake")) {
@@ -65,6 +68,7 @@ class ChatDownloadPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
                         val job = store.get(id)
                         when (call.method) {
                             "enqueue" -> {
+                                android.util.Log.i("ChatMediaDebug", "native enqueue state=${job?.getString("state")}")
                                 require(call.argument<String>("threadId") == segments[1])
                                 val senderId = call.argument<String>("senderId")
                                 if (senderId != null) {

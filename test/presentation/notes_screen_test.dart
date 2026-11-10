@@ -18,6 +18,10 @@ class _NotesRepository implements NotesRepository {
   bool failSave = false;
   String? watchedThread;
   Completer<void>? nextPrivateSaveGate;
+  final Map<String, Set<String>> editors = {};
+  final Map<String, StreamController<List<String>>> editorUpdates = {};
+
+  String _editorKey(String threadId, String noteId) => '$threadId/$noteId';
 
   @override
   Stream<List<AppNote>> watchPrivateNotes() async* {
@@ -30,6 +34,34 @@ class _NotesRepository implements NotesRepository {
     watchedThread = threadId;
     yield List.of(shared);
     yield* sharedUpdates.stream;
+  }
+
+  @override
+  Stream<List<String>> watchThreadNoteEditors({
+    required String threadId,
+    required String noteId,
+  }) async* {
+    final key = _editorKey(threadId, noteId);
+    yield List.of(editors[key] ?? const {});
+    yield* (editorUpdates[key] ??= StreamController<List<String>>.broadcast())
+        .stream;
+  }
+
+  @override
+  Future<void> setThreadNoteEditing({
+    required String threadId,
+    required String noteId,
+    required String uid,
+    required bool isEditing,
+  }) async {
+    final key = _editorKey(threadId, noteId);
+    final active = editors.putIfAbsent(key, () => <String>{});
+    if (isEditing) {
+      active.add(uid);
+    } else {
+      active.remove(uid);
+    }
+    editorUpdates[key]?.add(List.of(active));
   }
 
   @override
@@ -82,6 +114,9 @@ class _NotesRepository implements NotesRepository {
   Future<void> close() async {
     await privateUpdates.close();
     await sharedUpdates.close();
+    for (final controller in editorUpdates.values) {
+      await controller.close();
+    }
   }
 }
 
@@ -217,6 +252,37 @@ void main() {
     expect(repository.shared.single.threadId, 'chat-1');
     expect(sharedNoteIds, [repository.shared.single.id]);
     expect(find.byType(NoteEditorScreen), findsOneWidget);
+  });
+
+  testWidgets('shared note shows an active editor and releases its lease', (
+    tester,
+  ) async {
+    final note = _note('Shared', threadId: 'chat-1');
+    repository.shared.add(note);
+    await repository.setThreadNoteEditing(
+      threadId: 'chat-1',
+      noteId: note.id,
+      uid: 'other-user',
+      isEditing: true,
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: NoteEditorScreen(
+          note: note,
+          notesRepository: repository,
+          currentUserId: 'me',
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('Someone else is editing this note'), findsOneWidget);
+    expect(repository.editors['chat-1/Shared'], contains('me'));
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+    expect(repository.editors['chat-1/Shared'], isNot(contains('me')));
   });
 
   testWidgets('private create starts empty and saves before opening editor', (

@@ -10,6 +10,7 @@ import '../../application/media/android_chat_local_media.dart';
 import '../../application/media/android_chat_secure_media_service.dart';
 import '../../domain/entities/chat_message.dart';
 import '../../application/media/media_send_status.dart';
+import 'package:photo_vault/core/widgets/animated_media_image.dart';
 import '../screens/chat_image_viewer_screen.dart';
 import 'attachment_download_progress.dart';
 import 'attachment_upload_progress.dart';
@@ -72,7 +73,6 @@ class ChatMediaPreview extends StatefulWidget {
 
 class _ChatMediaPreviewState extends State<ChatMediaPreview> {
   Uint8List? _bytes;
-  ResizeImage? _previewImage;
   bool _loading = false;
   bool _failed = false;
   Object? _error;
@@ -82,6 +82,7 @@ class _ChatMediaPreviewState extends State<ChatMediaPreview> {
   static const _maxAutoRetries = 3;
 
   Timer? _retryTimer;
+  Timer? _loadTimer;
 
   @override
   void initState() {
@@ -118,7 +119,7 @@ class _ChatMediaPreviewState extends State<ChatMediaPreview> {
     if (bytes == null) return;
     _retryTimer?.cancel();
     setState(() {
-      _bytes = bytes;
+      _bytes = Uint8List.fromList(bytes);
       _loading = false;
       _failed = false;
       _error = null;
@@ -129,6 +130,7 @@ class _ChatMediaPreviewState extends State<ChatMediaPreview> {
   void dispose() {
     widget.loader.removeListener(_onLoaderChanged);
     _retryTimer?.cancel();
+    _loadTimer?.cancel();
     _generation++;
     _releaseBytes();
     super.dispose();
@@ -138,9 +140,6 @@ class _ChatMediaPreviewState extends State<ChatMediaPreview> {
     final bytes = _bytes;
     _bytes = null;
     if (bytes == null) return;
-    final previewImage = _previewImage;
-    _previewImage = null;
-    if (previewImage != null) unawaited(previewImage.evict());
     unawaited(MemoryImage(bytes).evict());
     bytes.fillRange(0, bytes.length, 0);
   }
@@ -170,11 +169,16 @@ class _ChatMediaPreviewState extends State<ChatMediaPreview> {
     _error = null;
     final message = widget.message;
     final ref = message.previewRef;
+    debugPrint(
+      'ChatMediaDebug start id=${message.messageId} type=${message.mediaType} '
+      'previewRef=${ref == null ? 'null' : 'set'} mediaRef=${message.mediaRef == null ? 'null' : 'set'} '
+      'sending=${widget.sendStatus != null}',
+    );
     if (ref == null) return;
     if (_bytes != null) return;
     final cached = widget.loader.cached(ref);
     if (cached != null) {
-      _bytes = cached;
+      _bytes = Uint8List.fromList(cached);
       return;
     }
     if (widget.sendStatus != null) return;
@@ -190,11 +194,7 @@ class _ChatMediaPreviewState extends State<ChatMediaPreview> {
 
   Future<void> _load(ChatMessage message, String ref, int generation) async {
     try {
-      final bytes = await widget.loader.load(
-        threadId: message.threadId,
-        storagePath: ref,
-        senderId: message.senderId,
-      );
+      final bytes = await _loadBounded(message, ref);
       if (!mounted || generation != _generation || _bytes != null) {
         bytes.fillRange(0, bytes.length, 0);
         return;
@@ -205,6 +205,7 @@ class _ChatMediaPreviewState extends State<ChatMediaPreview> {
         _failed = bytes.isEmpty;
       });
     } catch (error) {
+      debugPrint('ChatMediaDebug load error=${error.runtimeType} $error');
       if (!mounted || generation != _generation || _bytes != null) return;
       setState(() {
         _loading = false;
@@ -212,6 +213,41 @@ class _ChatMediaPreviewState extends State<ChatMediaPreview> {
         _error = error;
       });
     }
+  }
+
+  /// Bounds a thumbnail wait so a stalled download shows Retry, not a spinner.
+  /// The timer is owned by this state so disposing the tile cancels it.
+  Future<Uint8List> _loadBounded(ChatMessage message, String ref) {
+    final completer = Completer<Uint8List>();
+    _loadTimer?.cancel();
+    _loadTimer = Timer(widget.loader.loadTimeout, () {
+      if (completer.isCompleted) return;
+      completer.completeError(
+        TimeoutException(
+          'Preview is taking too long. Tap to retry.',
+          widget.loader.loadTimeout,
+        ),
+      );
+    });
+    widget.loader
+        .load(
+          threadId: message.threadId,
+          storagePath: ref,
+          senderId: message.senderId,
+        )
+        .then(
+          (bytes) {
+            if (completer.isCompleted) {
+              bytes.fillRange(0, bytes.length, 0);
+            } else {
+              completer.complete(bytes);
+            }
+          },
+          onError: (Object error, StackTrace stack) {
+            if (!completer.isCompleted) completer.completeError(error, stack);
+          },
+        );
+    return completer.future.whenComplete(() => _loadTimer?.cancel());
   }
 
   @override
@@ -375,31 +411,18 @@ class _ChatMediaPreviewState extends State<ChatMediaPreview> {
     final pixelRatio = MediaQuery.devicePixelRatioOf(context);
     final cacheWidth = (width * pixelRatio).ceil().clamp(1, 1024);
     final cacheHeight = (height * pixelRatio).ceil().clamp(1, 1024);
-    if (_previewImage?.width != cacheWidth ||
-        _previewImage?.height != cacheHeight) {
-      final previous = _previewImage;
-      if (previous != null) unawaited(previous.evict());
-      // Image.memory's cache sizing uses ResizeImage too, but fit also
-      // preserves the source aspect ratio when the bubble crops tall photos.
-      _previewImage = ResizeImage(
-        MemoryImage(_bytes!),
-        width: cacheWidth,
-        height: cacheHeight,
-        policy: ResizeImagePolicy.fit,
-      );
-    }
     return Stack(
       fit: StackFit.expand,
       children: [
-        Image(
-          image: _previewImage!,
+        AnimatedMediaImage(
+          bytes: _bytes!,
+          cacheWidth: cacheWidth,
+          cacheHeight: cacheHeight,
           fit:
               widget.message.mediaType == MessageType.gif ||
                   widget.message.mediaType == MessageType.sticker
               ? BoxFit.contain
               : BoxFit.cover,
-          // Videos have no decodable poster frame yet; show a
-          // neutral tile under the play button instead.
           errorBuilder: (_, _, _) => const ColoredBox(
             color: Colors.black54,
             child: Center(

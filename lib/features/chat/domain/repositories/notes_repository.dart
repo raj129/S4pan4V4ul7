@@ -13,6 +13,20 @@ abstract class NotesRepository {
   /// Create or update a shared note in a thread with E2EE encryption.
   Future<void> saveThreadNote(AppNote note);
 
+  /// Observe participant UIDs with a non-expired editing lease for a note.
+  Stream<List<String>> watchThreadNoteEditors({
+    required String threadId,
+    required String noteId,
+  });
+
+  /// Renew or release the caller's editing lease for a shared note.
+  Future<void> setThreadNoteEditing({
+    required String threadId,
+    required String noteId,
+    required String uid,
+    required bool isEditing,
+  });
+
   /// Delete a shared note from a thread.
   Future<void> deleteThreadNote({
     required String threadId,

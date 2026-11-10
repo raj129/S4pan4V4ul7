@@ -222,10 +222,7 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
         .map((f) => XFile(f.path))
         .toList(growable: false);
     if (mapped.isEmpty) return;
-    _deps.importManager.setPendingImportSelection(
-      files: mapped,
-      source: 'share-intent',
-    );
+    _deps.importManager.setPendingShareFiles(mapped);
     // On a cold start the router is still resolving its initial location;
     // navigating before then is overwritten and leaves a blank screen.
     for (var i = 0; i < 100; i++) {
@@ -233,7 +230,7 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
       await Future<void>.delayed(const Duration(milliseconds: 50));
       if (!mounted) return;
     }
-    _router.go('/lock?returnTo=%2Fimport%2Fshare-intent');
+    _router.go('/');
     unawaited(ReceiveSharingIntent.instance.reset());
   }
 

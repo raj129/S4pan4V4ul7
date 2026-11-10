@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
 import 'package:photo_vault/features/chat/application/services/chat_backup_service.dart';
+import 'package:photo_vault/core/media/animated_media.dart';
 import 'package:photo_vault/features/vault/application/services/pin_validator.dart';
 import 'package:photo_vault/features/vault/application/usecases/unlock_vault_usecase.dart';
 import 'package:photo_vault/core/widgets/app_surfaces.dart';
@@ -53,6 +54,9 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
+  MediaAnimationMode _motionPhotoMode =
+      MediaAnimationPreference.instance.mode.value;
+  bool _hdrPreviewEnabled = HdrPreviewPreference.instance.enabled.value;
   bool _autoLockOnBackground = true;
   int _autoLockTimeoutSeconds =
       SettingsRepository.defaultAutoLockTimeoutSeconds;
@@ -81,6 +85,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   void initState() {
     super.initState();
+    MediaAnimationPreference.instance.mode.addListener(
+      _onMotionPhotoModeChanged,
+    );
+    HdrPreviewPreference.instance.enabled.addListener(_onHdrPreviewChanged);
+    unawaited(_loadMediaPreviewPreferences());
     _loadSettings();
     unawaited(_loadAbout());
     unawaited(_loadBackgroundStatus());
@@ -134,7 +143,63 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   @override
   void dispose() {
+    MediaAnimationPreference.instance.mode.removeListener(
+      _onMotionPhotoModeChanged,
+    );
+    HdrPreviewPreference.instance.enabled.removeListener(_onHdrPreviewChanged);
     super.dispose();
+  }
+
+  Future<void> _loadMediaPreviewPreferences() async {
+    try {
+      await Future.wait([
+        MediaAnimationPreference.instance.load(),
+        HdrPreviewPreference.instance.load(),
+      ]);
+    } catch (error) {
+      debugPrint('Could not load media preview settings: $error');
+    }
+    if (!mounted) return;
+    setState(() {
+      _motionPhotoMode = MediaAnimationPreference.instance.mode.value;
+      _hdrPreviewEnabled = HdrPreviewPreference.instance.enabled.value;
+    });
+  }
+
+  void _onMotionPhotoModeChanged() {
+    if (!mounted) return;
+    setState(
+      () => _motionPhotoMode = MediaAnimationPreference.instance.mode.value,
+    );
+  }
+
+  void _onHdrPreviewChanged() {
+    if (!mounted) return;
+    setState(
+      () => _hdrPreviewEnabled = HdrPreviewPreference.instance.enabled.value,
+    );
+  }
+
+  Future<void> _setMotionPhotoMode(MediaAnimationMode mode) async {
+    try {
+      await MediaAnimationPreference.instance.setMode(mode);
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not save Motion Photo setting: $error')),
+      );
+    }
+  }
+
+  Future<void> _setHdrPreview(bool enabled) async {
+    try {
+      await HdrPreviewPreference.instance.setEnabled(enabled);
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not save HDR preview setting: $error')),
+      );
+    }
   }
 
   Future<void> _selectAutoLockTimeout(int seconds) async {
@@ -663,6 +728,73 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 leading: const Icon(Icons.info_outline_rounded),
                 title: const Text('Version'),
                 subtitle: Text(_version ?? '…'),
+              ),
+            ],
+          ),
+          const SectionHeader('Media preview'),
+          SettingsCard(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(
+                  AppSpacing.lg,
+                  AppSpacing.md,
+                  AppSpacing.lg,
+                  AppSpacing.md,
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Motion Photo playback',
+                      style: theme.textTheme.titleSmall,
+                    ),
+                    const SizedBox(height: AppSpacing.sm),
+                    Wrap(
+                      spacing: AppSpacing.sm,
+                      children: [
+                        ChoiceChip(
+                          key: const Key('motion-photo-loop-mode'),
+                          avatar: const Icon(Icons.repeat_rounded, size: 18),
+                          label: const Text('Loop'),
+                          selected: _motionPhotoMode == MediaAnimationMode.loop,
+                          onSelected: (_) => unawaited(
+                            _setMotionPhotoMode(MediaAnimationMode.loop),
+                          ),
+                        ),
+                        ChoiceChip(
+                          key: const Key('motion-photo-once-mode'),
+                          avatar: const Icon(
+                            Icons.play_arrow_rounded,
+                            size: 18,
+                          ),
+                          label: const Text('Play once'),
+                          selected: _motionPhotoMode == MediaAnimationMode.once,
+                          onSelected: (_) => unawaited(
+                            _setMotionPhotoMode(MediaAnimationMode.once),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: AppSpacing.xs),
+                    Text(
+                      _motionPhotoMode == MediaAnimationMode.loop
+                          ? 'Loop until paused in chat and vault.'
+                          : 'Play once, then return to the still photo.',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: cs.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              _SettingsSwitch(
+                icon: Icons.hdr_on_rounded,
+                title: 'HDR photo preview',
+                subtitle: _hdrPreviewEnabled
+                    ? 'Use HDR rendering where supported.'
+                    : 'Use the standard photo preview.',
+                value: _hdrPreviewEnabled,
+                onChanged: _setHdrPreview,
               ),
             ],
           ),

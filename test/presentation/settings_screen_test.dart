@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:photo_vault/core/media/animated_media.dart';
 import 'package:photo_vault/core/platform/battery_optimization.dart';
 import 'package:photo_vault/core/platform/screenshot_protection.dart';
 import 'package:photo_vault/core/testing/repositories/in_memory_settings_repository.dart';
@@ -128,6 +130,47 @@ void main() {
     expect(await settings.isShowLastSeenEnabled(), isFalse);
     expect(lastSeenChanges, [false]);
     expect(find.textContaining("won't see other people's"), findsOneWidget);
+  });
+
+  testWidgets('media preview settings persist for chat and vault', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    await pump(tester, _FakeBattery(exempt: true));
+    await tester.scrollUntilVisible(
+      find.text('Motion Photo playback'),
+      240,
+      scrollable: find.byType(Scrollable).first,
+    );
+
+    await tester.scrollUntilVisible(
+      find.byKey(const Key('motion-photo-once-mode')),
+      120,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.ensureVisible(find.byKey(const Key('motion-photo-once-mode')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('motion-photo-once-mode')));
+    await tester.pumpAndSettle();
+    expect(
+      MediaAnimationPreference.instance.mode.value,
+      MediaAnimationMode.once,
+    );
+
+    await tester.scrollUntilVisible(
+      find.text('HDR photo preview'),
+      120,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.ensureVisible(find.text('HDR photo preview'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('HDR photo preview'));
+    await tester.pumpAndSettle();
+    expect(HdrPreviewPreference.instance.enabled.value, isFalse);
+
+    final preferences = await SharedPreferences.getInstance();
+    expect(preferences.getString('settings.media_animation_mode'), 'once');
+    expect(preferences.getBool('settings.hdr_preview_enabled'), isFalse);
   });
 
   testWidgets('notification settings navigate, list, and edit each type', (

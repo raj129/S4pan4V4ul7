@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:image_picker/image_picker.dart';
 
 import 'package:photo_vault/features/chat/application/media/chat_share_inbox.dart';
@@ -210,6 +211,58 @@ class _ImportScreenState extends State<ImportScreen> {
     }
   }
 
+  Future<void> _pickSupportedMedia() async {
+    if (_isPicking) return;
+    setState(() => _isPicking = true);
+    try {
+      final result = await ExternalActivityGuard.run(
+        () => FilePicker.pickFiles(
+          type: FileType.custom,
+          allowedExtensions: [
+            'jpg',
+            'jpeg',
+            'png',
+            'gif',
+            'webp',
+            'heic',
+            'heif',
+            'avif',
+            'mp4',
+            'mov',
+            'm4v',
+            'webm',
+          ],
+        ),
+      );
+      if (!mounted || result.isEmpty) return;
+      final files = result
+          .where((file) => file.path != null)
+          .map((file) => XFile(file.path!, name: file.name))
+          .toList(growable: false);
+      if (files.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Selected media is unavailable.')),
+        );
+        return;
+      }
+      setState(() {
+        _selectedFiles = files;
+        _selectedSource = 'gallery-video';
+      });
+      widget.importManager.setPendingImportSelection(
+        files: files,
+        source: 'gallery-video',
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Unable to open video picker: $error')),
+      );
+    } finally {
+      if (mounted) setState(() => _isPicking = false);
+    }
+  }
+
   void _startImport() {
     final source = _selectedSource;
     if (_selectedFiles.isEmpty || source == null || _isQueueing) return;
@@ -256,9 +309,7 @@ class _ImportScreenState extends State<ImportScreen> {
                 children: [
                   Expanded(
                     child: Text(
-                      hasSelection
-                          ? 'Review photos to encrypt'
-                          : 'Import photos',
+                      hasSelection ? 'Review media to encrypt' : 'Import media',
                       style: theme.textTheme.headlineSmall,
                     ),
                   ),
@@ -274,8 +325,8 @@ class _ImportScreenState extends State<ImportScreen> {
               const SizedBox(height: AppSpacing.sm),
               Text(
                 hasSelection
-                    ? 'Review your photos below and hit Encrypt to secure them in your vault.'
-                    : 'Choose photos to encrypt and add to your vault.',
+                    ? 'Review your media below and hit Encrypt to secure it in your vault.'
+                    : 'Choose photos, videos, GIFs, or motion photos to encrypt and add to your vault.',
                 style: theme.textTheme.bodyMedium,
               ),
               const SizedBox(height: AppSpacing.lg),
@@ -297,6 +348,15 @@ class _ImportScreenState extends State<ImportScreen> {
                       ),
                       trailing: const Icon(Icons.chevron_right),
                       onTap: _isPicking ? null : _pickFromGallery,
+                    ),
+                    ListTile(
+                      leading: const Icon(Icons.video_library_outlined),
+                      title: const Text('Choose HDR or animated media'),
+                      subtitle: const Text(
+                        'Select videos, GIFs, or motion photos to keep in your vault.',
+                      ),
+                      trailing: const Icon(Icons.chevron_right),
+                      onTap: _isPicking ? null : _pickSupportedMedia,
                     ),
                     ListTile(
                       leading: const Icon(Icons.photo_camera_outlined),

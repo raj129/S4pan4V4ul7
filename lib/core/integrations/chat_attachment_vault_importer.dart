@@ -86,14 +86,21 @@ class ChatAttachmentVaultImporter {
         // Persist the intended ID before files or repository writes. A restart
         // reconciles this ID after an ambiguous database commit.
         await _manager.writeChatMove(sourceId, journal);
-        item ??= await _manager.commitChatAttachment(
-          id: id,
-          bytes: bytes,
-          thumbnail: prepared.thumbnail,
-          filename: safeName,
-          mimeType: prepared.mimeType,
-          checksum: checksum,
-        );
+        final generatedThumbnail = prepared.mimeType.startsWith('video/')
+            ? await _manager.extractVideoThumbnail(bytes)
+            : null;
+        try {
+          item ??= await _manager.commitChatAttachment(
+            id: id,
+            bytes: bytes,
+            thumbnail: generatedThumbnail ?? prepared.thumbnail,
+            filename: safeName,
+            mimeType: prepared.mimeType,
+            checksum: checksum,
+          );
+        } finally {
+          generatedThumbnail?.fillRange(0, generatedThumbnail.length, 0);
+        }
       } finally {
         prepared.thumbnail.fillRange(0, prepared.thumbnail.length, 0);
       }
@@ -205,10 +212,10 @@ class ChatAttachmentVaultImporter {
     if (ascii(4, 8) == 'ftyp') {
       final brand = ascii(8, 12);
       detected = brand == 'M4A ' ? 'audio/mp4' : 'video/mp4';
-      if (['heic', 'heix', 'heif', 'mif1', 'avif'].contains(brand)) {
-        // HEIF/AVIF cannot be decoded by the vault photo pipeline. Keep the
-        // original bytes usable as generic attachments instead.
-        detected = 'application/octet-stream';
+      if (['heic', 'heix', 'heif', 'hevc', 'hevx', 'mif1'].contains(brand)) {
+        detected = 'image/heic';
+      } else if (brand == 'avif') {
+        detected = 'image/avif';
       }
     }
     if (ascii(0, 3) == 'ID3' ||
@@ -219,6 +226,14 @@ class ChatAttachmentVaultImporter {
     if (ascii(0, 4) == 'OggS') detected = 'audio/ogg';
     if (ascii(0, 4) == 'fLaC') detected = 'audio/flac';
     if (prefix([0x1a, 0x45, 0xdf, 0xa3])) detected = 'video/webm';
+    if (detected == 'image/heic' || detected == 'image/avif') {
+      final icon = img.Image(width: 64, height: 64);
+      img.fill(icon, color: img.ColorRgb8(65, 78, 96));
+      return PreparedChatAttachment(
+        detected,
+        Uint8List.fromList(img.encodeJpg(icon)),
+      );
+    }
     if (detected.startsWith('image/')) {
       img.Image? image;
       try {

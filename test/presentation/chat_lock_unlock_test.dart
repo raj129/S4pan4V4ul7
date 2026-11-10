@@ -1,7 +1,9 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:photo_vault/core/app/app_session.dart';
 import 'package:photo_vault/core/di/app_dependencies.dart';
 import 'package:photo_vault/features/chat/di/chat_dependencies.dart';
@@ -20,6 +22,7 @@ import 'package:photo_vault/features/chat/domain/repositories/typing_repository.
 import 'package:photo_vault/features/chat/domain/repositories/user_repository.dart';
 import 'package:photo_vault/core/app/main_scaffold.dart';
 import 'package:photo_vault/features/chat/presentation/screens/thread_screen.dart';
+import 'package:photo_vault/features/vault/presentation/screens/import/import_screen.dart';
 import 'package:photo_vault/features/vault/presentation/screens/lock/lock_screen.dart';
 import 'package:photo_vault/features/vault/presentation/state/onboarding_cubit.dart';
 
@@ -86,6 +89,72 @@ class _FakeCryptoService implements ChatCryptoService {
 }
 
 void main() {
+  testWidgets(
+    'shared media waits on Calculator and resumes import after deliberate vault trigger',
+    (tester) async {
+      final deps = AppDependencies(persistentState: false);
+      await deps.initialize();
+      await deps.vaultRepository.initializeVault(
+        vaultId: 'v1',
+        settings: VaultSettings.defaults(mode: UserMode.localOnly),
+      );
+      final sharedFile = XFile.fromData(
+        Uint8List.fromList([1, 2, 3]),
+        name: 'shared.jpg',
+      );
+      deps.importManager.setPendingShareFiles([sharedFile]);
+
+      final session = AppSessionState(initialMode: UserMode.localOnly);
+      final onboardingCubit = OnboardingCubit(
+        authRepository: deps.authRepository,
+        createVaultUseCase: deps.createVaultUseCase,
+        pinValidator: deps.pinValidator,
+        restoreFlowService: deps.restoreFlowService,
+      );
+      final router = buildAppRouter(
+        deps: deps,
+        session: session,
+        onboardingCubit: onboardingCubit,
+        onSettingsChanged: () async {},
+      );
+      tester.view.physicalSize = const Size(1080, 2400);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      await tester.pumpWidget(MaterialApp.router(routerConfig: router));
+      await tester.pumpAndSettle();
+      expect(router.routeInformationProvider.value.uri.path, '/');
+      expect(find.byType(LockScreen), findsNothing);
+      expect(deps.importManager.hasPendingShareFiles, isTrue);
+
+      final seven = await tester.startGesture(
+        tester.getCenter(find.byKey(const ValueKey('digit-7'))),
+        pointer: 1,
+      );
+      final equals = await tester.startGesture(
+        tester.getCenter(find.byKey(const ValueKey('equals'))),
+        pointer: 2,
+      );
+      await tester.pump(const Duration(milliseconds: 1250));
+      expect(find.byType(LockScreen), findsOneWidget);
+      await seven.up();
+      await equals.up();
+
+      session.unlock();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+      expect(find.byType(ImportScreen), findsOneWidget);
+      expect(deps.importManager.pendingImportSource, 'share-intent');
+      expect(find.byType(LockScreen), findsNothing);
+      expect(deps.importManager.takePendingImportSelection(), [sharedFile]);
+      expect(deps.importManager.hasPendingShareFiles, isFalse);
+
+      router.dispose();
+      await onboardingCubit.close();
+    },
+  );
+
   testWidgets(
     'Auto-lock and unlock while chat thread is open does not throw duplicate GlobalKey error',
     (WidgetTester tester) async {

@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:flutter/widgets.dart';
 import 'package:image/image.dart' as img;
 
+import 'package:photo_vault/core/media/animated_media.dart';
 import 'package:photo_vault/features/chat/application/crypto/chat_crypto_service.dart';
 import 'package:photo_vault/features/chat/application/media/android_chat_local_media.dart';
 import 'package:photo_vault/features/chat/application/media/android_chat_uploads.dart';
@@ -848,11 +849,12 @@ class ThreadUploadCoordinator {
     if (threadId == null) return;
 
     for (final item in items) {
+      final type = isGif(item.bytes) ? MessageType.gif : MessageType.image;
       final preview = ChatMessage.mediaPreviewFor(
-        MessageType.image,
+        type,
         filename: item.filename,
       );
-      final meta = buildMediaMeta(MessageType.image, item.bytes);
+      final meta = buildMediaMeta(type, item.bytes);
       _setPendingMessage(
         item.messageId,
         ChatMessage(
@@ -862,7 +864,7 @@ class ThreadUploadCoordinator {
           encryptedText: '',
           sentAt: DateTime.now().toUtc(),
           deletedFor: const [],
-          mediaType: MessageType.image,
+          mediaType: type,
           mediaRef: 'chat_media/$threadId/${item.messageId}/media.enc',
           mediaMeta: meta,
           localDecryptedText: preview,
@@ -882,7 +884,7 @@ class ThreadUploadCoordinator {
         await sendMedia(
           messageId: item.messageId,
           rawBytes: item.bytes,
-          type: MessageType.image,
+          type: isGif(item.bytes) ? MessageType.gif : MessageType.image,
           quality: quality,
           sourceUri: item.sourceUri,
           sourceFlags: item.sourceFlags,

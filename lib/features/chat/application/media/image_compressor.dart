@@ -3,6 +3,8 @@ import 'dart:typed_data';
 
 import 'package:image/image.dart' as img;
 
+import '../../../../core/media/animated_media.dart';
+
 /// How much an outgoing photo is downscaled before it is encrypted and sent.
 enum ImageQuality { original, high, medium, low }
 
@@ -101,14 +103,17 @@ class ImageCompressor {
 }
 
 Map<ImageQuality, int> _estimateAllSizes(Uint8List bytes) {
-  final decoded = img.decodeImage(bytes);
+  img.Image? decoded;
+  try {
+    decoded = img.decodeImage(bytes);
+  } on img.ImageException {
+    return {for (final q in ImageQuality.values) q: bytes.length};
+  }
   if (decoded == null) {
     return {for (final q in ImageQuality.values) q: bytes.length};
   }
   final normalized = img.bakeOrientation(decoded);
-  final result = <ImageQuality, int>{
-    ImageQuality.original: bytes.length,
-  };
+  final result = <ImageQuality, int>{ImageQuality.original: bytes.length};
 
   for (final q in [ImageQuality.high, ImageQuality.medium, ImageQuality.low]) {
     final maxDim = q.maxDimension;
@@ -126,7 +131,17 @@ Map<ImageQuality, int> _estimateAllSizes(Uint8List bytes) {
 }
 
 PreparedImage _prepare(Uint8List bytes, int? maxDimension, int jpegQuality) {
-  final decoded = img.decodeImage(bytes);
+  img.Image? decoded;
+  try {
+    decoded = img.decodeImage(bytes);
+  } on img.ImageException {
+    return PreparedImage(
+      bytes: bytes,
+      thumbnail: Uint8List(0),
+      width: 0,
+      height: 0,
+    );
+  }
   if (decoded == null) {
     // Not a decodable image (an unusual format, or already corrupt). Send it
     // untouched rather than failing the whole attachment.
@@ -143,7 +158,8 @@ PreparedImage _prepare(Uint8List bytes, int? maxDimension, int jpegQuality) {
   var width = normalized.width;
   var height = normalized.height;
 
-  if (maxDimension != null) {
+  final preserveSource = isGif(bytes) || isHdrOrMotionPhoto(bytes);
+  if (!preserveSource && maxDimension != null) {
     final resized = _resize(normalized, maxDimension);
     final encoded = Uint8List.fromList(
       img.encodeJpg(resized, quality: jpegQuality),

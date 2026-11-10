@@ -44,6 +44,11 @@ class AppNotesRepository implements NotesRepository {
     String noteId,
   ) => _notesRef(threadId).doc(noteId);
 
+  CollectionReference<Map<String, dynamic>> _noteEditorsRef(
+    String threadId,
+    String noteId,
+  ) => _noteDoc(threadId, noteId).collection('editors');
+
   // ── Thread Notes (E2EE Firestore) ──────────────────────────────────────────
 
   @override
@@ -116,6 +121,67 @@ class AppNotesRepository implements NotesRepository {
       'lastEditedBy': note.lastEditedBy ?? note.creatorId,
       'encryptedPayload': encryptedPayload,
     }, SetOptions(merge: true));
+  }
+
+  @override
+  Stream<List<String>> watchThreadNoteEditors({
+    required String threadId,
+    required String noteId,
+  }) {
+    return Stream.multi((controller) {
+      QuerySnapshot<Map<String, dynamic>>? latestSnapshot;
+      void emitActiveEditors() {
+        final snapshot = latestSnapshot;
+        if (snapshot == null) return;
+        final now = DateTime.now().millisecondsSinceEpoch;
+        controller.add(
+          snapshot.docs
+              .where((doc) {
+                final expiresAt = (doc.data()['expiresAt'] as num?)?.toInt();
+                return expiresAt != null && expiresAt > now;
+              })
+              .map((doc) => doc.id)
+              .toList(growable: false),
+        );
+      }
+
+      final subscription = _noteEditorsRef(threadId, noteId).snapshots().listen(
+        (snapshot) {
+          latestSnapshot = snapshot;
+          emitActiveEditors();
+        },
+        onError: controller.addError,
+      );
+      final expiryTimer = Timer.periodic(
+        const Duration(seconds: 5),
+        (_) => emitActiveEditors(),
+      );
+      controller.onCancel = () async {
+        expiryTimer.cancel();
+        await subscription.cancel();
+      };
+    });
+  }
+
+  @override
+  Future<void> setThreadNoteEditing({
+    required String threadId,
+    required String noteId,
+    required String uid,
+    required bool isEditing,
+  }) async {
+    final ref = _noteEditorsRef(threadId, noteId).doc(uid);
+    if (!isEditing) {
+      await ref.delete();
+      return;
+    }
+
+    final now = DateTime.now().millisecondsSinceEpoch;
+    await ref.set({
+      'userId': uid,
+      'heartbeatAt': now,
+      'expiresAt': now + const Duration(seconds: 45).inMilliseconds,
+    });
   }
 
   @override

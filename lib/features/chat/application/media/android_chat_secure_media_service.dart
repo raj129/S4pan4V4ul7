@@ -67,6 +67,7 @@ class AndroidChatSecureMediaService {
   Future<void> cancelRecording() => _channel.invokeMethod('cancelRecording');
 
   Future<void> showVideo(Uint8List bytes) => _show('showVideo', bytes);
+
   Future<void> showAudio(Uint8List bytes) => _show('showAudio', bytes);
 
   /// API 26+ uses a memory-backed proxy descriptor; older Android returns

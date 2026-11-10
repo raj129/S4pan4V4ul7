@@ -1463,6 +1463,11 @@ void main() {
             OutgoingImageItem(messageId: 'multi-1', bytes: png),
             OutgoingImageItem(messageId: 'multi-2', bytes: png),
             OutgoingImageItem(messageId: 'multi-3', bytes: png),
+            OutgoingImageItem(
+              messageId: 'multi-gif',
+              bytes: Uint8List.fromList([0x47, 0x49, 0x46, 0x38, 0x39, 0x61]),
+              filename: 'animated.gif',
+            ),
           ],
           quality: ImageQuality.medium,
         );
@@ -1471,7 +1476,14 @@ void main() {
           'multi-1',
           'multi-2',
           'multi-3',
+          'multi-gif',
         ]);
+        expect(
+          messages.sent
+              .singleWhere((message) => message.messageId == 'multi-gif')
+              .mediaType,
+          MessageType.gif,
+        );
         expect((cubit.state as ActiveThreadLoaded).uploadProgress, isEmpty);
         expect((cubit.state as ActiveThreadLoaded).scrollRequest, isNotNull);
         expect(

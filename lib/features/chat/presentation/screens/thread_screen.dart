@@ -8,6 +8,8 @@ import '../../application/services/chat_backup_scheduler.dart';
 import '../../application/media/android_chat_secure_media_service.dart';
 import '../../application/media/chat_media_manager_service.dart';
 import 'package:photo_vault/core/app/external_activity_guard.dart';
+import 'package:photo_vault/core/media/animated_media.dart';
+import 'package:photo_vault/core/widgets/animated_media_image.dart';
 import 'package:file_picker/file_picker.dart';
 
 import 'package:flutter/foundation.dart';
@@ -2852,7 +2854,7 @@ class _ThreadScreenState extends State<ThreadScreen>
               ),
               (
                 icon: Icons.insert_drive_file_rounded,
-                label: 'Document',
+                label: 'Files, GIFs & HDR media',
                 color: const Color(0xFF009688),
                 choice: 'document',
               ),
@@ -2998,7 +3000,10 @@ class _ThreadScreenState extends State<ThreadScreen>
                       builder: (_, _) => !widget.vaultBridge.isUnlocked
                           ? const Text('Vault locked.')
                           : item.mimeType.startsWith('image/')
-                          ? Image.memory(bytes)
+                          ? AnimatedMediaImage(
+                              bytes: bytes,
+                              fit: BoxFit.contain,
+                            )
                           : const Text(
                               'In-app preview unavailable for this format.',
                             ),
@@ -3706,6 +3711,51 @@ class _ThreadScreenState extends State<ThreadScreen>
       }
       final bytes = await picked.readAsBytes();
       if (!mounted) return;
+      final extension = (picked.extension ?? '').toLowerCase();
+      const imageExtensions = {
+        'jpg',
+        'jpeg',
+        'png',
+        'gif',
+        'webp',
+        'heic',
+        'heif',
+        'avif',
+      };
+      const videoExtensions = {'mp4', 'mov', 'm4v', 'webm'};
+      if (imageExtensions.contains(extension)) {
+        if (isGif(bytes) || isHdrOrMotionPhoto(bytes)) {
+          await cubit.sendMedia(
+            messageId: _uuid.v4(),
+            rawBytes: bytes,
+            type: isGif(bytes) ? MessageType.gif : MessageType.image,
+            quality: ImageQuality.original,
+            filename: picked.name,
+          );
+        } else {
+          await _sendImageWithQuality(cubit, bytes);
+        }
+        return;
+      }
+      if (videoExtensions.contains(extension)) {
+        final quality = isHdrVideo(bytes)
+            ? VideoQuality.original
+            : await VideoQualitySheet.show(
+                context,
+                originalBytes: bytes.length,
+                selected: VideoQuality.high,
+                videoBytes: bytes,
+              );
+        if (quality == null || !mounted) return;
+        await cubit.sendMedia(
+          messageId: _uuid.v4(),
+          rawBytes: bytes,
+          type: MessageType.video,
+          videoQuality: quality,
+          filename: picked.name,
+        );
+        return;
+      }
       await cubit.sendMedia(
         messageId: _uuid.v4(),
         rawBytes: bytes,
@@ -3736,7 +3786,34 @@ class _ThreadScreenState extends State<ThreadScreen>
         await widget.vaultBridge.readVaultPhoto(photo),
       );
       if (!mounted) return;
-      await _sendImageWithQuality(cubit, bytes);
+      if (photo.mimeType.startsWith('video/')) {
+        final quality = isHdrVideo(bytes)
+            ? VideoQuality.original
+            : await VideoQualitySheet.show(
+                context,
+                originalBytes: bytes.length,
+                selected: VideoQuality.high,
+                videoBytes: bytes,
+              );
+        if (quality == null || !mounted) return;
+        await cubit.sendMedia(
+          messageId: _uuid.v4(),
+          rawBytes: bytes,
+          type: MessageType.video,
+          videoQuality: quality,
+          filename: photo.originalFilename,
+        );
+      } else if (isGif(bytes) || isHdrOrMotionPhoto(bytes)) {
+        await cubit.sendMedia(
+          messageId: _uuid.v4(),
+          rawBytes: bytes,
+          type: isGif(bytes) ? MessageType.gif : MessageType.image,
+          quality: ImageQuality.original,
+          filename: photo.originalFilename,
+        );
+      } else {
+        await _sendImageWithQuality(cubit, bytes);
+      }
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(
