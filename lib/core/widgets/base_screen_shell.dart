@@ -3,6 +3,7 @@ import 'package:go_router/go_router.dart';
 
 import '../presentation/theme/app_spacing.dart';
 import 'app_navigation_drawer.dart';
+import 'main_scaffold_scope.dart';
 
 class BaseScreenShell extends StatelessWidget {
   BaseScreenShell({
@@ -11,6 +12,7 @@ class BaseScreenShell extends StatelessWidget {
     this.actions,
     this.floatingActionButton,
     this.showDrawerMenu = true,
+    this.showQuickLock = true,
     this.drawerSelectedIndex = -1,
     super.key,
   }) : _scaffoldKey = GlobalKey<ScaffoldState>();
@@ -20,6 +22,7 @@ class BaseScreenShell extends StatelessWidget {
   final List<Widget>? actions;
   final Widget? floatingActionButton;
   final bool showDrawerMenu;
+  final bool showQuickLock;
   final int drawerSelectedIndex;
   final GlobalKey<ScaffoldState> _scaffoldKey;
 
@@ -36,9 +39,11 @@ class BaseScreenShell extends StatelessWidget {
                 onPressed: () => _scaffoldKey.currentState?.openDrawer(),
               )
             : null,
-        actions: actions == null
-            ? null
-            : [...actions!, const SizedBox(width: AppSpacing.xs)],
+        actions: [
+          if (actions != null) ...actions!,
+          if (showQuickLock) const QuickLockActionButton(),
+          const SizedBox(width: AppSpacing.xs),
+        ],
       ),
       drawer: showDrawerMenu
           ? AppNavigationDrawer(

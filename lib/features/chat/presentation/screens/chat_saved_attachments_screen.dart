@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 
 import 'package:photo_vault/core/integrations/chat_vault_bridge.dart';
+import 'package:photo_vault/core/widgets/main_scaffold_scope.dart';
 import 'package:photo_vault/features/vault/domain/entities/vault_photo.dart';
 
 /// A narrow vault attachment list for Android chat, not a general file browser.
@@ -112,6 +113,7 @@ class _ChatSavedAttachmentsScreenState
           }),
           icon: const Icon(Icons.refresh),
         ),
+        const QuickLockActionButton(),
       ],
     ),
     body: FutureBuilder<List<VaultPhoto>>(

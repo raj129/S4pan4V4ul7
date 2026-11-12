@@ -17,6 +17,7 @@ import '../platform/hdr_preview_capability.dart';
 import '../platform/screenshot_protection.dart';
 import '../routing/app_router.dart';
 import '../widgets/app_navigation_drawer.dart';
+import '../widgets/main_scaffold_scope.dart';
 import '../../features/vault/presentation/state/onboarding_cubit.dart';
 import '../../features/vault/domain/repositories/settings_repository.dart';
 import '../presentation/theme/app_colors.dart';
@@ -296,16 +297,19 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
       themeMode: _themeMode,
       routerConfig: _router,
       scaffoldMessengerKey: _scaffoldMessengerKey,
-      builder: (context, child) => AppDrawerScope(
-        hasMyLocations: () =>
-            Platform.isAndroid &&
-            _deps.chatDependencies.authService.currentUid != null,
-        child: MockLocationBanner(
-          controller: _deps.location.mock,
-          visibilityListenable: _session,
-          isVisible: () => _session.isUnlocked,
-          onOpen: () => _router.push('/settings/developer'),
-          child: child ?? const SizedBox.shrink(),
+      builder: (context, child) => VaultLockScope(
+        onLock: _lockSession,
+        child: AppDrawerScope(
+          hasMyLocations: () =>
+              Platform.isAndroid &&
+              _deps.chatDependencies.authService.currentUid != null,
+          child: MockLocationBanner(
+            controller: _deps.location.mock,
+            visibilityListenable: _session,
+            isVisible: () => _session.isUnlocked,
+            onOpen: () => _router.push('/settings/developer'),
+            child: child ?? const SizedBox.shrink(),
+          ),
         ),
       ),
     );

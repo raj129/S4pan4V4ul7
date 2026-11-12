@@ -170,6 +170,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
               tooltip: 'New chat',
               onPressed: () => _openNewChat(context),
             ),
+            const QuickLockActionButton(),
           ],
         ],
       ),

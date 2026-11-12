@@ -11,6 +11,7 @@ import '../../application/services/profile_service.dart';
 import 'package:photo_vault/core/app/external_activity_guard.dart';
 import '../../domain/entities/chat_user.dart';
 import '../../domain/entities/profile_avatar.dart';
+import 'package:photo_vault/core/widgets/main_scaffold_scope.dart';
 import 'package:photo_vault/core/presentation/theme/app_spacing.dart';
 import 'chat_media_manager_screen.dart';
 import '../widgets/message_bubble.dart' show ThemedEmojiPicker;
@@ -240,7 +241,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
         if (!didPop) unawaited(_handleBack());
       },
       child: Scaffold(
-        appBar: AppBar(title: Text(_editing ? 'Edit profile' : 'Profile')),
+        appBar: AppBar(
+          title: Text(_editing ? 'Edit profile' : 'Profile'),
+          actions: const [QuickLockActionButton()],
+        ),
         bottomNavigationBar: _editing
             ? SafeArea(
                 child: Padding(
