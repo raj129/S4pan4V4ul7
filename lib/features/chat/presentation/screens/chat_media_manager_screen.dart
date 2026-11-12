@@ -4,6 +4,7 @@ import 'package:intl/intl.dart';
 
 import 'package:photo_vault/core/presentation/theme/app_spacing.dart';
 import 'package:photo_vault/core/widgets/app_state_views.dart';
+import 'package:photo_vault/core/widgets/main_scaffold_scope.dart';
 import '../../application/media/chat_media_loader.dart';
 import '../../domain/entities/chat_media_item.dart';
 import '../../application/media/chat_media_manager_service.dart';
@@ -116,6 +117,7 @@ class ChatMediaManagerScreen extends StatelessWidget {
                     ),
                   ],
                 ),
+                const QuickLockActionButton(),
               ],
             ],
           ),

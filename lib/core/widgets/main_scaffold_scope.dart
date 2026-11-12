@@ -15,10 +15,12 @@ class MainScaffoldScope extends InheritedWidget {
   const MainScaffoldScope({
     super.key,
     required this.openDrawer,
+    this.onLock,
     required super.child,
   });
 
   final VoidCallback openDrawer;
+  final VoidCallback? onLock;
 
   static MainScaffoldScope? maybeOf(BuildContext context) {
     return context.dependOnInheritedWidgetOfExactType<MainScaffoldScope>();
@@ -26,7 +28,56 @@ class MainScaffoldScope extends InheritedWidget {
 
   @override
   bool updateShouldNotify(MainScaffoldScope oldWidget) =>
-      openDrawer != oldWidget.openDrawer;
+      openDrawer != oldWidget.openDrawer || onLock != oldWidget.onLock;
+}
+
+/// Provides an app-wide lock callback to all descendant widgets.
+class VaultLockScope extends InheritedWidget {
+  const VaultLockScope({
+    super.key,
+    required this.onLock,
+    required super.child,
+  });
+
+  final VoidCallback onLock;
+
+  static VaultLockScope? maybeOf(BuildContext context) {
+    return context.dependOnInheritedWidgetOfExactType<VaultLockScope>();
+  }
+
+  @override
+  bool updateShouldNotify(VaultLockScope oldWidget) =>
+      onLock != oldWidget.onLock;
+}
+
+/// Quick lock action button matching the lock button on the chat thread.
+class QuickLockActionButton extends StatelessWidget {
+  const QuickLockActionButton({super.key, this.color});
+
+  final Color? color;
+
+  @override
+  Widget build(BuildContext context) {
+    return IconButton(
+      icon: Icon(Icons.lock_outline_rounded, color: color),
+      tooltip: 'Lock vault',
+      onPressed: () => lockApp(context),
+    );
+  }
+}
+
+/// Locks the vault and navigates back to calculator mode.
+void lockApp(BuildContext context) {
+  final scope = MainScaffoldScope.maybeOf(context);
+  if (scope?.onLock != null) {
+    scope!.onLock!();
+    return;
+  }
+  final lockScope = VaultLockScope.maybeOf(context);
+  if (lockScope != null) {
+    lockScope.onLock();
+    return;
+  }
 }
 
 /// Opens the app's shared navigation drawer.

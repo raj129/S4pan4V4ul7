@@ -1822,8 +1822,16 @@ class _ThreadScreenState extends State<ThreadScreen>
           'Remove every message from your view of this chat? '
           'The other person will not be affected and can still see them.',
         ),
+        actionsAlignment: MainAxisAlignment.end,
+        actionsOverflowButtonSpacing: AppSpacing.md,
+        actionsPadding: const EdgeInsets.fromLTRB(
+          AppSpacing.lg,
+          AppSpacing.xs,
+          AppSpacing.lg,
+          AppSpacing.lg,
+        ),
         actions: [
-          TextButton(
+          OutlinedButton(
             onPressed: () => Navigator.pop(dialogContext, false),
             child: const Text('Cancel'),
           ),
@@ -1854,12 +1862,24 @@ class _ThreadScreenState extends State<ThreadScreen>
         content: const Text(
           'Delete this conversation and all its messages? This cannot be undone.',
         ),
+        actionsAlignment: MainAxisAlignment.end,
+        actionsOverflowButtonSpacing: AppSpacing.md,
+        actionsPadding: const EdgeInsets.fromLTRB(
+          AppSpacing.lg,
+          AppSpacing.xs,
+          AppSpacing.lg,
+          AppSpacing.lg,
+        ),
         actions: [
-          TextButton(
+          OutlinedButton(
             onPressed: () => Navigator.pop(dialogContext, false),
             child: const Text('Cancel'),
           ),
           FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(dialogContext).colorScheme.error,
+              foregroundColor: Theme.of(dialogContext).colorScheme.onError,
+            ),
             onPressed: () => Navigator.pop(dialogContext, true),
             child: const Text('Delete'),
           ),
@@ -2002,12 +2022,20 @@ class _ThreadScreenState extends State<ThreadScreen>
       builder: (dialogContext) => AlertDialog(
         title: Text(titleText),
         content: Text('$baseContent\n\n$vaultContent'),
+        actionsAlignment: MainAxisAlignment.end,
+        actionsOverflowButtonSpacing: AppSpacing.md,
+        actionsPadding: const EdgeInsets.fromLTRB(
+          AppSpacing.lg,
+          AppSpacing.xs,
+          AppSpacing.lg,
+          AppSpacing.lg,
+        ),
         actions: [
-          TextButton(
+          OutlinedButton(
             onPressed: () => Navigator.pop(dialogContext, null),
             child: const Text('Cancel'),
           ),
-          FilledButton(
+          FilledButton.tonal(
             onPressed: () => Navigator.pop(dialogContext, 'forMe'),
             child: const Text('Delete for me'),
           ),
@@ -2305,8 +2333,16 @@ class _ThreadScreenState extends State<ThreadScreen>
               : 'Remove this message from your copy of the chat? '
                     'The other person will still see it.$vaultWarning',
         ),
+        actionsAlignment: MainAxisAlignment.end,
+        actionsOverflowButtonSpacing: AppSpacing.md,
+        actionsPadding: const EdgeInsets.fromLTRB(
+          AppSpacing.lg,
+          AppSpacing.xs,
+          AppSpacing.lg,
+          AppSpacing.lg,
+        ),
         actions: [
-          TextButton(
+          OutlinedButton(
             onPressed: () => Navigator.pop(dialogContext, false),
             child: const Text('Cancel'),
           ),
@@ -2368,8 +2404,16 @@ class _ThreadScreenState extends State<ThreadScreen>
           'This message will be deleted for everyone in this chat. '
           'This cannot be undone.$vaultWarning',
         ),
+        actionsAlignment: MainAxisAlignment.end,
+        actionsOverflowButtonSpacing: AppSpacing.md,
+        actionsPadding: const EdgeInsets.fromLTRB(
+          AppSpacing.lg,
+          AppSpacing.xs,
+          AppSpacing.lg,
+          AppSpacing.lg,
+        ),
         actions: [
-          TextButton(
+          OutlinedButton(
             onPressed: () => Navigator.pop(dialogContext, false),
             child: const Text('Cancel'),
           ),
