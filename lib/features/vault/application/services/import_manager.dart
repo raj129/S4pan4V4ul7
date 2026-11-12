@@ -257,6 +257,69 @@ class ImportManager extends ChangeNotifier {
     return File(p.join(directory.path, '$key.enc'));
   }
 
+  Future<File> _chatVaultLinksFile() async {
+    final base = await getApplicationSupportDirectory();
+    final directory = Directory(p.join(base.path, 'chat_vault_moves'));
+    await directory.create(recursive: true);
+    final vaultId = _vaultSession.vaultId ?? (throw VaultLockedException());
+    final vaultKey = crypto.sha256.convert(utf8.encode(vaultId)).toString();
+    return File(p.join(directory.path, 'source-links-$vaultKey.enc'));
+  }
+
+  Future<Map<String, String>> _readChatVaultLinks() async {
+    final file = await _chatVaultLinksFile();
+    if (!await file.exists()) return {};
+    final vmk = _vaultSession.requireVmk();
+    try {
+      final plain = await _cryptoService.decrypt(
+        await _readPayloadFile(file.path),
+        vmk,
+        aad: utf8.encode('chat-vault-links:${_vaultSession.vaultId}:v1'),
+      );
+      try {
+        final decoded = jsonDecode(utf8.decode(plain)) as Map<String, dynamic>;
+        final links = decoded['links'] as Map<String, dynamic>? ?? const {};
+        return links.map((sourceId, photoId) {
+          if (photoId is! String) {
+            throw const FormatException('Invalid chat vault link index.');
+          }
+          return MapEntry(sourceId, photoId);
+        });
+      } finally {
+        try {
+          plain.fillRange(0, plain.length, 0);
+        } catch (_) {}
+      }
+    } finally {
+      vmk.fillRange(0, vmk.length, 0);
+    }
+  }
+
+  Future<void> _writeChatVaultLinks(Map<String, String> links) async {
+    final vaultId = _vaultSession.vaultId;
+    final vmk = _vaultSession.requireVmk();
+    final plain = utf8.encode(jsonEncode({'links': links}));
+    try {
+      final payload = await _cryptoService.encrypt(
+        plain,
+        vmk,
+        aad: utf8.encode('chat-vault-links:$vaultId:v1'),
+      );
+      requireChatImportUnlock();
+      if (_vaultSession.vaultId != vaultId) throw VaultLockedException();
+      final target = await _chatVaultLinksFile();
+      final staging = File('${target.path}.next');
+      await staging.writeAsString(
+        jsonEncode(_payloadToJson(payload)),
+        flush: true,
+      );
+      await staging.rename(target.path);
+    } finally {
+      plain.fillRange(0, plain.length, 0);
+      vmk.fillRange(0, vmk.length, 0);
+    }
+  }
+
   Future<Map<String, dynamic>?> readChatMove(String sourceId) async {
     final vmk = _vaultSession.requireVmk();
     try {
@@ -307,7 +370,63 @@ class ImportManager extends ChangeNotifier {
       plain.fillRange(0, plain.length, 0);
       vmk.fillRange(0, vmk.length, 0);
     }
+    if (const {'committed', 'marked', 'complete'}.contains(record['phase']) &&
+        record['id'] is String) {
+      final links = await _readChatVaultLinks();
+      links[sourceId] = record['id']! as String;
+      await _writeChatVaultLinks(links);
+    }
   }
+
+  Future<VaultPhoto?> linkedChatAttachment(String sourceId) =>
+      runChatImport(() => _linkedChatAttachment(sourceId));
+
+  Future<VaultPhoto?> _linkedChatAttachment(String sourceId) async {
+    final journal = await readChatMove(sourceId);
+    if (journal == null ||
+        !const {'committed', 'marked', 'complete'}.contains(journal['phase'])) {
+      return null;
+    }
+    final photoId = journal['id'];
+    final checksum = journal['checksum'];
+    if (photoId is! String || checksum is! String) {
+      throw const FormatException('Invalid chat vault link record.');
+    }
+    final photo = await chatImportById(photoId);
+    if (photo == null || photo.isTrashed) return null;
+    if (photo.checksumSha256 != checksum) {
+      throw StateError('Chat vault link checksum does not match the photo.');
+    }
+    final links = await _readChatVaultLinks();
+    if (links[sourceId] != photoId) {
+      links[sourceId] = photoId;
+      await _writeChatVaultLinks(links);
+    }
+    return photo;
+  }
+
+  Future<List<String>> chatAttachmentLinkSources(String photoId) =>
+      runChatImport(() async {
+        final links = await _readChatVaultLinks();
+        return links.entries
+            .where((entry) => entry.value == photoId)
+            .map((entry) => entry.key)
+            .toList();
+      });
+
+  Future<void> removeChatAttachmentLink(String sourceId) =>
+      runChatImport(() async {
+        final journal = await readChatMove(sourceId);
+        if (journal == null ||
+            const {'unlinked', 'trashed'}.contains(journal['phase'])) {
+          return;
+        }
+        journal['phase'] = 'unlinked';
+        await writeChatMove(sourceId, journal);
+        final links = await _readChatVaultLinks();
+        links.remove(sourceId);
+        await _writeChatVaultLinks(links);
+      });
 
   void notifyGalleryChanged() {
     _galleryEventRevision += 1;

@@ -16,20 +16,27 @@ class ChatVideoPlayerScreen extends StatefulWidget {
     required this.message,
     required this.loader,
     this.service = const AndroidChatSecureMediaService(),
+    this.loadLinkedVaultMedia,
   });
 
   final ChatMessage message;
   final ChatMediaLoader loader;
   final AndroidChatSecureMediaService service;
+  final LinkedChatMediaBytesLoader? loadLinkedVaultMedia;
 
   static Future<void> open(
     BuildContext context, {
     required ChatMessage message,
     required ChatMediaLoader loader,
+    LinkedChatMediaBytesLoader? loadLinkedVaultMedia,
   }) => Navigator.of(context).push(
     MaterialPageRoute<void>(
       fullscreenDialog: true,
-      builder: (_) => ChatVideoPlayerScreen(message: message, loader: loader),
+      builder: (_) => ChatVideoPlayerScreen(
+        message: message,
+        loader: loader,
+        loadLinkedVaultMedia: loadLinkedVaultMedia,
+      ),
     ),
   );
 
@@ -66,11 +73,18 @@ class _ChatVideoPlayerScreenState extends State<ChatVideoPlayerScreen> {
       if (ref == null) throw StateError('Video is not available yet.');
       await loader.retryFailedDownload(ref);
       if (!mounted || generation != _generation) return;
-      bytes = await loader.fetchUncached(
-        threadId: message.threadId,
-        storagePath: ref,
-        senderId: message.senderId,
-      );
+      final linkedLoader = widget.loadLinkedVaultMedia;
+      final linkedBytes =
+          linkedLoader != null && await loader.wasMovedToVault(ref)
+          ? await linkedLoader(message)
+          : null;
+      bytes =
+          linkedBytes ??
+          await loader.fetchUncached(
+            threadId: message.threadId,
+            storagePath: ref,
+            senderId: message.senderId,
+          );
       if (!mounted || generation != _generation) return;
       await service.showVideo(bytes);
       if (mounted && generation == _generation) Navigator.of(context).pop();
@@ -220,9 +234,7 @@ class _ChatVideoPlayerScreenState extends State<ChatVideoPlayerScreen> {
                   decoration: BoxDecoration(
                     color: const Color(0xFF1E1F2B),
                     borderRadius: BorderRadius.circular(20),
-                    border: Border.all(
-                      color: cs.error.withValues(alpha: 0.3),
-                    ),
+                    border: Border.all(color: cs.error.withValues(alpha: 0.3)),
                   ),
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
@@ -236,7 +248,10 @@ class _ChatVideoPlayerScreenState extends State<ChatVideoPlayerScreen> {
                       Text(
                         _error!,
                         textAlign: TextAlign.center,
-                        style: const TextStyle(color: Colors.white70, fontSize: 14),
+                        style: const TextStyle(
+                          color: Colors.white70,
+                          fontSize: 14,
+                        ),
                       ),
                       const SizedBox(height: 16),
                       if (!_requiresAction &&

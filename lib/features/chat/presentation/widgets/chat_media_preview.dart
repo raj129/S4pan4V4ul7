@@ -57,6 +57,7 @@ class ChatMediaPreview extends StatefulWidget {
     this.onTap,
     this.sendStatus,
     this.onCancel,
+    this.loadLinkedVaultThumbnail,
   });
 
   final ChatMessage message;
@@ -68,6 +69,7 @@ class ChatMediaPreview extends StatefulWidget {
 
   /// Stops the send while [sendStatus] is showing.
   final VoidCallback? onCancel;
+  final LinkedChatMediaBytesLoader? loadLinkedVaultThumbnail;
 
   @override
   State<ChatMediaPreview> createState() => _ChatMediaPreviewState();
@@ -195,7 +197,12 @@ class _ChatMediaPreviewState extends State<ChatMediaPreview> {
 
   Future<void> _load(ChatMessage message, String ref, int generation) async {
     try {
-      final bytes = await _loadBounded(message, ref);
+      final linkedLoader = widget.loadLinkedVaultThumbnail;
+      final linkedBytes =
+          linkedLoader != null && await widget.loader.wasMovedToVault(ref)
+          ? await linkedLoader(message)
+          : null;
+      final bytes = linkedBytes ?? await _loadBounded(message, ref);
       if (!mounted || generation != _generation || _bytes != null) {
         bytes.fillRange(0, bytes.length, 0);
         return;

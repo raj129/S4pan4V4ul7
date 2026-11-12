@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
@@ -26,13 +27,22 @@ class _TestMediaLoader extends ChatMediaLoader {
         cryptoService: ChatCryptoService(),
       );
 
+  bool movedToVault = false;
+  int loadCalls = 0;
+
+  @override
+  Future<bool> wasMovedToVault(String storagePath) async => movedToVault;
+
   @override
   Future<Uint8List> load({
     required String threadId,
     required String storagePath,
     String? senderId,
     ChatMediaLoadToken? token,
-  }) async => Uint8List.fromList([0]);
+  }) async {
+    loadCalls++;
+    return Uint8List.fromList([0]);
+  }
 }
 
 ChatMessage _message({
@@ -148,7 +158,8 @@ void main() {
     await pumpBubble(tester, mediaType: MessageType.image);
 
     expect(find.byType(BottomSheet), findsOneWidget);
-    expect(find.text('Move to vault'), findsOneWidget);
+    expect(find.text('Save to vault'), findsOneWidget);
+    expect(find.byIcon(Icons.archive_outlined), findsOneWidget);
     expect(find.text('Delete for me'), findsOneWidget);
   });
 
@@ -157,6 +168,50 @@ void main() {
 
     expect(find.byType(BottomSheet), findsOneWidget);
     expect(find.text('Delete for me'), findsOneWidget);
+  });
+
+  testWidgets('message action sheet scrolls on a short screen', (tester) async {
+    tester.view.physicalSize = const Size(360, 400);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+
+    await pumpBubble(tester, mediaType: MessageType.image);
+
+    expect(tester.takeException(), isNull);
+    final sheetScrollView = find.descendant(
+      of: find.byType(BottomSheet),
+      matching: find.byType(SingleChildScrollView),
+    );
+    expect(sheetScrollView, findsOneWidget);
+    await tester.drag(sheetScrollView, const Offset(0, -300));
+    await tester.pumpAndSettle();
+    expect(find.text('Delete for me'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('moved media preview reuses its linked vault thumbnail', (
+    tester,
+  ) async {
+    const png =
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jXioAAAAASUVORK5CYII=';
+    final loader = _TestMediaLoader()..movedToVault = true;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: ChatMediaPreview(
+            message: _message(mediaType: MessageType.image),
+            loader: loader,
+            loadLinkedVaultThumbnail: (_) async =>
+                Uint8List.fromList(base64Decode(png)),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byType(Image), findsOneWidget);
+    expect(loader.loadCalls, 0);
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('sent images and videos have no bubble background or tail', (
@@ -246,7 +301,7 @@ void main() {
   testWidgets('sent media keeps its action affordances', (tester) async {
     await pumpBubble(tester, mediaType: MessageType.image, isMine: true);
 
-    expect(find.text('Move to vault'), findsOneWidget);
+    expect(find.text('Save to vault'), findsOneWidget);
     expect(find.text('Delete for me'), findsOneWidget);
     expect(find.text('Reply'), findsOneWidget);
   });

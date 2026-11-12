@@ -44,6 +44,7 @@ import '../../domain/entities/chat_message.dart';
 import '../../domain/entities/message_metadata.dart';
 import '../../domain/entities/chat_thread.dart';
 import '../../domain/entities/chat_user.dart';
+import 'package:photo_vault/features/vault/domain/entities/vault_photo.dart';
 import '../../domain/entities/live_location.dart';
 import '../../domain/repositories/chat_draft_repository.dart';
 import '../../domain/repositories/live_location_repository.dart';
@@ -280,6 +281,69 @@ class _ThreadScreenState extends State<ThreadScreen>
     setState(() => _selectedMessageIds.clear());
   }
 
+  List<ChatMessage> _selectedMessages(ActiveThreadLoaded state) => state
+      .visibleMessages
+      .where((message) => _selectedMessageIds.contains(message.messageId))
+      .toList();
+
+  bool _isBulkVaultSelection(ActiveThreadLoaded state) {
+    final selected = _selectedMessages(state);
+    return selected.isNotEmpty &&
+        selected.every(
+          (message) =>
+              message.mediaRef != null &&
+              const {
+                MessageType.image,
+                MessageType.video,
+              }.contains(message.mediaType) &&
+              !state.uploadProgress.containsKey(message.messageId),
+        );
+  }
+
+  Future<void> _showBulkProgress({
+    required String title,
+    required int total,
+    required Future<void> Function(void Function(int, String) update) operation,
+  }) async {
+    final progress = ValueNotifier<(int, String)>((0, 'Preparing…'));
+    final dialog = showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => PopScope(
+        canPop: false,
+        child: AlertDialog(
+          title: Text(title),
+          content: ValueListenableBuilder<(int, String)>(
+            valueListenable: progress,
+            builder: (context, value, _) => Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(value.$2),
+                const SizedBox(height: AppSpacing.md),
+                LinearProgressIndicator(
+                  value: total == 0 ? 1 : value.$1 / total,
+                ),
+                const SizedBox(height: AppSpacing.sm),
+                Text('${value.$1} of $total complete'),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    try {
+      await WidgetsBinding.instance.endOfFrame;
+      await operation((completed, status) {
+        progress.value = (completed, status);
+      });
+    } finally {
+      if (mounted) Navigator.of(context, rootNavigator: true).pop();
+      await dialog;
+      progress.dispose();
+    }
+  }
+
   @override
   void initState() {
     super.initState();
@@ -447,44 +511,50 @@ class _ThreadScreenState extends State<ThreadScreen>
     for (final message in state.messages) {
       final ref = message.mediaRef;
       if (!mounted || !widget.vaultBridge.isUnlocked) return;
-      if (ref == null ||
-          message.senderId == uid ||
-          !_moveRecoveryChecked.add(ref)) {
-        continue;
-      }
-      final key = '$uid:$ref';
+      if (ref == null) continue;
+      final previewRef = message.previewRef;
+      final paths = {ref, ?previewRef};
+      final keys = paths.map(widget.mediaLoader.diskKey).toList();
       void checkOwner() {
         if (!mounted || widget.mediaLoader.accountId != uid) {
           throw StateError('Chat account changed during move recovery.');
         }
       }
 
-      try {
-        // Resume only a previously recorded, user-requested move. This never
-        // creates a new vault import or downloads attachment bytes.
-        final result = await widget.vaultBridge.resumeMove(
-          sourceId: '$uid:${message.threadId}:$ref',
-          onMarkMoved: () async {
-            checkOwner();
-            await widget.mediaLoader.diskCache.markMoved(key);
-          },
-          onSourceCleanup: () async {
-            checkOwner();
-            await widget.mediaLoader.removeAfterVaultMove(ref);
-          },
-        );
-        if (result?.cleanupPending == true) {
-          throw StateError('Committed attachment cleanup remains pending.');
-        }
-      } catch (_) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text(
-                'Previous vault move needs attention. Tap Move to vault to retry.',
-              ),
-            ),
+      for (final sourceId in _vaultSourceIds(message, uid)) {
+        if (!_moveRecoveryChecked.add(sourceId)) continue;
+        try {
+          // Resume only a previously recorded, user-requested move. This never
+          // creates a new vault import or downloads attachment bytes.
+          final result = await widget.vaultBridge.resumeMove(
+            sourceId: sourceId,
+            onMarkMoved: () async {
+              checkOwner();
+              for (final key in keys) {
+                await widget.mediaLoader.diskCache.markMoved(key);
+              }
+            },
+            onSourceCleanup: () async {
+              checkOwner();
+              for (final path in paths) {
+                await widget.mediaLoader.removeAfterVaultMove(path);
+              }
+            },
           );
+          if (result?.cleanupPending == true) {
+            throw StateError('Committed attachment cleanup remains pending.');
+          }
+          if (result != null) break;
+        } catch (_) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text(
+                  'Previous vault save needs attention. Tap Save to vault to retry.',
+                ),
+              ),
+            );
+          }
         }
       }
     }
@@ -1017,6 +1087,7 @@ class _ThreadScreenState extends State<ThreadScreen>
   PreferredSizeWidget _buildAppBar(BuildContext context) {
     if (_isSelectionMode) {
       final count = _selectedMessageIds.length;
+      final state = context.read<ActiveThreadCubit>().state;
       return AppBar(
         leading: IconButton(
           icon: const Icon(Icons.close),
@@ -1025,11 +1096,17 @@ class _ThreadScreenState extends State<ThreadScreen>
         ),
         title: Text(
           '$count selected',
-          style: Theme.of(context).textTheme.titleMedium?.copyWith(
-            fontWeight: FontWeight.w600,
-          ),
+          style: Theme.of(
+            context,
+          ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
         ),
         actions: [
+          if (state is ActiveThreadLoaded && _isBulkVaultSelection(state))
+            IconButton(
+              icon: const Icon(Icons.archive_outlined),
+              tooltip: 'Save selected media to vault',
+              onPressed: () => unawaited(_moveSelectedMediaToVault()),
+            ),
           IconButton(
             icon: const Icon(Icons.delete_outline_rounded),
             tooltip: 'Delete selected messages',
@@ -1418,6 +1495,8 @@ class _ThreadScreenState extends State<ThreadScreen>
                   isSelected: _selectedMessageIds.contains(msg.messageId),
                   onSelect: () => _toggleMessageSelection(msg.messageId),
                   mediaLoader: widget.mediaLoader,
+                  loadLinkedVaultMedia: _loadLinkedVaultMedia,
+                  loadLinkedVaultThumbnail: _loadLinkedVaultThumbnail,
                   liveLocationRepository: widget.liveLocationRepository,
                   notesRepository: widget.notesRepository,
                   onStopLiveLocation: _stopLiveLocation,
@@ -1470,7 +1549,13 @@ class _ThreadScreenState extends State<ThreadScreen>
                       : null,
                   canReplyFromLeftToRight: true,
                   onTapQuote: _jumpToMessage,
-                  onSaveToVault: msg.isMedia && msg.senderId != cubit.myUid
+                  onSaveToVault:
+                      msg.mediaRef != null &&
+                          sendStatus == null &&
+                          const {
+                            MessageType.image,
+                            MessageType.video,
+                          }.contains(msg.mediaType)
                       ? () => _saveToVault(msg)
                       : null,
                   onSaveAsSticker:
@@ -1827,30 +1912,96 @@ class _ThreadScreenState extends State<ThreadScreen>
     final cubit = this.context.read<ActiveThreadCubit>();
     final state = cubit.state;
     if (state is! ActiveThreadLoaded) return;
-    final selectedMsgs = state.visibleMessages
-        .where((m) => _selectedMessageIds.contains(m.messageId))
-        .toList();
+    final selectedMsgs = _selectedMessages(state);
     if (selectedMsgs.isEmpty) return;
+
+    final hasAttachments = selectedMsgs.any(
+      (message) => message.mediaRef != null,
+    );
+    if (hasAttachments && !widget.vaultBridge.isUnlocked) {
+      ScaffoldMessenger.of(this.context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Unlock the vault to check for linked items before deleting media.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    final linkedByMessage = <String, ({String sourceId, VaultPhoto photo})>{};
+    try {
+      for (final message in selectedMsgs) {
+        final linked = await _findLinkedVaultSource(message, cubit.myUid);
+        if (linked != null) linkedByMessage[message.messageId] = linked;
+      }
+    } catch (error) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not check linked vault items: $error')),
+      );
+      return;
+    }
+
+    final selectedSourceIds = linkedByMessage.values
+        .map((link) => link.sourceId)
+        .toSet();
+    final vaultPhotosToTrash = <String>{};
+    try {
+      for (final photo in linkedByMessage.values.map((link) => link.photo)) {
+        if (vaultPhotosToTrash.contains(photo.id)) continue;
+        final sources = await widget.vaultBridge.linkedAttachmentSources(
+          photo.id,
+        );
+        if (sources.isEmpty || sources.every(selectedSourceIds.contains)) {
+          vaultPhotosToTrash.add(photo.id);
+        }
+      }
+    } catch (error) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not verify vault links: $error')),
+      );
+      return;
+    }
+    if (!context.mounted) return;
 
     final allMine = selectedMsgs.every((m) => m.senderId == cubit.myUid);
     final count = selectedMsgs.length;
-    final titleText = count == 1 ? 'Delete message?' : 'Delete $count messages?';
+    final titleText = count == 1
+        ? 'Delete message?'
+        : 'Delete $count messages?';
+    final baseContent = allMine
+        ? (count == 1
+              ? 'Delete this message for yourself or for everyone in this chat?'
+              : 'Delete these messages for yourself or for everyone in this chat?')
+        : (count == 1
+              ? 'Remove this message from your copy of the chat? '
+                    'The other person will still see it.'
+              : 'Remove these messages from your copy of the chat? '
+                    'The other person will still see them.');
+    final sharedVaultPhotoCount = linkedByMessage.values
+        .map((link) => link.photo.id)
+        .toSet()
+        .difference(vaultPhotosToTrash)
+        .length;
+    final vaultContent = [
+      if (vaultPhotosToTrash.isNotEmpty)
+        '${vaultPhotosToTrash.length} linked vault '
+            '${vaultPhotosToTrash.length == 1 ? 'item' : 'items'} will also be moved to Bin.',
+      if (sharedVaultPhotoCount > 0)
+        '$sharedVaultPhotoCount vault '
+            '${sharedVaultPhotoCount == 1 ? 'item has' : 'items have'} other chat links and will stay in Vault.',
+      if (linkedByMessage.isEmpty)
+        'No selected messages have a linked vault item.',
+      'Other selected messages will only be deleted from chat.',
+    ].join(' ');
 
     final choice = await showDialog<String>(
-      context: this.context,
+      context: context,
       builder: (dialogContext) => AlertDialog(
         title: Text(titleText),
-        content: Text(
-          allMine
-              ? (count == 1
-                  ? 'Delete this message for yourself or for everyone in this chat?'
-                  : 'Delete these messages for yourself or for everyone in this chat?')
-              : (count == 1
-                  ? 'Remove this message from your copy of the chat? '
-                      'The other person will still see it.'
-                  : 'Remove these messages from your copy of the chat? '
-                      'The other person will still see them.'),
-        ),
+        content: Text('$baseContent\n\n$vaultContent'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(dialogContext, null),
@@ -1878,20 +2029,231 @@ class _ThreadScreenState extends State<ThreadScreen>
     final messagesToDelete = List<ChatMessage>.from(selectedMsgs);
     _clearMessageSelection();
 
-    try {
-      for (final msg in messagesToDelete) {
-        await _stopOwnLiveLocationBeforeDelete(msg, cubit);
-        if (choice == 'forEveryone') {
-          await cubit.deleteMessageForEveryone(msg);
-        } else {
-          await cubit.deleteMessageForMe(msg);
+    var deletedCount = 0;
+    var trashedCount = 0;
+    final failures = <String>[];
+    final handledVaultPhotoIds = <String>{};
+    final expiry = DateTime.now()
+        .add(const Duration(days: 30))
+        .millisecondsSinceEpoch;
+
+    Future<void> deleteChatMessage(ChatMessage message) async {
+      await _stopOwnLiveLocationBeforeDelete(message, cubit);
+      if (choice == 'forEveryone') {
+        await cubit.deleteMessageForEveryone(message);
+      } else {
+        await cubit.deleteMessageForMe(message);
+      }
+    }
+
+    await _showBulkProgress(
+      title: 'Deleting selected messages',
+      total: messagesToDelete.length,
+      operation: (update) async {
+        var completed = 0;
+        for (final message in messagesToDelete) {
+          final link = linkedByMessage[message.messageId];
+          if (link != null &&
+              vaultPhotosToTrash.contains(link.photo.id) &&
+              !handledVaultPhotoIds.add(link.photo.id)) {
+            continue;
+          }
+
+          if (link != null && vaultPhotosToTrash.contains(link.photo.id)) {
+            final linkedMessages = messagesToDelete
+                .where(
+                  (candidate) =>
+                      linkedByMessage[candidate.messageId]?.photo.id ==
+                      link.photo.id,
+                )
+                .toList();
+            update(completed, 'Moving linked vault item to Bin');
+            try {
+              await widget.vaultBridge.moveAttachmentToTrash(
+                link.photo,
+                expiresAtMs: expiry,
+              );
+              trashedCount++;
+            } catch (error) {
+              failures.add(
+                'Could not move ${link.photo.originalFilename} to Bin: $error',
+              );
+              completed += linkedMessages.length;
+              update(
+                completed,
+                'Kept linked messages because the vault item could not be moved.',
+              );
+              continue;
+            }
+
+            final deletedSources = <String>{};
+            final failedSources = <String>{};
+            var groupDeleteFailed = false;
+            for (final linkedMessage in linkedMessages) {
+              final linkedSource =
+                  linkedByMessage[linkedMessage.messageId]!.sourceId;
+              update(
+                completed,
+                'Deleting ${linkedMessage.documentName ?? 'linked message'}',
+              );
+              try {
+                await deleteChatMessage(linkedMessage);
+                deletedCount++;
+                deletedSources.add(linkedSource);
+              } catch (error) {
+                groupDeleteFailed = true;
+                failedSources.add(linkedSource);
+                failures.add(
+                  'Could not delete ${linkedMessage.messageId}: $error',
+                );
+              }
+              completed++;
+              update(
+                completed,
+                'Processed $completed of ${messagesToDelete.length}',
+              );
+            }
+
+            if (groupDeleteFailed) {
+              try {
+                await widget.vaultBridge.restoreAttachmentFromTrash(
+                  link.photo.id,
+                );
+                trashedCount--;
+              } catch (error) {
+                failures.add(
+                  'Could not restore ${link.photo.originalFilename} after a chat delete failed: $error',
+                );
+              }
+            }
+            for (final sourceId in deletedSources.difference(failedSources)) {
+              try {
+                await widget.vaultBridge.unlinkAttachment(sourceId);
+              } catch (error) {
+                failures.add('Could not update a vault link: $error');
+              }
+            }
+            continue;
+          }
+
+          update(
+            completed,
+            'Deleting ${message.documentName ?? 'selected message'}',
+          );
+          try {
+            await deleteChatMessage(message);
+            deletedCount++;
+          } catch (error) {
+            failures.add('Could not delete ${message.messageId}: $error');
+            completed++;
+            update(
+              completed,
+              'Processed $completed of ${messagesToDelete.length}',
+            );
+            continue;
+          }
+          if (link != null) {
+            try {
+              await widget.vaultBridge.unlinkAttachment(link.sourceId);
+            } catch (error) {
+              failures.add('Could not update a vault link: $error');
+            }
+          }
+          completed++;
+          update(
+            completed,
+            'Processed $completed of ${messagesToDelete.length}',
+          );
         }
+      },
+    );
+
+    if (!mounted) return;
+    final summary =
+        '$deletedCount of ${messagesToDelete.length} messages deleted; '
+        '$trashedCount linked vault items moved to Bin.'
+        '${failures.isEmpty ? '' : ' ${failures.join(' ')}'}';
+    ScaffoldMessenger.of(
+      this.context,
+    ).showSnackBar(SnackBar(content: Text(summary)));
+  }
+
+  Future<({String sourceId, VaultPhoto photo})?> _findLinkedVaultSource(
+    ChatMessage message,
+    String uid,
+  ) async {
+    for (final sourceId in _vaultSourceIds(message, uid)) {
+      final photo = await widget.vaultBridge.linkedAttachment(sourceId);
+      if (photo != null) return (sourceId: sourceId, photo: photo);
+    }
+    return null;
+  }
+
+  Future<({String sourceId, VaultPhoto photo, bool moveToBin})?>
+  _linkedVaultDisposition(ChatMessage message, String uid) async {
+    final link = await _findLinkedVaultSource(message, uid);
+    if (link == null) return null;
+    final sources = await widget.vaultBridge.linkedAttachmentSources(
+      link.photo.id,
+    );
+    return (
+      sourceId: link.sourceId,
+      photo: link.photo,
+      moveToBin:
+          sources.isEmpty || sources.every((source) => source == link.sourceId),
+    );
+  }
+
+  Future<void> _deleteSingleMessage(
+    ChatMessage message,
+    ActiveThreadCubit cubit, {
+    required bool forEveryone,
+    ({String sourceId, VaultPhoto photo, bool moveToBin})? link,
+  }) async {
+    var movedToBin = false;
+    if (link?.moveToBin == true) {
+      await widget.vaultBridge.moveAttachmentToTrash(
+        link!.photo,
+        expiresAtMs: DateTime.now()
+            .add(const Duration(days: 30))
+            .millisecondsSinceEpoch,
+      );
+      movedToBin = true;
+    }
+
+    try {
+      await _stopOwnLiveLocationBeforeDelete(message, cubit);
+      if (forEveryone) {
+        await cubit.deleteMessageForEveryone(message);
+      } else {
+        await cubit.deleteMessageForMe(message);
       }
     } catch (error) {
-      if (mounted) {
-        ScaffoldMessenger.of(this.context).showSnackBar(
-          SnackBar(content: Text('Could not delete messages: $error')),
-        );
+      if (movedToBin && link != null) {
+        try {
+          await widget.vaultBridge.restoreAttachmentFromTrash(link.photo.id);
+        } catch (restoreError) {
+          throw StateError(
+            'Chat delete failed ($error), and the Vault item could not be restored ($restoreError).',
+          );
+        }
+      }
+      rethrow;
+    }
+
+    if (link != null) {
+      try {
+        await widget.vaultBridge.unlinkAttachment(link.sourceId);
+      } catch (error) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                'Message deleted, but its vault link could not be cleared: $error',
+              ),
+            ),
+          );
+        }
       }
     }
   }
@@ -1907,6 +2269,32 @@ class _ThreadScreenState extends State<ThreadScreen>
     final pending =
         state is ActiveThreadLoaded &&
         state.uploadProgress.containsKey(msg.messageId);
+    if (msg.mediaRef != null && !widget.vaultBridge.isUnlocked) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Unlock the vault to check for linked items before deleting media.',
+          ),
+        ),
+      );
+      return;
+    }
+    late final ({String sourceId, VaultPhoto photo, bool moveToBin})? link;
+    try {
+      link = await _linkedVaultDisposition(msg, cubit.myUid);
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not check the vault link: $error')),
+      );
+      return;
+    }
+    if (!mounted) return;
+    final vaultWarning = link == null
+        ? ''
+        : link.moveToBin
+        ? ' Its linked Vault item will also be moved to Bin.'
+        : ' Its Vault item is linked to other chat messages and will stay in Vault.';
     final ok = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
@@ -1915,7 +2303,7 @@ class _ThreadScreenState extends State<ThreadScreen>
           pending
               ? 'Cancel this upload and delete the pending message and its temporary files?'
               : 'Remove this message from your copy of the chat? '
-                    'The other person will still see it.',
+                    'The other person will still see it.$vaultWarning',
         ),
         actions: [
           TextButton(
@@ -1931,8 +2319,7 @@ class _ThreadScreenState extends State<ThreadScreen>
     );
     if (ok != true || !mounted) return;
     try {
-      await _stopOwnLiveLocationBeforeDelete(msg, cubit);
-      await cubit.deleteMessageForMe(msg);
+      await _deleteSingleMessage(msg, cubit, forEveryone: false, link: link);
     } catch (error) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -1947,13 +2334,39 @@ class _ThreadScreenState extends State<ThreadScreen>
   /// routed through the screen's stable [context].
   Future<void> _confirmDeleteForEveryone(ChatMessage msg) async {
     final cubit = context.read<ActiveThreadCubit>();
+    if (msg.mediaRef != null && !widget.vaultBridge.isUnlocked) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Unlock the vault to check for linked items before deleting media.',
+          ),
+        ),
+      );
+      return;
+    }
+    late final ({String sourceId, VaultPhoto photo, bool moveToBin})? link;
+    try {
+      link = await _linkedVaultDisposition(msg, cubit.myUid);
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not check the vault link: $error')),
+      );
+      return;
+    }
+    if (!mounted) return;
+    final vaultWarning = link == null
+        ? ''
+        : link.moveToBin
+        ? ' The linked Vault item will also be moved to Bin.'
+        : ' The Vault item is linked to other chat messages and will stay in Vault.';
     final ok = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
         title: const Text('Delete for everyone'),
-        content: const Text(
+        content: Text(
           'This message will be deleted for everyone in this chat. '
-          'This cannot be undone.',
+          'This cannot be undone.$vaultWarning',
         ),
         actions: [
           TextButton(
@@ -1973,8 +2386,7 @@ class _ThreadScreenState extends State<ThreadScreen>
     );
     if (ok != true || !mounted) return;
     try {
-      await _stopOwnLiveLocationBeforeDelete(msg, cubit);
-      await cubit.deleteMessageForEveryone(msg);
+      await _deleteSingleMessage(msg, cubit, forEveryone: true, link: link);
     } catch (error) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -3951,7 +4363,7 @@ class _ThreadScreenState extends State<ThreadScreen>
     }
   }
 
-  /// Copy received media into the vault.
+  /// Save chat media as a linked Vault item shared by both views.
   Future<void> _saveToVault(ChatMessage message) async {
     final messenger = ScaffoldMessenger.of(context);
     final ref = message.mediaRef;
@@ -3964,72 +4376,193 @@ class _ThreadScreenState extends State<ThreadScreen>
       );
       return;
     }
-    final uid = context.read<ActiveThreadCubit>().myUid;
-    widget.mediaLoader.setAccount(uid);
-    final key = widget.mediaLoader.diskKey(ref);
-    final sourceId = '$uid:${message.threadId}:$ref';
-    widget.mediaLoader.diskCache.pin(key);
-    Uint8List? bytes;
-    void checkAccount() {
-      if (widget.mediaLoader.accountId != uid) {
-        throw StateError('Chat account changed during vault move.');
-      }
-    }
-
-    Future<void> mark() async {
-      checkAccount();
-      await widget.mediaLoader.diskCache.markMoved(key);
-    }
-
-    Future<void> cleanup() async {
-      checkAccount();
-      await widget.mediaLoader.removeAfterVaultMove(ref);
-    }
-
     try {
-      var result = await widget.vaultBridge.resumeMove(
-        sourceId: sourceId,
-        onMarkMoved: mark,
-        onSourceCleanup: cleanup,
+      late final ChatVaultMoveResult result;
+      await _showBulkProgress(
+        title: 'Saving to vault',
+        total: 1,
+        operation: (update) async {
+          update(0, 'Saving ${message.documentName ?? 'attachment'}');
+          result = await _copyMessageToVault(message);
+          update(1, 'Saved to vault');
+        },
       );
-      if (result == null) {
-        bytes = await widget.mediaLoader.fetchUncached(
-          threadId: message.threadId,
-          storagePath: ref,
-          senderId: message.senderId,
-        );
-        checkAccount();
-        final extension = switch (message.mediaType) {
-          MessageType.video => 'mp4',
-          MessageType.audio => 'wav',
-          _ => 'jpg',
-        };
-        result = await widget.vaultBridge.moveToVault(
-          bytes: bytes,
-          filename: message.documentName ?? '${message.messageId}.$extension',
-          sourceId: sourceId,
-          mediaType: message.mediaType?.name,
-          onMarkMoved: mark,
-          onSourceCleanup: cleanup,
-        );
-      }
       messenger.showSnackBar(
         SnackBar(
           content: Text(
             result.cleanupPending
-                ? 'Stored in vault; local cleanup pending. Tap Move to vault to retry.'
-                : 'Moved to vault.',
+                ? 'Stored in vault; local cleanup pending. Tap Save to vault to retry.'
+                : 'Saved to vault; available in chat and vault.',
           ),
         ),
       );
     } catch (e) {
       messenger.showSnackBar(
-        SnackBar(content: Text('Could not move to vault: $e')),
+        SnackBar(content: Text('Could not save to vault: $e')),
+      );
+    }
+  }
+
+  List<String> _vaultSourceIds(ChatMessage message, String uid) {
+    final ref = message.mediaRef;
+    if (ref == null) return const [];
+    return [
+      '$uid:${message.threadId}:${message.messageId}:$ref',
+      '$uid:${message.threadId}:$ref',
+    ];
+  }
+
+  Future<ChatVaultMoveResult> _copyMessageToVault(ChatMessage message) async {
+    final ref = message.mediaRef;
+    if (ref == null) throw StateError('This message has no media attachment.');
+    if (!widget.vaultBridge.isUnlocked) {
+      throw StateError('Unlock the vault before saving this attachment.');
+    }
+
+    final uid = context.read<ActiveThreadCubit>().myUid;
+    widget.mediaLoader.setAccount(uid);
+    final previewRef = message.previewRef;
+    final paths = {ref, ?previewRef};
+    final keys = paths.map(widget.mediaLoader.diskKey).toList();
+    for (final key in keys) {
+      widget.mediaLoader.diskCache.pin(key);
+    }
+    Uint8List? bytes;
+    void checkAccount() {
+      if (widget.mediaLoader.accountId != uid) {
+        throw StateError('Chat account changed during vault import.');
+      }
+    }
+
+    Future<void> mark() async {
+      checkAccount();
+      for (final key in keys) {
+        await widget.mediaLoader.diskCache.markMoved(key);
+      }
+    }
+
+    Future<void> cleanup() async {
+      checkAccount();
+      for (final path in paths) {
+        await widget.mediaLoader.removeAfterVaultMove(path);
+      }
+    }
+
+    try {
+      for (final sourceId in _vaultSourceIds(message, uid)) {
+        final resumed = await widget.vaultBridge.resumeMove(
+          sourceId: sourceId,
+          onMarkMoved: mark,
+          onSourceCleanup: cleanup,
+        );
+        if (resumed != null) return resumed;
+      }
+
+      bytes = await widget.mediaLoader.fetchUncached(
+        threadId: message.threadId,
+        storagePath: ref,
+        senderId: message.senderId,
+      );
+      checkAccount();
+      final extension = switch (message.mediaType) {
+        MessageType.video => 'mp4',
+        MessageType.gif => 'gif',
+        _ => 'jpg',
+      };
+      return await widget.vaultBridge.moveToVault(
+        bytes: bytes,
+        filename: message.documentName ?? '${message.messageId}.$extension',
+        sourceId: _vaultSourceIds(message, uid).first,
+        mediaType: message.mediaType?.name,
+        onMarkMoved: mark,
+        onSourceCleanup: cleanup,
       );
     } finally {
       bytes?.fillRange(0, bytes.length, 0);
-      widget.mediaLoader.diskCache.unpin(key);
+      for (final key in keys) {
+        widget.mediaLoader.diskCache.unpin(key);
+      }
     }
+  }
+
+  Future<void> _moveSelectedMediaToVault() async {
+    final state = context.read<ActiveThreadCubit>().state;
+    if (state is! ActiveThreadLoaded || !_isBulkVaultSelection(state)) return;
+    if (!widget.vaultBridge.isUnlocked) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Unlock the vault before saving media.')),
+      );
+      return;
+    }
+
+    final messages = _selectedMessages(state);
+    _clearMessageSelection();
+    var saved = 0;
+    final failures = <String>[];
+    await _showBulkProgress(
+      title: 'Saving media to vault',
+      total: messages.length,
+      operation: (update) async {
+        for (var index = 0; index < messages.length; index++) {
+          final message = messages[index];
+          update(
+            index,
+            'Saving ${index + 1} of ${messages.length}: '
+            '${message.documentName ?? message.mediaType?.name ?? 'media'}',
+          );
+          try {
+            final result = await _copyMessageToVault(message);
+            if (result.cleanupPending) {
+              failures.add(
+                '${message.documentName ?? 'Media'} stored; chat cleanup pending.',
+              );
+            } else {
+              saved++;
+            }
+          } catch (error) {
+            failures.add('${message.documentName ?? 'Media'}: $error');
+          }
+          update(index + 1, 'Processed ${index + 1} of ${messages.length}');
+        }
+      },
+    );
+    if (!mounted) return;
+    final message = failures.isEmpty
+        ? '$saved media items are available in chat and vault.'
+        : '$saved of ${messages.length} saved. ${failures.join(' ')}';
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  Future<Uint8List?> _loadLinkedVaultMedia(ChatMessage message) {
+    final ref = message.mediaRef;
+    if (ref == null) return Future<Uint8List?>.value();
+    final uid = context.read<ActiveThreadCubit>().myUid;
+    return _loadFirstLinkedMedia(_vaultSourceIds(message, uid));
+  }
+
+  Future<Uint8List?> _loadLinkedVaultThumbnail(ChatMessage message) {
+    final ref = message.mediaRef;
+    if (ref == null) return Future<Uint8List?>.value();
+    final uid = context.read<ActiveThreadCubit>().myUid;
+    return _loadFirstLinkedThumbnail(_vaultSourceIds(message, uid));
+  }
+
+  Future<Uint8List?> _loadFirstLinkedMedia(List<String> sourceIds) async {
+    for (final sourceId in sourceIds) {
+      final bytes = await widget.vaultBridge.loadLinkedAttachment(sourceId);
+      if (bytes != null) return bytes;
+    }
+    return null;
+  }
+
+  Future<Uint8List?> _loadFirstLinkedThumbnail(List<String> sourceIds) async {
+    for (final sourceId in sourceIds) {
+      final bytes = await widget.vaultBridge.loadLinkedThumbnail(sourceId);
+      if (bytes != null) return bytes;
+    }
+    return null;
   }
 }
 

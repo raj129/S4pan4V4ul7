@@ -127,7 +127,10 @@ class ChatAttachmentVaultImporter {
     _validateSource(sourceId);
     _manager.requireChatImportUnlock();
     final journal = await _manager.readChatMove(sourceId);
-    if (journal == null) return null;
+    if (journal == null ||
+        const {'unlinked', 'trashed'}.contains(journal['phase'])) {
+      return null;
+    }
     final item = await _manager.chatImportById(journal['id'] as String);
     if (item == null) {
       if (journal['phase'] == 'importing') return null;

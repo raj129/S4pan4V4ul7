@@ -21,6 +21,7 @@ class ChatImageViewerScreen extends StatefulWidget {
     required this.message,
     required this.loader,
     this.initialBytes,
+    this.loadLinkedVaultMedia,
   });
 
   final ChatMessage message;
@@ -28,12 +29,14 @@ class ChatImageViewerScreen extends StatefulWidget {
 
   /// Borrowed authenticated bytes; the viewer copies them before displaying.
   final Uint8List? initialBytes;
+  final LinkedChatMediaBytesLoader? loadLinkedVaultMedia;
 
   static Future<void> open(
     BuildContext context, {
     required ChatMessage message,
     required ChatMediaLoader loader,
     Uint8List? initialBytes,
+    LinkedChatMediaBytesLoader? loadLinkedVaultMedia,
   }) {
     return Navigator.of(context).push(
       PageRouteBuilder(
@@ -43,6 +46,7 @@ class ChatImageViewerScreen extends StatefulWidget {
           message: message,
           loader: loader,
           initialBytes: initialBytes,
+          loadLinkedVaultMedia: loadLinkedVaultMedia,
         ),
         transitionsBuilder: (_, animation, _, child) =>
             FadeTransition(opacity: animation, child: child),
@@ -107,11 +111,18 @@ class _ChatImageViewerScreenState extends State<ChatImageViewerScreen>
     String ref,
     int generation,
   ) async {
-    final bytes = await widget.loader.load(
-      threadId: message.threadId,
-      storagePath: ref,
-      senderId: message.senderId,
-    );
+    final linkedLoader = widget.loadLinkedVaultMedia;
+    final linkedBytes =
+        linkedLoader != null && await widget.loader.wasMovedToVault(ref)
+        ? await linkedLoader(message)
+        : null;
+    final bytes =
+        linkedBytes ??
+        await widget.loader.load(
+          threadId: message.threadId,
+          storagePath: ref,
+          senderId: message.senderId,
+        );
     if (!mounted || generation != _generation || _fullBytes != null) {
       bytes.fillRange(0, bytes.length, 0);
       return Uint8List(0);
@@ -130,8 +141,7 @@ class _ChatImageViewerScreenState extends State<ChatImageViewerScreen>
   /// A Motion Photo can have an SDR still with an HDR embedded video, so the
   /// video is checked too; otherwise the HDR toggle would stay hidden.
   bool _isHdrContent(Uint8List still, Uint8List? motionVideo) =>
-      isHdrImage(still) ||
-      (motionVideo != null && isHdrVideo(motionVideo));
+      isHdrImage(still) || (motionVideo != null && isHdrVideo(motionVideo));
 
   void _onMediaChanged() {
     if (!mounted || _fullBytes != null) return;

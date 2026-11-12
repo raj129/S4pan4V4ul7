@@ -82,6 +82,8 @@ class MessageBubble extends StatelessWidget {
     this.onRefreshLiveLocation,
     this.onRequestLiveLocationRefresh,
     this.notesRepository,
+    this.loadLinkedVaultMedia,
+    this.loadLinkedVaultThumbnail,
   });
 
   final ChatMessage message;
@@ -169,6 +171,8 @@ class MessageBubble extends StatelessWidget {
   final FutureOr<void> Function(String threadId, String sessionId)?
   onRequestLiveLocationRefresh;
   final NotesRepository? notesRepository;
+  final LinkedChatMediaBytesLoader? loadLinkedVaultMedia;
+  final LinkedChatMediaBytesLoader? loadLinkedVaultThumbnail;
 
   @override
   Widget build(BuildContext context) {
@@ -324,10 +328,13 @@ class MessageBubble extends StatelessWidget {
             child: _BubbleContent(
               message: message,
               isMine: isMine,
+              isSelectionMode: isSelectionMode,
               myUid: myUid,
               otherUid: otherUid,
               isOffline: isOffline,
               mediaLoader: mediaLoader,
+              loadLinkedVaultMedia: loadLinkedVaultMedia,
+              loadLinkedVaultThumbnail: loadLinkedVaultThumbnail,
               sendStatus: sendStatus,
               onCancelUpload: onCancelUpload,
               onPauseUpload: onPauseUpload,
@@ -356,10 +363,13 @@ class MessageBubble extends StatelessWidget {
               child: _BubbleContent(
                 message: message,
                 isMine: isMine,
+                isSelectionMode: isSelectionMode,
                 myUid: myUid,
                 otherUid: otherUid,
                 isOffline: isOffline,
                 mediaLoader: mediaLoader,
+                loadLinkedVaultMedia: loadLinkedVaultMedia,
+                loadLinkedVaultThumbnail: loadLinkedVaultThumbnail,
                 sendStatus: sendStatus,
                 onCancelUpload: onCancelUpload,
                 onPauseUpload: onPauseUpload,
@@ -375,14 +385,62 @@ class MessageBubble extends StatelessWidget {
             ),
           );
 
+    final bubbleMaxWidth =
+        MediaQuery.sizeOf(context).width * (isSelectionMode ? 0.70 : 0.78);
+    final messageRow = isSelectionMode
+        ? Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Padding(
+                padding: const EdgeInsets.only(right: AppSpacing.sm),
+                child: Icon(
+                  isSelected
+                      ? Icons.check_circle_rounded
+                      : Icons.radio_button_unchecked_rounded,
+                  color: isSelected ? cs.primary : cs.outline,
+                  size: 22,
+                ),
+              ),
+              Expanded(
+                child: Align(
+                  alignment: isMine
+                      ? Alignment.centerRight
+                      : Alignment.centerLeft,
+                  child: ConstrainedBox(
+                    constraints: BoxConstraints(maxWidth: bubbleMaxWidth),
+                    child: bubble,
+                  ),
+                ),
+              ),
+            ],
+          )
+        : Row(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              ConstrainedBox(
+                constraints: BoxConstraints(maxWidth: bubbleMaxWidth),
+                child: bubble,
+              ),
+            ],
+          );
+
     return RepaintBoundary(
       child: Align(
-        alignment: isMine ? Alignment.centerRight : Alignment.centerLeft,
+        alignment: isSelectionMode
+            ? Alignment.centerLeft
+            : isMine
+            ? Alignment.centerRight
+            : Alignment.centerLeft,
         child: Padding(
           padding: EdgeInsets.only(
             top: isFirstInGroup ? AppSpacing.xs : 1.5,
             bottom: isLastInGroup ? AppSpacing.xs : 1.5,
-            left: isMine ? AppSpacing.xxl + AppSpacing.md : AppSpacing.md,
+            left: isSelectionMode
+                ? AppSpacing.md
+                : isMine
+                ? AppSpacing.xxl + AppSpacing.md
+                : AppSpacing.md,
             right: isMine ? AppSpacing.md : AppSpacing.xxl + AppSpacing.md,
           ),
           child: Column(
@@ -392,7 +450,10 @@ class MessageBubble extends StatelessWidget {
             children: [
               Dismissible(
                 key: ValueKey('swipe_${message.messageId}'),
-                direction: isSelectionMode || onReply == null || !canReplyFromLeftToRight
+                direction:
+                    isSelectionMode ||
+                        onReply == null ||
+                        !canReplyFromLeftToRight
                     ? DismissDirection.none
                     : DismissDirection.startToEnd,
                 dismissThresholds: const {DismissDirection.startToEnd: 0.25},
@@ -410,42 +471,7 @@ class MessageBubble extends StatelessWidget {
                       ? onSelect
                       : () => _showActionSheet(context),
                   onDoubleTap: (isMine && !isSelectionMode) ? onEdit : null,
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.center,
-                    children: [
-                      if (isSelectionMode && !isMine)
-                        Padding(
-                          padding: const EdgeInsets.only(right: AppSpacing.sm),
-                          child: Icon(
-                            isSelected
-                                ? Icons.check_circle_rounded
-                                : Icons.radio_button_unchecked_rounded,
-                            color: isSelected ? cs.primary : cs.outline,
-                            size: 22,
-                          ),
-                        ),
-                      ConstrainedBox(
-                        constraints: BoxConstraints(
-                          maxWidth: MediaQuery.sizeOf(context).width *
-                              (isSelectionMode ? 0.70 : 0.78),
-                          minWidth: 0,
-                        ),
-                        child: bubble,
-                      ),
-                      if (isSelectionMode && isMine)
-                        Padding(
-                          padding: const EdgeInsets.only(left: AppSpacing.sm),
-                          child: Icon(
-                            isSelected
-                                ? Icons.check_circle_rounded
-                                : Icons.radio_button_unchecked_rounded,
-                            color: isSelected ? cs.primary : cs.outline,
-                            size: 22,
-                          ),
-                        ),
-                    ],
-                  ),
+                  child: messageRow,
                 ),
               ),
               if (sendStatus != null && message.mediaType != MessageType.audio)
@@ -470,168 +496,179 @@ class MessageBubble extends StatelessWidget {
     showModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
+      isScrollControlled: true,
+      constraints: BoxConstraints(
+        maxHeight: MediaQuery.sizeOf(context).height * 0.9,
+      ),
       builder: (sheetContext) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (message.status == MessageStatus.failed) ...[
-              if (onRetry != null)
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (message.status == MessageStatus.failed) ...[
+                if (onRetry != null)
+                  ListTile(
+                    leading: const Icon(Icons.refresh_rounded),
+                    title: const Text('Try again'),
+                    onTap: () {
+                      Navigator.pop(sheetContext);
+                      onRetry!();
+                    },
+                  ),
+                if (onDiscard != null)
+                  ListTile(
+                    leading: Icon(
+                      Icons.delete_outline_rounded,
+                      color: cs.error,
+                    ),
+                    title: Text(
+                      'Discard unsent message',
+                      style: TextStyle(color: cs.error),
+                    ),
+                    onTap: () {
+                      Navigator.pop(sheetContext);
+                      onDiscard!();
+                    },
+                  ),
+                const Divider(height: 1),
+              ],
+              if (onReact != null)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(
+                    AppSpacing.md,
+                    0,
+                    AppSpacing.md,
+                    AppSpacing.sm,
+                  ),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: AppSpacing.sm,
+                      vertical: AppSpacing.xs,
+                    ),
+                    decoration: BoxDecoration(
+                      color: cs.surfaceContainerHighest,
+                      borderRadius: AppRadius.all(AppRadius.pill),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                      children: [
+                        for (final emoji in kQuickReactions)
+                          _QuickReactionButton(
+                            emoji: emoji,
+                            selected: message.reactionOf(myUid) == emoji,
+                            onTap: () {
+                              Navigator.pop(sheetContext);
+                              onReact!(emoji);
+                            },
+                          ),
+                        _MoreReactionsButton(
+                          current:
+                              kQuickReactions.contains(
+                                message.reactionOf(myUid),
+                              )
+                              ? null
+                              : message.reactionOf(myUid),
+                          onTap: () async {
+                            Navigator.pop(sheetContext);
+                            final emoji = await showReactionPicker(context);
+                            if (emoji != null) onReact!(emoji);
+                          },
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              if (onReply != null)
                 ListTile(
-                  leading: const Icon(Icons.refresh_rounded),
-                  title: const Text('Try again'),
+                  leading: const Icon(Icons.reply_rounded),
+                  title: const Text('Reply'),
                   onTap: () {
                     Navigator.pop(sheetContext);
-                    onRetry!();
+                    onReply!();
                   },
                 ),
-              if (onDiscard != null)
+              if (isMine &&
+                  onEdit != null &&
+                  !message.isMedia &&
+                  !message.isGeoShare &&
+                  message.mediaType != MessageType.liveLocation)
                 ListTile(
-                  leading: Icon(Icons.delete_outline_rounded, color: cs.error),
+                  leading: const Icon(Icons.edit_outlined),
+                  title: const Text('Edit'),
+                  onTap: () {
+                    Navigator.pop(sheetContext);
+                    onEdit!();
+                  },
+                ),
+              if (onCopy != null &&
+                  !message.isMedia &&
+                  message.mediaType != MessageType.liveLocation)
+                ListTile(
+                  leading: const Icon(Icons.content_copy_rounded),
+                  title: const Text('Copy message'),
+                  onTap: () {
+                    Navigator.pop(sheetContext);
+                    onCopy!();
+                  },
+                ),
+              if (onForward != null)
+                ListTile(
+                  leading: const Icon(Icons.shortcut_rounded),
+                  title: const Text('Forward'),
+                  onTap: () {
+                    Navigator.pop(sheetContext);
+                    onForward!();
+                  },
+                ),
+              if (onSaveToVault != null)
+                ListTile(
+                  leading: const Icon(Icons.archive_outlined),
+                  title: const Text('Save to vault'),
+                  onTap: () {
+                    Navigator.pop(sheetContext);
+                    onSaveToVault!();
+                  },
+                ),
+              if (onSaveAsSticker != null)
+                ListTile(
+                  leading: const Icon(Icons.bookmark_add_outlined),
+                  title: const Text('Add to My stickers'),
+                  onTap: () {
+                    Navigator.pop(sheetContext);
+                    onSaveAsSticker!();
+                  },
+                ),
+              if (onSelect != null)
+                ListTile(
+                  leading: const Icon(Icons.check_circle_outline_rounded),
+                  title: const Text('Select'),
+                  onTap: () {
+                    Navigator.pop(sheetContext);
+                    onSelect!();
+                  },
+                ),
+              ListTile(
+                leading: Icon(Icons.delete_outline_rounded, color: cs.error),
+                title: Text('Delete for me', style: TextStyle(color: cs.error)),
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  onDeleteForMe();
+                },
+              ),
+              if (onDeleteForEveryone != null)
+                ListTile(
+                  leading: Icon(Icons.delete_sweep_outlined, color: cs.error),
                   title: Text(
-                    'Discard unsent message',
+                    'Delete for everyone',
                     style: TextStyle(color: cs.error),
                   ),
                   onTap: () {
                     Navigator.pop(sheetContext);
-                    onDiscard!();
+                    onDeleteForEveryone!();
                   },
                 ),
-              const Divider(height: 1),
             ],
-            if (onReact != null)
-              Padding(
-                padding: const EdgeInsets.fromLTRB(
-                  AppSpacing.md,
-                  0,
-                  AppSpacing.md,
-                  AppSpacing.sm,
-                ),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: AppSpacing.sm,
-                    vertical: AppSpacing.xs,
-                  ),
-                  decoration: BoxDecoration(
-                    color: cs.surfaceContainerHighest,
-                    borderRadius: AppRadius.all(AppRadius.pill),
-                  ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                    children: [
-                      for (final emoji in kQuickReactions)
-                        _QuickReactionButton(
-                          emoji: emoji,
-                          selected: message.reactionOf(myUid) == emoji,
-                          onTap: () {
-                            Navigator.pop(sheetContext);
-                            onReact!(emoji);
-                          },
-                        ),
-                      _MoreReactionsButton(
-                        current:
-                            kQuickReactions.contains(message.reactionOf(myUid))
-                            ? null
-                            : message.reactionOf(myUid),
-                        onTap: () async {
-                          Navigator.pop(sheetContext);
-                          final emoji = await showReactionPicker(context);
-                          if (emoji != null) onReact!(emoji);
-                        },
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            if (onReply != null)
-              ListTile(
-                leading: const Icon(Icons.reply_rounded),
-                title: const Text('Reply'),
-                onTap: () {
-                  Navigator.pop(sheetContext);
-                  onReply!();
-                },
-              ),
-            if (isMine &&
-                onEdit != null &&
-                !message.isMedia &&
-                !message.isGeoShare &&
-                message.mediaType != MessageType.liveLocation)
-              ListTile(
-                leading: const Icon(Icons.edit_outlined),
-                title: const Text('Edit'),
-                onTap: () {
-                  Navigator.pop(sheetContext);
-                  onEdit!();
-                },
-              ),
-            if (onCopy != null &&
-                !message.isMedia &&
-                message.mediaType != MessageType.liveLocation)
-              ListTile(
-                leading: const Icon(Icons.content_copy_rounded),
-                title: const Text('Copy message'),
-                onTap: () {
-                  Navigator.pop(sheetContext);
-                  onCopy!();
-                },
-              ),
-            if (onForward != null)
-              ListTile(
-                leading: const Icon(Icons.shortcut_rounded),
-                title: const Text('Forward'),
-                onTap: () {
-                  Navigator.pop(sheetContext);
-                  onForward!();
-                },
-              ),
-            if (onSaveToVault != null)
-              ListTile(
-                leading: const Icon(Icons.lock_outline_rounded),
-                title: const Text('Move to vault'),
-                onTap: () {
-                  Navigator.pop(sheetContext);
-                  onSaveToVault!();
-                },
-              ),
-            if (onSaveAsSticker != null)
-              ListTile(
-                leading: const Icon(Icons.bookmark_add_outlined),
-                title: const Text('Add to My stickers'),
-                onTap: () {
-                  Navigator.pop(sheetContext);
-                  onSaveAsSticker!();
-                },
-              ),
-            if (onSelect != null)
-              ListTile(
-                leading: const Icon(Icons.check_circle_outline_rounded),
-                title: const Text('Select'),
-                onTap: () {
-                  Navigator.pop(sheetContext);
-                  onSelect!();
-                },
-              ),
-            ListTile(
-              leading: Icon(Icons.delete_outline_rounded, color: cs.error),
-              title: Text('Delete for me', style: TextStyle(color: cs.error)),
-              onTap: () {
-                Navigator.pop(sheetContext);
-                onDeleteForMe();
-              },
-            ),
-            if (onDeleteForEveryone != null)
-              ListTile(
-                leading: Icon(Icons.delete_sweep_outlined, color: cs.error),
-                title: Text(
-                  'Delete for everyone',
-                  style: TextStyle(color: cs.error),
-                ),
-                onTap: () {
-                  Navigator.pop(sheetContext);
-                  onDeleteForEveryone!();
-                },
-              ),
-          ],
+          ),
         ),
       ),
     );
@@ -645,6 +682,7 @@ class _BubbleContent extends StatelessWidget {
   const _BubbleContent({
     required this.message,
     required this.isMine,
+    required this.isSelectionMode,
     required this.myUid,
     required this.otherUid,
     required this.isOffline,
@@ -661,14 +699,19 @@ class _BubbleContent extends StatelessWidget {
     this.onPauseUpload,
     this.onResumeUpload,
     this.onRetry,
+    this.loadLinkedVaultMedia,
+    this.loadLinkedVaultThumbnail,
   });
 
   final ChatMessage message;
   final bool isMine;
+  final bool isSelectionMode;
   final String myUid;
   final String otherUid;
   final bool isOffline;
   final ChatMediaLoader mediaLoader;
+  final LinkedChatMediaBytesLoader? loadLinkedVaultMedia;
+  final LinkedChatMediaBytesLoader? loadLinkedVaultThumbnail;
   final void Function(String messageId)? onTapQuote;
   final Color textColor;
   final Color metaColor;
@@ -775,19 +818,25 @@ class _BubbleContent extends StatelessWidget {
               loader: mediaLoader,
               sendStatus: sendStatus,
               onCancel: onCancelUpload,
-              onTap: message.mediaRef == null || sendStatus != null
+              loadLinkedVaultThumbnail: loadLinkedVaultThumbnail,
+              onTap:
+                  isSelectionMode ||
+                      message.mediaRef == null ||
+                      sendStatus != null
                   ? null
                   : message.mediaType == MessageType.image
                   ? () => ChatImageViewerScreen.open(
                       context,
                       message: message,
                       loader: mediaLoader,
+                      loadLinkedVaultMedia: loadLinkedVaultMedia,
                     )
                   : message.mediaType == MessageType.video
                   ? () => ChatVideoPlayerScreen.open(
                       context,
                       message: message,
                       loader: mediaLoader,
+                      loadLinkedVaultMedia: loadLinkedVaultMedia,
                     )
                   : null,
             ),
