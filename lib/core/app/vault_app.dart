@@ -12,6 +12,8 @@ import './external_activity_guard.dart';
 import './android_chat_viewer_guard.dart';
 import '../di/app_dependencies.dart';
 import '../location/presentation/mock_location_banner.dart';
+import '../media/animated_media.dart';
+import '../platform/hdr_preview_capability.dart';
 import '../platform/screenshot_protection.dart';
 import '../routing/app_router.dart';
 import '../widgets/app_navigation_drawer.dart';
@@ -77,6 +79,8 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
     );
     _router.routeInformationProvider.addListener(_updateChatVisibility);
     _updateChatVisibility();
+    HdrPreviewPreference.instance.configure(_deps.settingsRepository);
+    unawaited(HdrPreviewCapability.instance.load());
     _initShareIntentHandling();
     // Database/storage setup failing must not be silent: report it (to
     // Crashlytics in release via FlutterError.onError) instead of leaving the

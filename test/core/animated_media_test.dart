@@ -5,9 +5,14 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:photo_vault/core/media/animated_media.dart';
+import 'package:photo_vault/core/testing/repositories/in_memory_settings_repository.dart';
 import 'package:photo_vault/features/chat/application/media/image_compressor.dart';
 
 void main() {
+  tearDown(() {
+    HdrPreviewPreference.instance.resetForTesting();
+  });
+
   test('detects GIF data independently of the filename', () {
     expect(isGif(Uint8List.fromList(ascii.encode('GIF89a'))), isTrue);
     expect(isGif(Uint8List.fromList(ascii.encode('GIF87a'))), isTrue);
@@ -73,11 +78,18 @@ void main() {
       final stored = await SharedPreferences.getInstance();
       expect(stored.getString('settings.media_animation_mode'), 'loop');
 
-      final hdrPreference = HdrPreviewPreference.instance;
+      final settings = InMemorySettingsRepository();
+      final hdrPreference = HdrPreviewPreference.instance..configure(settings);
       await hdrPreference.load();
       expect(hdrPreference.enabled.value, isTrue);
       await hdrPreference.setEnabled(false);
-      expect(stored.getBool('settings.hdr_preview_enabled'), isFalse);
+      expect(hdrPreference.enabled.value, isFalse);
+      expect(await settings.isHdrPhotoPreviewEnabled(), isFalse);
+      hdrPreference
+        ..resetForTesting()
+        ..configure(settings);
+      await hdrPreference.load();
+      expect(hdrPreference.enabled.value, isFalse);
     },
   );
 

@@ -34,6 +34,18 @@ void main() {
     expect(kv.values[StorageKeys.screenshotProtectionEnabled], 'false');
   });
 
+  test('HDR photo preview defaults on and persists user choice', () async {
+    final kv = _MemoryStringKv();
+    final repository = PersistentSettingsRepository(kv);
+
+    expect(await repository.isHdrPhotoPreviewEnabled(), isTrue);
+
+    await repository.setHdrPhotoPreviewEnabled(false);
+
+    expect(await repository.isHdrPhotoPreviewEnabled(), isFalse);
+    expect(kv.values[StorageKeys.hdrPhotoPreviewEnabled], 'false');
+  });
+
   test('provides defaults and persists timeout and alert text', () async {
     final kv = _MemoryStringKv();
     final repository = PersistentSettingsRepository(kv);
