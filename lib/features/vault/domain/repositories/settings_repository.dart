@@ -77,6 +77,11 @@ abstract class SettingsRepository {
 
   Future<void> setScreenshotProtectionEnabled(bool enabled) async {}
 
+  /// Whether supported devices should render HDR photos with HDR color mode.
+  Future<bool> isHdrPhotoPreviewEnabled() async => true;
+
+  Future<void> setHdrPhotoPreviewEnabled(bool enabled) async {}
+
   /// Persisted theme palette id (e.g. 'indigo', 'ocean', 'violet', 'emerald', 'rose', 'amber').
   Future<String?> getThemePaletteId() async => null;
 
