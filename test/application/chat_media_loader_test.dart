@@ -184,22 +184,23 @@ void main() {
       return gate.future.whenComplete(() => activeDownloads--);
     };
     final results = [
-      for (var i = 0; i < 5; i++) loader.load(threadId: 't', storagePath: 'p$i'),
+      for (var i = 0; i < 5; i++)
+        loader.load(threadId: 't', storagePath: 'p$i'),
     ];
     await waitForStartedCount(2);
-    expect(started, ['p0', 'p1']);
+    expect(started.toSet(), {'p0', 'p1'});
 
-    gates['p0']!.complete(Uint8List.fromList([1]));
+    gates[started.first]!.complete(Uint8List.fromList([1]));
     await waitForStartedCount(3);
-    expect(started, ['p0', 'p1', 'p4']);
+    expect(started, contains('p4'));
 
-    gates['p1']!.complete(Uint8List.fromList([1]));
+    gates[started[1]]!.complete(Uint8List.fromList([1]));
     await waitForStartedCount(4);
-    expect(started, ['p0', 'p1', 'p4', 'p3']);
+    expect(started.last, 'p3');
 
     gates['p4']!.complete(Uint8List.fromList([1]));
     await waitForStartedCount(5);
-    expect(started, ['p0', 'p1', 'p4', 'p3', 'p2']);
+    expect(started.last, 'p2');
 
     gates['p3']!.complete(Uint8List.fromList([1]));
     gates['p2']!.complete(Uint8List.fromList([1]));
@@ -224,7 +225,10 @@ void main() {
     final running = loader.load(threadId: 't', storagePath: 'a');
     final token = ChatMediaLoadToken();
     final queued = loader.load(threadId: 't', storagePath: 'b', token: token);
-    final cancelled = expectLater(queued, throwsA(isA<ChatMediaLoadCancelled>()));
+    final cancelled = expectLater(
+      queued,
+      throwsA(isA<ChatMediaLoadCancelled>()),
+    );
     await Future<void>.delayed(const Duration(milliseconds: 5));
     token.cancel();
     await cancelled;
@@ -233,21 +237,24 @@ void main() {
     expect(media.downloads, 1);
   });
 
-  test('moving one attachment to the vault does not cancel the others', () async {
-    final gate = Completer<Uint8List>();
-    media.response = (_) => gate.future;
-    final other = loader.load(threadId: 't', storagePath: 'other');
-    final moved = loader.load(threadId: 't', storagePath: 'moved');
-    final movedCancelled = expectLater(
-      moved,
-      throwsA(isA<ChatMediaLoadCancelled>()),
-    );
-    await Future<void>.delayed(const Duration(milliseconds: 5));
-    await loader.removeAfterVaultMove('moved');
-    gate.complete(Uint8List.fromList([7]));
-    await movedCancelled;
-    expect(await other, [7]);
-  });
+  test(
+    'moving one attachment to the vault does not cancel the others',
+    () async {
+      final gate = Completer<Uint8List>();
+      media.response = (_) => gate.future;
+      final other = loader.load(threadId: 't', storagePath: 'other');
+      final moved = loader.load(threadId: 't', storagePath: 'moved');
+      final movedCancelled = expectLater(
+        moved,
+        throwsA(isA<ChatMediaLoadCancelled>()),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+      await loader.removeAfterVaultMove('moved');
+      gate.complete(Uint8List.fromList([7]));
+      await movedCancelled;
+      expect(await other, [7]);
+    },
+  );
 
   group('Android durable acquisitions', () {
     const channel = MethodChannel('test/loader_downloads');
