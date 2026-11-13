@@ -27,18 +27,12 @@ import 'attachment_download_progress.dart';
 import 'live_location_bubble.dart';
 import 'geo_share_bubble.dart';
 import 'shared_note_bubble.dart';
+import 'reply_swipe.dart';
 import '../../domain/repositories/notes_repository.dart';
 import '../../application/media/media_send_status.dart';
 
 /// Emoji offered in the quick reaction bar, matching WhatsApp's default set.
 const kQuickReactions = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
-
-/// Soft tick the moment a reply swipe crosses the threshold, once per swipe.
-void _replySwipeHaptic(DismissUpdateDetails details) {
-  if (details.reached && !details.previousReached) {
-    HapticFeedback.lightImpact();
-  }
-}
 
 /// A single chat message.
 class MessageBubble extends StatelessWidget {
@@ -448,22 +442,14 @@ class MessageBubble extends StatelessWidget {
                 ? CrossAxisAlignment.end
                 : CrossAxisAlignment.start,
             children: [
-              Dismissible(
+              ReplySwipe(
                 key: ValueKey('swipe_${message.messageId}'),
-                direction:
+                onReply:
                     isSelectionMode ||
                         onReply == null ||
                         !canReplyFromLeftToRight
-                    ? DismissDirection.none
-                    : DismissDirection.startToEnd,
-                dismissThresholds: const {DismissDirection.startToEnd: 0.25},
-                onUpdate: _replySwipeHaptic,
-                confirmDismiss: (_) async {
-                  onReply?.call();
-                  return false;
-                },
-                background: const _ReplySwipeBackground(alignEnd: false),
-                secondaryBackground: const SizedBox.shrink(),
+                    ? null
+                    : onReply,
                 child: GestureDetector(
                   behavior: HitTestBehavior.opaque,
                   onTap: isSelectionMode ? onSelect : null,
@@ -1541,44 +1527,10 @@ class _TombstoneBubble extends StatelessWidget {
       return child;
     }
 
-    return Dismissible(
+    return ReplySwipe(
       key: ValueKey('reply_deleted_$messageId'),
-      direction: DismissDirection.startToEnd,
-      dismissThresholds: const {DismissDirection.startToEnd: 0.25},
-      onUpdate: _replySwipeHaptic,
-      confirmDismiss: (_) async {
-        onReply!.call();
-        return false;
-      },
-      background: const _ReplySwipeBackground(alignEnd: false),
-      secondaryBackground: const SizedBox.shrink(),
+      onReply: onReply,
       child: child,
-    );
-  }
-}
-
-/// Reply icon revealed while swiping a bubble.
-class _ReplySwipeBackground extends StatelessWidget {
-  const _ReplySwipeBackground({required this.alignEnd});
-
-  final bool alignEnd;
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return Align(
-      alignment: alignEnd ? Alignment.centerRight : Alignment.centerLeft,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
-        child: Container(
-          padding: const EdgeInsets.all(AppSpacing.sm),
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: cs.primary.withValues(alpha: 0.15),
-          ),
-          child: Icon(Icons.reply_rounded, size: 20, color: cs.primary),
-        ),
-      ),
     );
   }
 }

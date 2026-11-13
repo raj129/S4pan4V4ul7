@@ -48,6 +48,11 @@ device. **Remove for me** hides the selected messages from your copy of the chat
 and removes local cached media. It does not delete the remote attachment or
 remove it for other participants.
 
+Chat swipe-to-reply moves easily at first, then progressively resists further
+dragging. Release after dragging 25% of the swipe area's width to reply; the
+message returns smoothly without bouncing. This applies to all existing
+swipe-enabled message types.
+
 ## Development
 
 - Analyze: flutter analyze
