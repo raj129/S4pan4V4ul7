@@ -46,9 +46,6 @@
             android:exported="false" android:foregroundServiceType="dataSync" />
         <service android:name=".MockLocationService"
             android:exported="false" android:foregroundServiceType="location" />
-        <!-- Geofence enter events for arrival alerts; not exported. -->
-        <receiver android:name=".ArrivalGeofenceReceiver"
-            android:exported="false" />
         <service android:name="androidx.work.impl.foreground.SystemForegroundService"
             android:foregroundServiceType="dataSync" tools:node="merge" />
         <activity

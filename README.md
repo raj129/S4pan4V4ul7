@@ -80,6 +80,27 @@ Force-stopping the application suspends work until Android permits it again,
 typically after the application is relaunched. A locked vault never causes an
 automatic vault import; background chat work uses separately protected chat keys.
 
+## Arrival alerts and live location
+
+Arrival alerts use Android geofences rather than continuous app GPS tracking.
+An enter event queues a background worker that sends the encrypted arrival
+message without opening or unlocking chat. The geofence bridge is registered
+on both UI and headless Flutter engines. Failed sends remain queued for retry;
+opening chat also processes pending arrivals as a fallback.
+
+Background delivery needs **Allow all the time** location permission, a signed-in
+chat account with its local encryption keys, and connectivity. Permission denial
+continues to warn rather than prevent arming. Android geofence delivery, Doze,
+and WorkManager scheduling can delay sending; it is not an instant-delivery
+guarantee. Force-stopping the app suspends background work until it is reopened.
+Previously failed workers can also delay newer arrivals while waiting for their
+existing retry backoff; queued events are preserved until processing resumes.
+
+Arrival-only use should generally consume less battery than live sharing, which
+requests high-accuracy updates every 10 seconds with a foreground notification
+and wake lock. Actual consumption has not been measured and depends on device
+and network conditions. The two features remain separate.
+
 ## Mock location (Developer options)
 
 - **Open it:** side drawer → **Location → Mock location** (always visible).
