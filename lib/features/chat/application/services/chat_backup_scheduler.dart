@@ -75,6 +75,13 @@ void chatBackupCallbackDispatcher() {
       try {
         return await runBackgroundArrivalSend().timeout(_taskBudget);
       } on TimeoutException {
+        debugPrint('Background arrival send timed out; retrying.');
+        return false;
+      } catch (error) {
+        // Exception messages can contain location payloads or account IDs.
+        debugPrint(
+          'Background arrival send failed (${error.runtimeType}); retrying.',
+        );
         return false;
       }
     }
@@ -108,14 +115,13 @@ Future<bool> runBackgroundArrivalSend() async {
   WidgetsFlutterBinding.ensureInitialized();
   await _ensureFirebase();
   final uid = FirebaseAuth.instance.currentUser?.uid;
-  if (uid == null) return false;
-
-  final crypto = ChatCryptoService();
-  try {
-    await crypto.requireAccount(uid);
-  } catch (_) {
+  if (uid == null) {
+    debugPrint('Background arrival send has no signed-in session; retrying.');
     return false;
   }
+
+  final crypto = ChatCryptoService();
+  await crypto.requireAccount(uid);
   final messages = FirestoreMessageRepository();
   final threads = FirestoreThreadRepository();
   final service = ArrivalAlertService(
@@ -134,10 +140,23 @@ Future<bool> runBackgroundArrivalSend() async {
       store: FlutterSecureStringKv(const FlutterSecureStorage()),
     ),
   );
+  final errors = service.errors.listen((error) {
+    debugPrint(
+      'Background arrival operation failed (${error.runtimeType}); '
+      'pending events will be retried.',
+    );
+  });
   try {
-    return await service.processPendingArrivals();
+    final handled = await service.processPendingArrivals();
+    debugPrint(
+      handled
+          ? 'Background arrival queue processed.'
+          : 'Background arrival queue still pending; retrying.',
+    );
+    return handled;
   } finally {
     service.dispose();
+    await errors.cancel();
     crypto.clearKeyCache();
   }
 }

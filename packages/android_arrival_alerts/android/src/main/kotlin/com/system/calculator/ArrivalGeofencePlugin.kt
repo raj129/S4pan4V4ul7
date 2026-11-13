@@ -3,7 +3,6 @@ package com.system.calculator
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
-import android.os.Build
 import com.google.android.gms.location.Geofence
 import com.google.android.gms.location.GeofencingClient
 import com.google.android.gms.location.GeofencingRequest
@@ -15,7 +14,8 @@ import io.flutter.plugin.common.MethodChannel
 /**
  * Registers arrival places with the OS geofencing service, so arrival alerts
  * need no continuous GPS stream. Enter events are queued by
- * [ArrivalGeofenceReceiver] and drained by Dart on the next app start or resume.
+ * [ArrivalGeofenceReceiver] and drained by a headless Dart worker. Flutter
+ * registers this plugin on both the activity and Workmanager engines.
  */
 class ArrivalGeofencePlugin : FlutterPlugin {
     private var channel: MethodChannel? = null

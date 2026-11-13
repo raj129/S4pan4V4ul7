@@ -19,11 +19,10 @@ import java.util.concurrent.TimeUnit
  */
 object ArrivalSendScheduler {
     const val TASK = "arrival_send"
-    private const val DART_TASK_KEY = "dev.fluttercommunity.workmanager.DART_TASK"
 
     fun enqueue(context: Context) {
         val request = OneTimeWorkRequestBuilder<BackgroundWorker>()
-            .setInputData(workDataOf(DART_TASK_KEY to TASK, UNIQUE_NAME_KEY to TASK))
+            .setInputData(workDataOf(BackgroundWorker.DART_TASK_KEY to TASK, UNIQUE_NAME_KEY to TASK))
             .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
             .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
             .build()
