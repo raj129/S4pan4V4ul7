@@ -194,6 +194,7 @@ class _ThreadScreenState extends State<ThreadScreen>
   final _emojiPickerController = ChatMediaPickerSheetController();
 
   bool _showEmojiPicker = false;
+  bool _useDataSms = false;
   Future<void>? _emojiPickerRoute;
   bool _searching = false;
   final _searchCtrl = TextEditingController();
@@ -1524,18 +1525,20 @@ class _ThreadScreenState extends State<ThreadScreen>
                       : '',
                   isFirstInGroup: item.isFirstInGroup,
                   isLastInGroup: item.isLastInGroup,
-                  onReply: () {
-                    cubit.setReplyTarget(msg);
-                    _inputFocus.requestFocus();
-                  },
-                  onReact: (emoji) => cubit.toggleReaction(msg, emoji),
+                  onReply: _useDataSms || msg.isDataSms
+                      ? null
+                      : () {
+                          cubit.setReplyTarget(msg);
+                          _inputFocus.requestFocus();
+                        },
+                  onReact: _useDataSms ? null : (emoji) => cubit.toggleReaction(msg, emoji),
                   // Always wired up for own, non-media messages — eligibility
                   // (30-minute / edited-before-read rule) is checked once,
                   // centrally, inside `_promptEdit`, so both the long-press menu
                   // entry and the Signal-style double-tap give the same
                   // accept/reject behaviour instead of silently disappearing.
                   onEdit:
-                      isMine &&
+                      !_useDataSms && isMine &&
                           !msg.isMedia &&
                           msg.mediaType != MessageType.liveLocation &&
                           !msg.isGeoShare &&
@@ -1569,7 +1572,7 @@ class _ThreadScreenState extends State<ThreadScreen>
                       ? () => unawaited(_saveAsSticker(msg, cubit))
                       : null,
                   onForward:
-                      msg.mediaType == MessageType.liveLocation ||
+                      _useDataSms || msg.isDataSms || msg.mediaType == MessageType.liveLocation ||
                           msg.isGeoShare
                       ? null
                       : () => _promptForward(msg),
@@ -1580,7 +1583,7 @@ class _ThreadScreenState extends State<ThreadScreen>
                       ? () => cubit.discardMessage(msg.messageId)
                       : null,
                   onDeleteForMe: () => _confirmDeleteForMe(msg),
-                  onDeleteForEveryone: isMine
+                  onDeleteForEveryone: isMine && !_useDataSms && !msg.isDataSms
                       ? () => _confirmDeleteForEveryone(msg)
                       : null,
                 ),
@@ -1986,7 +1989,9 @@ class _ThreadScreenState extends State<ThreadScreen>
     }
     if (!context.mounted) return;
 
-    final allMine = selectedMsgs.every((m) => m.senderId == cubit.myUid);
+    final allMine = !_useDataSms && selectedMsgs.every(
+      (m) => m.senderId == cubit.myUid && !m.isDataSms,
+    );
     final count = selectedMsgs.length;
     final titleText = count == 1
         ? 'Delete message?'
@@ -2706,6 +2711,8 @@ class _ThreadScreenState extends State<ThreadScreen>
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
+          if (context.read<ActiveThreadCubit>().dataSms != null && !_isEditing)
+            _buildSmsSelector(context),
           AnimatedSize(
             duration: AppDuration.fast,
             curve: AppCurves.standard,
@@ -2719,6 +2726,174 @@ class _ThreadScreenState extends State<ThreadScreen>
         ],
       ),
     );
+  }
+
+  Widget _buildSmsSelector(BuildContext context) {
+    final cubit = context.read<ActiveThreadCubit>();
+    final cs = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: SegmentedButton<bool>(
+                  segments: const [
+                    ButtonSegment(value: false, label: Text('Internet')),
+                    ButtonSegment(value: true, label: Text('Data SMS')),
+                  ],
+                  selected: {_useDataSms},
+                  onSelectionChanged: (selection) async {
+                    final useSms = selection.single;
+                    if (useSms) {
+                      try {
+                        if (await cubit.smsPhone() == null) {
+                          if (!mounted || !await _configureSmsNumber()) return;
+                        }
+                        await cubit.dataSms!.enable();
+                        if (!mounted) return;
+                        if (_showEmojiPicker) {
+                          await _dismissEmojiSheet(focusComposer: false);
+                        }
+                        cubit.clearReplyTarget();
+                        unawaited(cubit.setTyping(false));
+                      } catch (error) {
+                        if (context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text('Data SMS setup failed: $error'),
+                            ),
+                          );
+                        }
+                        return;
+                      }
+                    }
+                    if (mounted) setState(() => _useDataSms = useSms);
+                  },
+                ),
+              ),
+              if (_useDataSms)
+                IconButton(
+                  tooltip: 'Data SMS recipient number (unverified)',
+                  icon: const Icon(Icons.sim_card_outlined),
+                  onPressed: () => _configureSmsNumber(),
+                ),
+            ],
+          ),
+          if (_useDataSms) ...[
+            ValueListenableBuilder<TextEditingValue>(
+              valueListenable: _textCtrl,
+              builder: (_, value, _) {
+                final estimate = cubit.estimateSms(value.text);
+                return Text(
+                  '${estimate?.characters ?? 0}/${estimate?.segments ?? 0} SMS · limit 10 segments',
+                  style: TextStyle(
+                    color: (estimate?.segments ?? 0) > 10
+                        ? cs.error
+                        : cs.onSurfaceVariant,
+                    fontSize: 12,
+                  ),
+                );
+              },
+            ),
+            Text(
+              'Encrypted text only. SMS charges apply. Recipient number is unverified.',
+              style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Future<bool> _configureSmsNumber() async {
+    final cubit = context.read<ActiveThreadCubit>();
+    final current = await cubit.smsPhone();
+    if (!mounted) return false;
+    final controller = TextEditingController(text: current);
+    String? errorText;
+    final route = DialogRoute<bool>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (_, updateDialog) => AlertDialog(
+          title: const Text('Data SMS recipient'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text(
+                  'Enter the other person\'s number, including + and country code. '
+                  'This number is not verified. Both phones need this app, cellular SMS service, '
+                  'and conversation keys previously set up online. Enable Data SMS and grant SMS permission '
+                  'on both phones before going offline. Each segment may be charged. '
+                  'No ordinary SMS or internet fallback is used.',
+                ),
+                TextField(
+                  controller: controller,
+                  keyboardType: TextInputType.phone,
+                  decoration: InputDecoration(
+                    labelText: 'Phone number',
+                    hintText: '+919876543210',
+                    errorText: errorText,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('Cancel'),
+            ),
+            if (current != null)
+              TextButton(
+                onPressed: () async {
+                  try {
+                    await cubit.setSmsPhone(null);
+                    if (mounted) setState(() => _useDataSms = false);
+                    if (dialogContext.mounted) {
+                      Navigator.pop(dialogContext, false);
+                    }
+                  } catch (error) {
+                    if (dialogContext.mounted) {
+                      updateDialog(() => errorText = error.toString());
+                    }
+                  }
+                },
+                child: const Text('Remove'),
+              ),
+            FilledButton(
+              onPressed: () async {
+                try {
+                  if (controller.text.trim().isEmpty) {
+                    updateDialog(() => errorText = 'Enter a phone number.');
+                    return;
+                  }
+                  await cubit.setSmsPhone(controller.text);
+                  if (dialogContext.mounted) {
+                    Navigator.pop(dialogContext, true);
+                  }
+                } catch (error) {
+                  if (dialogContext.mounted) {
+                    updateDialog(() => errorText = error.toString());
+                  }
+                }
+              },
+              child: const Text('Save'),
+            ),
+          ],
+        ),
+      ),
+    );
+    try {
+      final result = await Navigator.of(context).push(route);
+      await route.completed;
+      return result ?? false;
+    } finally {
+      controller.dispose();
+    }
   }
 
   Widget _buildInputBar(
@@ -2748,7 +2923,7 @@ class _ThreadScreenState extends State<ThreadScreen>
               tooltip: _showEmojiPicker
                   ? 'Keyboard'
                   : 'Emoji, stickers, and GIFs',
-              onPressed: _toggleEmojiPicker,
+              onPressed: _useDataSms ? null : _toggleEmojiPicker,
             ),
             const SizedBox(width: AppSpacing.xs),
             Expanded(
@@ -2800,14 +2975,16 @@ class _ThreadScreenState extends State<ThreadScreen>
                             _hasText.value = v.trim().isNotEmpty;
                             return;
                           }
-                          context.read<ActiveThreadCubit>().onTextChanged(v);
+                          if (!_useDataSms) {
+                            context.read<ActiveThreadCubit>().onTextChanged(v);
+                          }
                         },
                       ),
                     ),
                     _ComposerAction(
                       icon: Icons.add_rounded,
                       tooltip: 'Attach',
-                      onPressed: () => _pickMedia(context),
+                      onPressed: _useDataSms ? null : () => _pickMedia(context),
                     ),
                   ],
                 ),
@@ -3090,9 +3267,23 @@ class _ThreadScreenState extends State<ThreadScreen>
   void _send() {
     final text = _textCtrl.text;
     if (text.trim().isEmpty || _sendingText) return;
-    if (_runLocationCommand(text.trim())) return;
+    if (_useDataSms) {
+      final estimate = context.read<ActiveThreadCubit>().estimateSms(text);
+      if (estimate == null || estimate.segments > 10) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Shorten the message to 10 SMS segments or choose Internet.',
+            ),
+          ),
+        );
+        return;
+      }
+    } else if (_runLocationCommand(text.trim())) {
+      return;
+    }
     _sendingText = true;
-    unawaited(_sendText(text));
+    unawaited(_sendText(text, dataSms: _useDataSms));
   }
 
   /// Handles `/arrive` and `/pin` typed in the composer. Returns true when
@@ -3226,7 +3417,7 @@ class _ThreadScreenState extends State<ThreadScreen>
     );
   }
 
-  Future<void> _sendText(String text) async {
+  Future<void> _sendText(String text, {bool dataSms = false}) async {
     if (!mounted) return;
     final scrollToLatest =
         !ChatMessage.isEmojiOnlyText(text) || _isNearLatest();
@@ -3245,11 +3436,14 @@ class _ThreadScreenState extends State<ThreadScreen>
         _suppressDraftChanges = false;
       }
 
-      final queued = await context.read<ActiveThreadCubit>().sendText(
-        text,
-        waitForDelivery: false,
-        scrollToLatest: scrollToLatest,
-      );
+      final cubit = context.read<ActiveThreadCubit>();
+      final queued = dataSms
+          ? await cubit.sendDataSms(text, scrollToLatest: scrollToLatest)
+          : await cubit.sendText(
+              text,
+              waitForDelivery: false,
+              scrollToLatest: scrollToLatest,
+            );
       if (queued) unawaited(HapticFeedback.lightImpact());
       if (queued && shouldClearComposer && _draftGeneration == generation) {
         await _writeDraft('', generation).catchError((Object _) {});
@@ -4664,7 +4858,7 @@ class _ComposerAction extends StatelessWidget {
 
   final IconData icon;
   final String tooltip;
-  final VoidCallback onPressed;
+  final VoidCallback? onPressed;
 
   @override
   Widget build(BuildContext context) {

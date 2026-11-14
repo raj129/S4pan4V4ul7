@@ -7,6 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:photo_vault/features/chat/data/repositories/local_sticker_pack_repository.dart';
 import 'package:photo_vault/core/integrations/chat_vault_bridge.dart';
 import 'package:photo_vault/features/chat/application/crypto/chat_crypto_service.dart';
+import 'package:photo_vault/features/chat/application/services/data_sms_service.dart';
 import 'package:photo_vault/features/chat/domain/entities/chat_message.dart';
 import 'package:photo_vault/features/chat/domain/entities/chat_thread.dart';
 import 'package:photo_vault/features/chat/domain/entities/chat_user.dart';
@@ -46,6 +47,38 @@ class _Crypto implements ChatCryptoService {
 
   @override
   Future<Uint8List> searchKey(String threadId) async => Uint8List(32);
+
+  @override
+  dynamic noSuchMethod(Invocation i) =>
+      throw UnimplementedError('${i.memberName} not needed');
+}
+
+class _UiSms implements DataSmsService {
+  int sends = 0;
+  String? number;
+  @override
+  Stream<ChatMessage> get changes => const Stream.empty();
+  @override
+  Future<void> remember(ChatThread thread, ChatUser other) async {}
+  @override
+  Future<void> markRead(String threadId) async {}
+  @override
+  void start() {}
+  @override
+  Future<String?> phone(String threadId) async => number;
+  @override
+  Future<void> setPhone(String threadId, String? value) async => number = value;
+  @override
+  Future<void> enable() async {}
+  @override
+  Future<ChatMessage> send({
+    required ChatThread thread,
+    required ChatUser recipient,
+    required String text,
+  }) async {
+    sends++;
+    throw StateError('SMS unavailable for this test');
+  }
 
   @override
   dynamic noSuchMethod(Invocation i) =>
@@ -293,6 +326,118 @@ ChatMessage _msg(
 );
 
 void main() {
+  testWidgets(
+    'SMS mode keeps the chat, counts segments, blocks oversize and retains failed drafts',
+    (tester) async {
+      tester.view.physicalSize = const Size(1080, 2400);
+      tester.view.devicePixelRatio = 3;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final messages = _Messages();
+      final unused = _Unused();
+      final sms = _UiSms();
+      final cubit = ActiveThreadCubit(
+        messageRepository: messages,
+        threadRepository: _Threads(),
+        userRepository: unused,
+        typingRepository: _Typing(),
+        presenceRepository: _Presence(),
+        mediaRepository: unused,
+        messageCache: const NoopMessageCacheRepository(),
+        outbox: _Outbox(),
+        cryptoService: _Crypto(),
+        myUid: 'me',
+        dataSms: sms,
+      );
+      final thread = ChatThread(
+        threadId: 't',
+        participantIds: const ['me', 'other'],
+        lastMessage: '',
+        lastMessageAt: DateTime.utc(2024),
+        createdAt: DateTime.utc(2024),
+        unreadCounts: const {},
+      );
+      final other = ChatUser(
+        uid: 'other',
+        email: 'other@example.com',
+        displayName: 'Other',
+        publicKey: '',
+        createdAt: DateTime.utc(2024),
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          home: BlocProvider.value(
+            value: cubit,
+            child: ThreadScreen(
+              thread: thread,
+              otherUser: other,
+              mediaLoader: ChatMediaLoader(
+                mediaRepository: unused,
+                cryptoService: _Crypto(),
+              ),
+              vaultBridge: unused,
+              onLock: () {},
+              chatDraftRepository: _Drafts(),
+              stickerPackFactory: (uid) =>
+                  LocalStickerPackRepository(userId: uid),
+            ),
+          ),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 100));
+      messages.live.add([_msg('internet', 'internet history')]);
+      await tester.pump(const Duration(milliseconds: 100));
+      await tester.tap(find.text('Data SMS'));
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(find.text('Data SMS recipient'), findsOneWidget);
+      await tester.enterText(
+        find.descendant(
+          of: find.byType(AlertDialog),
+          matching: find.byType(TextField),
+        ),
+        '+12345678901',
+      );
+      await tester.tap(find.text('Save'));
+      await tester.pump(const Duration(milliseconds: 350));
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(sms.number, '+12345678901');
+      expect(find.text('internet history'), findsOneWidget);
+      final composer = find.descendant(
+        of: find.byKey(const ValueKey('chat-composer-surface')),
+        matching: find.byType(TextField),
+      );
+      await tester.enterText(composer, 'hello');
+      await tester.pump(const Duration(milliseconds: 300));
+      final count = cubit.estimateSms('hello')!;
+      expect(
+        find.text('5/${count.segments} SMS · limit 10 segments'),
+        findsOneWidget,
+      );
+      await tester.tap(find.byIcon(Icons.send_rounded));
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(sms.sends, 1);
+      expect(tester.widget<TextField>(composer).controller!.text, 'hello');
+      ScaffoldMessenger.of(tester.element(composer)).removeCurrentSnackBar();
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.enterText(composer, List.filled(2000, 'x').join());
+      await tester.pump(const Duration(milliseconds: 100));
+      await tester.tap(find.byIcon(Icons.send_rounded));
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(sms.sends, 1);
+      expect(
+        find.text('Shorten the message to 10 SMS segments or choose Internet.'),
+        findsOneWidget,
+      );
+      expect(tester.widget<TextField>(composer).controller!.text.length, 2000);
+      expect(find.text('internet history'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump(const Duration(milliseconds: 100));
+      await cubit.close();
+      await messages.live.close();
+    },
+  );
+
   test('bubble shape tolerates a rect narrower than its tail', () {
     for (final isMine in [true, false]) {
       final shape = ChatBubbleShape(isMine: isMine);

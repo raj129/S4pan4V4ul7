@@ -33,6 +33,10 @@ jobs:
       - name: Run tests
         run: flutter test
 
+      - name: Test APK parity checker
+        shell: pwsh
+        run: ./test/tool/apk_parity_test.ps1
+
   distribute_android:
     if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
     needs:
@@ -120,6 +124,13 @@ jobs:
           }
           JSON
 
+      - name: Build debug APK for feature parity
+        run: |
+          flutter build apk --debug \
+            --build-name="${{ steps.version.outputs.version }}" \
+            --build-number="${{ steps.version.outputs.build_number }}" \
+            --dart-define-from-file=.api_keys.json
+
       - name: Build release APK
         env:
           ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/tester-signing-key.jks
@@ -131,6 +142,10 @@ jobs:
             --build-name="${{ steps.version.outputs.version }}" \
             --build-number="${{ steps.version.outputs.build_number }}" \
             --dart-define-from-file=.api_keys.json
+
+      - name: Verify debug and release APK feature packaging
+        shell: pwsh
+        run: ./tool/verify_apk_parity.ps1
 
       - name: Verify Firebase service account secret
         shell: bash

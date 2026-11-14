@@ -20,6 +20,7 @@ import 'package:photo_vault/core/presentation/theme/app_typography.dart';
 import 'package:photo_vault/core/presentation/theme/chat_theme.dart';
 import 'animated_emoji.dart';
 import 'chat_bubble_shape.dart';
+import 'data_sms_meta.dart';
 import 'chat_media_preview.dart';
 import 'chat_media_sizes.dart';
 import 'chat_audio_player.dart';
@@ -206,8 +207,12 @@ class MessageBubble extends StatelessWidget {
 
     final cs = Theme.of(context).colorScheme;
     final chat = context.chatColors;
-    final bgColor = chat.bubbleFor(isMine: isMine);
-    final textColor = chat.onBubbleFor(isMine: isMine);
+    final bgColor = message.isDataSms
+        ? (isMine ? cs.tertiaryContainer : cs.secondaryContainer)
+        : chat.bubbleFor(isMine: isMine);
+    final textColor = message.isDataSms
+        ? (isMine ? cs.onTertiaryContainer : cs.onSecondaryContainer)
+        : chat.onBubbleFor(isMine: isMine);
     final highlighted = isHighlighted || (isReplyTarget && replyFlashVisible);
     final grouped = message.groupedReactions;
 
@@ -256,7 +261,7 @@ class MessageBubble extends StatelessWidget {
     // Emoji-only messages and visual media (images, videos, GIFs, stickers)
     // render bare without an outer bubble border/background for both sent and
     // received messages.
-    final bare = message.isEmojiOnly;
+    final bare = message.isEmojiOnly && !message.isDataSms;
     final bareAttachment =
         message.mediaType == MessageType.image ||
         message.mediaType == MessageType.video ||
@@ -445,7 +450,8 @@ class MessageBubble extends StatelessWidget {
               ReplySwipe(
                 key: ValueKey('swipe_${message.messageId}'),
                 onReply:
-                    isSelectionMode ||
+                    message.isDataSms ||
+                        isSelectionMode ||
                         onReply == null ||
                         !canReplyFromLeftToRight
                     ? null
@@ -456,7 +462,10 @@ class MessageBubble extends StatelessWidget {
                   onLongPress: isSelectionMode
                       ? onSelect
                       : () => _showActionSheet(context),
-                  onDoubleTap: (isMine && !isSelectionMode) ? onEdit : null,
+                  onDoubleTap:
+                      (isMine && !isSelectionMode && !message.isDataSms)
+                      ? onEdit
+                      : null,
                   child: messageRow,
                 ),
               ),
@@ -468,7 +477,7 @@ class MessageBubble extends StatelessWidget {
                   onRetry: onRetry,
                   onCancel: onCancelUpload,
                 ),
-              if (grouped.isNotEmpty)
+              if (grouped.isNotEmpty && !message.isDataSms)
                 _ReactionRow(grouped: grouped, myUid: myUid, onTap: onReact),
             ],
           ),
@@ -491,7 +500,8 @@ class MessageBubble extends StatelessWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              if (message.status == MessageStatus.failed) ...[
+              if (message.status == MessageStatus.failed &&
+                  !message.isDataSms) ...[
                 if (onRetry != null)
                   ListTile(
                     leading: const Icon(Icons.refresh_rounded),
@@ -518,7 +528,7 @@ class MessageBubble extends StatelessWidget {
                   ),
                 const Divider(height: 1),
               ],
-              if (onReact != null)
+              if (onReact != null && !message.isDataSms)
                 Padding(
                   padding: const EdgeInsets.fromLTRB(
                     AppSpacing.md,
@@ -564,7 +574,7 @@ class MessageBubble extends StatelessWidget {
                     ),
                   ),
                 ),
-              if (onReply != null)
+              if (onReply != null && !message.isDataSms)
                 ListTile(
                   leading: const Icon(Icons.reply_rounded),
                   title: const Text('Reply'),
@@ -574,6 +584,7 @@ class MessageBubble extends StatelessWidget {
                   },
                 ),
               if (isMine &&
+                  !message.isDataSms &&
                   onEdit != null &&
                   !message.isMedia &&
                   !message.isGeoShare &&
@@ -597,7 +608,7 @@ class MessageBubble extends StatelessWidget {
                     onCopy!();
                   },
                 ),
-              if (onForward != null)
+              if (onForward != null && !message.isDataSms)
                 ListTile(
                   leading: const Icon(Icons.shortcut_rounded),
                   title: const Text('Forward'),
@@ -641,7 +652,7 @@ class MessageBubble extends StatelessWidget {
                   onDeleteForMe();
                 },
               ),
-              if (onDeleteForEveryone != null)
+              if (onDeleteForEveryone != null && !message.isDataSms)
                 ListTile(
                   leading: Icon(Icons.delete_sweep_outlined, color: cs.error),
                   title: Text(
@@ -1241,6 +1252,19 @@ class _MetaRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final faded = textColor.withValues(alpha: 0.65);
+    if (message.isDataSms) {
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          DataSmsMeta(message: message, isMine: isMine, color: textColor),
+          Text(
+            _bubbleTimeFormat.format(message.sentAt.toLocal()),
+            style: AppTypography.bubbleMeta(faded),
+          ),
+        ],
+      );
+    }
     // Prefer the locally-supplied status (outbox: sending/failed); otherwise
     // derive it from whether the recipient has actually read the message.
     final status =

@@ -164,8 +164,10 @@ class _ChatAppState extends State<ChatApp> with WidgetsBindingObserver {
     // made presence flicker offline/online and restart the heartbeat.
     if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.hidden) {
+      _deps.dataSms?.stop();
       unawaited(_deps.presenceService.deactivate().catchError(_logPresence));
     } else if (state == AppLifecycleState.resumed) {
+      _deps.dataSms?.start();
       unawaited(_deps.presenceService.activate().catchError(_logPresence));
       // Delivers arrival messages queued by geofences while the app was closed.
       unawaited(_deps.arrivalAlertService?.refreshArrivals());
@@ -195,6 +197,7 @@ class _ChatAppState extends State<ChatApp> with WidgetsBindingObserver {
           if (authState is! ChatAuthAuthenticated) return;
           _deps.mediaLoader.setAccount(authState.user.uid);
           _deps.uploads?.start(authState.user.uid);
+          _deps.dataSms?.start();
           if (_sessionPrepared) {
             unawaited(_maybeOfferRestore(authState));
           } else {
@@ -218,6 +221,7 @@ class _ChatAppState extends State<ChatApp> with WidgetsBindingObserver {
               // Loading/Initial are transient: tearing down here would cancel
               // every visible attachment each time the session is re-checked.
               _deps.uploads?.stop();
+              _deps.dataSms?.stop();
               _deps.mediaLoader.setAccount('');
               _deps.notificationService.stop();
             }
@@ -303,6 +307,7 @@ class _ChatAppState extends State<ChatApp> with WidgetsBindingObserver {
                         mediaRepository: _deps.mediaRepository,
                         presenceRepository: _deps.presenceRepository,
                         messageCache: _deps.messageCache,
+                        dataSms: _deps.dataSms,
                         myUid: currentUser.uid,
                       ),
                     ),
@@ -316,6 +321,7 @@ class _ChatAppState extends State<ChatApp> with WidgetsBindingObserver {
                     BlocProvider(
                       create: (_) => ActiveThreadCubit(
                         androidUploads: _deps.uploads,
+                        dataSms: _deps.dataSms,
                         localMedia: _deps.localMedia,
                         mediaLoader: _deps.mediaLoader,
                         messageRepository: _deps.messageRepository,

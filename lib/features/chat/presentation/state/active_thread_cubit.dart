@@ -4,6 +4,8 @@ import '../../application/media/android_chat_local_media.dart';
 import '../../application/media/chat_media_loader.dart';
 import 'dart:typed_data';
 import 'package:connectivity_plus/connectivity_plus.dart';
+import '../../application/services/data_sms_service.dart';
+import '../../application/services/data_sms_protocol.dart';
 import 'package:equatable/equatable.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -273,6 +275,7 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
     this.androidUploads,
     this.localMedia,
     this.mediaLoader,
+    this.dataSms,
     ChatSearchIndexRepository searchIndex =
         const NoopChatSearchIndexRepository(),
     Stream<List<ConnectivityResult>>? connectivityStream,
@@ -325,6 +328,10 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
       showPending: _showPending,
     );
     _uploadCoordinator.initialize();
+    _smsSub = dataSms?.changes.listen(
+      (message) => unawaited(_onSmsMessage(message)),
+      onError: (Object error) => _reportActionError(error.toString()),
+    );
     WidgetsBinding.instance.addObserver(this);
     // Auto-drain the outbox the moment connectivity is restored, instead of
     // only retrying the next time the user happens to reopen the thread —
@@ -358,6 +365,83 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
   final OutboxRepository outbox;
   final ChatCryptoService cryptoService;
   final String myUid;
+  final DataSmsService? dataSms;
+  StreamSubscription<ChatMessage>? _smsSub;
+
+  Future<String?> smsPhone() async =>
+      _currentThreadId == null ? null : await dataSms?.phone(_currentThreadId!);
+
+  Future<void> setSmsPhone(String? phone) async {
+    final service = dataSms;
+    final threadId = _currentThreadId;
+    if (service == null || threadId == null) {
+      throw StateError('Data SMS is unavailable.');
+    }
+    await service.setPhone(threadId, phone);
+  }
+
+  DataSmsEstimate? estimateSms(String text) {
+    final threadId = _currentThreadId;
+    final recipient = _otherUser;
+    if (dataSms == null || threadId == null || recipient == null) return null;
+    return DataSmsProtocol.estimate(
+      text: text,
+      threadId: threadId,
+      senderId: myUid,
+      recipientId: recipient.uid,
+    );
+  }
+
+  Future<bool> sendDataSms(String text, {bool scrollToLatest = true}) async {
+    final service = dataSms;
+    final thread = _thread;
+    final recipient = _otherUser;
+    if (service == null || thread == null || recipient == null) {
+      _reportActionError('Data SMS is unavailable.');
+      return false;
+    }
+    try {
+      final message = await service.send(
+        thread: thread,
+        recipient: recipient,
+        text: text,
+      );
+      if (_currentThreadId == thread.threadId) {
+        if (scrollToLatest && _detached) await jumpToLatest();
+        await _onSmsMessage(message);
+        if (scrollToLatest) _requestScroll(null);
+      }
+      return true;
+    } catch (error) {
+      _reportActionError('Data SMS send failed: $error');
+      return false;
+    }
+  }
+
+  Future<void> _onSmsMessage(ChatMessage message) async {
+    final threadId = _currentThreadId;
+    if (isClosed || message.threadId != threadId || threadId == null) return;
+    try {
+      final decrypted = _afterClearWatermark(
+        await _decryptAll([message], threadId),
+      );
+      if (isClosed || threadId != _currentThreadId) return;
+      if (_detached) {
+        if (_buffer.containsKey(message.messageId)) _mergeIntoBuffer(decrypted);
+        _lastLive = [
+          ..._lastLive.where((m) => m.messageId != message.messageId),
+          ...decrypted,
+        ];
+      } else {
+        _mergeIntoBuffer(decrypted);
+      }
+      _indexMessages(threadId, decrypted);
+      _emitMessages();
+    } catch (error) {
+      _reportActionError('Could not display data SMS: $error');
+    }
+  }
+
   final AndroidChatUploads? androidUploads;
 
   /// Downscales outgoing photos and builds their previews.
@@ -512,6 +596,15 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
     final generation = ++_openGeneration;
 
     emit(const ActiveThreadLoading());
+    if (dataSms != null) {
+      try {
+        await dataSms!.remember(thread, otherUser);
+        await dataSms!.markRead(thread.threadId);
+        dataSms!.start();
+      } catch (error) {
+        _reportActionError('Could not prepare data SMS: $error');
+      }
+    }
 
     try {
       _clearedBefore = await messageCache.getClearedBefore(thread.threadId);
@@ -1082,6 +1175,10 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
 
   /// Stage [message] as the target of the next send.
   void setReplyTarget(ChatMessage message) {
+    if (message.isDataSms) {
+      _reportActionError('Replies are unavailable for data SMS.');
+      return;
+    }
     final current = state;
     if (current is ActiveThreadLoaded) {
       emit(current.copyWith(replyTarget: message));
@@ -1139,6 +1236,10 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
   /// One reaction per user, like WhatsApp: tapping the same emoji again clears
   /// it, and a different emoji replaces the previous one.
   Future<void> toggleReaction(ChatMessage message, String emoji) async {
+    if (message.isDataSms) {
+      _reportActionError('Reactions are unavailable for data SMS.');
+      return;
+    }
     final threadId = _currentThreadId;
     if (threadId == null) return;
     final existing = message.reactions[myUid];
@@ -1169,8 +1270,15 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
     final threadId = _currentThreadId;
     final current = state;
     if (threadId == null || current is! ActiveThreadLoaded) return;
+    if (dataSms != null) {
+      try {
+        await dataSms!.markRead(threadId);
+      } catch (error) {
+        _reportActionError('Could not mark data SMS read locally: $error');
+      }
+    }
     final unread = current.visibleMessages
-        .where((m) => m.senderId != myUid && !m.isReadBy(myUid))
+        .where((m) => !m.isDataSms && m.senderId != myUid && !m.isReadBy(myUid))
         .map((m) => m.messageId)
         .toList();
     if (unread.isEmpty || _markingVisibleAsRead) return;
@@ -1209,7 +1317,8 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
 
   /// Replace the body of an already-sent message.
   bool canEditMessage(ChatMessage message) {
-    if (message.senderId != myUid ||
+    if (message.isDataSms ||
+        message.senderId != myUid ||
         message.isMedia ||
         message.deletedForEveryone) {
       return false;
@@ -1401,7 +1510,9 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
     debugPrint('ChatMediaDebug jump begin fraction=$fraction');
     try {
       final hit = await _history.atFraction(threadId, fraction);
-      debugPrint('ChatMediaDebug jump atFraction done ms=${DateTime.now().difference(started).inMilliseconds} hit=${hit != null}');
+      debugPrint(
+        'ChatMediaDebug jump atFraction done ms=${DateTime.now().difference(started).inMilliseconds} hit=${hit != null}',
+      );
       if (hit == null) return;
       if (hit.offset >= hit.total - _pageSize) {
         await jumpToLatest();
@@ -1412,7 +1523,9 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
     } catch (error) {
       debugPrint('ChatMediaDebug jump error=$error');
     } finally {
-      debugPrint('ChatMediaDebug jump end ms=${DateTime.now().difference(started).inMilliseconds}');
+      debugPrint(
+        'ChatMediaDebug jump end ms=${DateTime.now().difference(started).inMilliseconds}',
+      );
     }
   }
 
@@ -1912,18 +2025,19 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
         before: oldest,
         limit: _pageSize,
       );
-      if (older.isEmpty) {
-        _reachedStart = true;
-        _emitMessages(hasMore: false, loadingOlder: false);
-        return;
-      }
       final decrypted = await _decryptAll(older, threadId);
       final visible = _visibleFromServer(decrypted);
       _mergeIntoBuffer(visible);
-      _trimNewest();
-      unawaited(
-        messageCache.save(_originalsOf(older, visible)).catchError((_) {}),
+      await messageCache.save(_originalsOf(older, visible));
+      final cached = await messageCache.load(
+        threadId: threadId,
+        before: oldest,
+        limit: _pageSize,
       );
+      _mergeIntoBuffer(
+        _afterClearWatermark(await _decryptAll(cached, threadId)),
+      );
+      _trimNewest();
       _indexMessages(threadId, visible);
       if (_serverHistoryHidden) {
         await _loadOlderFromCache(threadId, oldest);
@@ -1931,7 +2045,7 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
       }
       // A short page means the query ran out of documents, not that the page
       // size happened to divide evenly.
-      _reachedStart = older.length < _pageSize;
+      _reachedStart = older.length < _pageSize && cached.length < _pageSize;
       _emitMessages(hasMore: !_reachedStart, loadingOlder: false);
     } catch (e) {
       // Offline: serve the older page from the cache instead of dead-ending
@@ -2134,6 +2248,23 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
 
   Future<void> deleteMessageForMe(ChatMessage message) async {
     if (_currentThreadId == null) return;
+    if (message.isDataSms) {
+      final deleted = message.copyWith(
+        deletedFor: [...message.deletedFor, myUid],
+      );
+      if (dataSms != null) {
+        await dataSms!.hideMessage(message);
+      } else {
+        await messageCache.save([deleted]);
+      }
+      _buffer.remove(message.messageId);
+      _lastLive = _lastLive
+          .where((m) => m.messageId != message.messageId)
+          .toList();
+      await _searchDelegate.remove([message.messageId]);
+      _emitMessages();
+      return;
+    }
     if (_uploadCoordinator.isUploading(message.messageId)) {
       await cancelUpload(message.messageId);
       return;
@@ -2147,6 +2278,10 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
   }
 
   Future<void> deleteMessageForEveryone(ChatMessage message) async {
+    if (message.isDataSms) {
+      _reportActionError('Data SMS cannot be deleted from another device.');
+      return;
+    }
     if (_currentThreadId == null) return;
     if (_uploadCoordinator.isUploading(message.messageId)) {
       await cancelUpload(message.messageId);
@@ -2221,6 +2356,7 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
     // Not awaited: a source stream's cancel may never complete (e.g. an
     // async* generator parked on an await), which would stall close().
     unawaited(_messageSub?.cancel());
+    unawaited(_smsSub?.cancel());
     unawaited(_typingSub?.cancel());
     unawaited(_presenceSub?.cancel());
     _typingDebounce?.cancel();

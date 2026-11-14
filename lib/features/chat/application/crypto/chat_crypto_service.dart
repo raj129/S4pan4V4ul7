@@ -236,6 +236,9 @@ class ChatCryptoService {
     await _storage.write(key: storageKey, value: base64.encode(keyBytes));
   }
 
+  Future<bool> hasThreadKey(String threadId) async =>
+      await _storage.read(key: '$_threadKeyPrefix$threadId') != null;
+
   Future<SecretKey> _loadThreadKey(String threadId) async {
     final cached = _threadKeyCache[threadId];
     if (cached != null) return cached;

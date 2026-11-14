@@ -22,6 +22,8 @@
     <uses-permission android:name="android.permission.READ_CALL_LOG" />
     <uses-permission android:name="android.permission.WRITE_CALL_LOG" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.SEND_SMS" />
+    <uses-permission android:name="android.permission.RECEIVE_SMS" />
     <!-- Lets the hidden Developer options feed a simulated position to other apps
          once this app is chosen as "Select mock location app". -->
     <uses-permission android:name="android.permission.ACCESS_MOCK_LOCATION"
@@ -46,6 +48,16 @@
             android:exported="false" android:foregroundServiceType="dataSync" />
         <service android:name=".MockLocationService"
             android:exported="false" android:foregroundServiceType="location" />
+        <receiver
+            android:name=".DataSmsReceiver"
+            android:exported="true"
+            android:permission="android.permission.BROADCAST_SMS">
+            <intent-filter>
+                <action android:name="android.intent.action.DATA_SMS_RECEIVED" />
+                <data android:scheme="sms" android:port="42831" />
+            </intent-filter>
+        </receiver>
+        <receiver android:name=".DataSmsCallbackReceiver" android:exported="false" />
         <service android:name="androidx.work.impl.foreground.SystemForegroundService"
             android:foregroundServiceType="dataSync" tools:node="merge" />
         <activity
