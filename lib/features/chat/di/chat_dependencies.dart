@@ -1,4 +1,6 @@
 import '../application/services/chat_auth_service.dart';
+import '../application/services/data_sms_service.dart';
+import '../application/services/android_data_sms.dart';
 import '../application/media/android_chat_uploads.dart';
 import '../application/media/android_chat_downloads.dart';
 import '../application/media/android_chat_local_media.dart';
@@ -142,6 +144,7 @@ class ChatDependencies {
   /// Drop in-memory chat keys as soon as the vault locks.
   void _onVaultSessionChanged() {
     if (!_vaultSession.isUnlocked) {
+      dataSms?.stop();
       cryptoService.clearKeyCache();
       mediaLoader.lockPlaintext();
       if (Platform.isAndroid) {
@@ -152,6 +155,8 @@ class ChatDependencies {
           debugPrint('Secure chat viewer cleanup unavailable.');
         });
       }
+    } else {
+      dataSms?.start();
     }
   }
 
@@ -288,6 +293,17 @@ class ChatDependencies {
     _ => const NoopMessageCacheRepository(),
   };
 
+  late final DataSmsService? dataSms = Platform.isAndroid && _database != null
+      ? DataSmsService(
+          native: const AndroidDataSms(),
+          crypto: cryptoService,
+          cache: messageCache,
+          currentUid: firebaseCurrentUid,
+          isUnlocked: () => _vaultSession.isUnlocked,
+          onIncoming: notificationService.notifyDataSms,
+        )
+      : null;
+
   /// Ciphertext-only composer drafts, stored alongside the local chat cache.
   late final ChatDraftRepository draftRepository;
 
@@ -413,6 +429,7 @@ class ChatDependencies {
   );
 
   void dispose() {
+    dataSms?.dispose();
     uploads?.dispose();
     downloads?.dispose();
     _vaultSession.removeListener(_onVaultSessionChanged);

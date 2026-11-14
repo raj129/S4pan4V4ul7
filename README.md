@@ -2,6 +2,10 @@
 
 Local-first encrypted photo vault (Android-first).
 
+This is a **private APK build, not prepared for Google Play publication**.
+See [private APK and data SMS](docs/private-apk-data-sms.md) for the SMS-permission
+restrictions, setup, charges, and device/carrier limitations.
+
 ## Overview
 
 photo_vault is a Flutter application that stores photos encrypted locally using AES-GCM and platform-backed secure storage for keys. The project follows a clean architecture with distinct layers: domain, application (usecases/services), data (repositories/datasources), presentation (UI), crypto, and storage.
@@ -186,6 +190,35 @@ throw-away experiments; a debug-signed release APK must never be distributed.
 
 After an upload, testers in the configured group receive Firebase's invitation
 email and can install the build using the Firebase App Tester app on Android.
+
+### Debug/release feature parity
+
+Debug and release share all user-facing feature code, including encrypted
+**Data SMS** in the existing internet chat. Release keeps its normal protections:
+no debugger, debug logging or media timing instrumentation. The distribution
+job now compares both APKs before upload, checking merged manifests, required
+permissions/components, SMS port routing, Flutter assets and CPU architectures.
+This catches packaging differences, not device/carrier or external API failures.
+
+To repeat the check locally, build both variants with the same API configuration
+and version, using the existing release-signing environment:
+
+```powershell
+flutter build apk --debug --dart-define-from-file=.api_keys.json
+flutter build apk --release --dart-define-from-file=.api_keys.json
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tool\verify_apk_parity.ps1
+```
+
+The checker needs Java, Android SDK command-line tools and build-tools; set
+`ANDROID_HOME` or pass `-Sdk`. Distribute only the tester-key-signed release APK
+that passes CI, never a debug-signed parity experiment. Register the release
+certificate in Firebase/Google sign-in and authorize its SHA-1 in Maps API-key
+restrictions, not just the debug certificate. Keep the same signing key for
+updates; switching keys requires a different test device, not uninstalling a
+user's vault and risking local data loss.
+
+See [private APK and data SMS](docs/private-apk-data-sms.md) for numbered sending
+instructions, allowed build-mode differences and real-device checks.
 
 ## Docs
 

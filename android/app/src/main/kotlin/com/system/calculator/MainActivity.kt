@@ -58,6 +58,7 @@ class MainActivity : FlutterFragmentActivity() {
         flutterEngine.plugins.add(MockLocationPlugin())
         flutterEngine.plugins.add(BatteryPlugin())
         flutterEngine.plugins.add(CallLogPlugin())
+        flutterEngine.plugins.add(DataSmsPlugin())
     }
 
     private companion object {

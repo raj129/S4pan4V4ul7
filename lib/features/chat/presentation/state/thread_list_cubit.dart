@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:equatable/equatable.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:flutter/foundation.dart';
 
 import '../../domain/entities/chat_thread.dart';
 import '../../domain/entities/chat_user.dart';
@@ -11,6 +12,7 @@ import '../../domain/repositories/thread_repository.dart';
 import '../../domain/repositories/user_repository.dart';
 import '../../domain/repositories/message_repository.dart';
 import '../../domain/repositories/message_cache_repository.dart';
+import '../../application/services/data_sms_service.dart';
 
 // ── States ──────────────────────────────────────────────────────────────────
 
@@ -72,6 +74,7 @@ class ThreadListCubit extends Cubit<ThreadListState> {
     required this.presenceRepository,
     required this.messageCache,
     required this.myUid,
+    this.dataSms,
   }) : super(const ThreadListLoading());
 
   final ThreadRepository threadRepository;
@@ -81,6 +84,10 @@ class ThreadListCubit extends Cubit<ThreadListState> {
   final PresenceRepository presenceRepository;
   final MessageCacheRepository messageCache;
   final String myUid;
+  final DataSmsService? dataSms;
+  StreamSubscription<dynamic>? _smsSub;
+  List<ThreadListItem> _serverItems = const [];
+  int _refreshGeneration = 0;
 
   StreamSubscription<List<ChatThread>>? _sub;
   StreamSubscription<Map<String, UserPresence>>? _presenceSub;
@@ -94,37 +101,106 @@ class ThreadListCubit extends Cubit<ThreadListState> {
   final Map<String, ChatUser> _userCache = {};
 
   void startWatching() {
+    _smsSub?.cancel();
+    _smsSub = dataSms?.changes.listen(
+      (_) => unawaited(_refreshSms()),
+      onError: (Object error) {
+        // Keep the usable list visible; processing errors also reach the chat.
+        // No message body or phone number is logged.
+        _logSmsError(error);
+      },
+    );
+    if (dataSms != null) unawaited(_refreshSms());
     _sub?.cancel();
-    _sub = threadRepository.watchThreadsForUser(myUid).listen((threads) async {
-      final items = <ThreadListItem>[];
-      for (final t in threads) {
-        final otherUid = t.otherParticipantId(myUid);
-        // A lookup that throws (offline, profile never cached) must not
-        // escape this async listener: that left the list loading forever.
-        ChatUser? user;
-        try {
-          user = await userRepository.getUserById(otherUid);
-        } catch (_) {
-          user = null;
+    _sub = threadRepository
+        .watchThreadsForUser(myUid)
+        .listen(
+          (threads) async {
+            final items = <ThreadListItem>[];
+            for (final t in threads) {
+              final otherUid = t.otherParticipantId(myUid);
+              // A lookup that throws (offline, profile never cached) must not
+              // escape this async listener: that left the list loading forever.
+              ChatUser? user;
+              try {
+                user = await userRepository.getUserById(otherUid);
+              } catch (_) {
+                user = null;
+              }
+              user ??= _userCache[otherUid];
+              if (user == null) continue;
+              _userCache[otherUid] = user;
+              items.add(
+                ThreadListItem(
+                  thread: await _maskHiddenPreview(t),
+                  otherUser: user,
+                ),
+              );
+            }
+            if (isClosed) return;
+            _serverItems = items;
+            await _refreshSms();
+          },
+          onError: (Object error) {
+            final current = state;
+            if (current is! ThreadListLoaded || current.items.isEmpty) {
+              emit(ThreadListError(error.toString()));
+            } else {
+              debugPrint(
+                'Thread list refresh unavailable: ${error.runtimeType}',
+              );
+            }
+          },
+        );
+  }
+
+  Future<void> _refreshSms() async {
+    final generation = ++_refreshGeneration;
+    final items = {for (final item in _serverItems) item.thread.threadId: item};
+    try {
+      final local = await dataSms?.localThreads() ?? const <SmsLocalThread>[];
+      for (final item in local) {
+        final existing = items[item.thread.threadId];
+        var thread = existing?.thread ?? item.thread;
+        if (item.thread.lastMessageAt.isAfter(thread.lastMessageAt)) {
+          thread = thread.copyWith(
+            lastMessage: item.thread.lastMessage,
+            lastMessageAt: item.thread.lastMessageAt,
+          );
         }
-        user ??= _userCache[otherUid];
-        if (user == null) continue;
-        _userCache[otherUid] = user;
-        items.add(
-          ThreadListItem(thread: await _maskHiddenPreview(t), otherUser: user),
+        thread = thread.copyWith(
+          unreadCounts: {
+            ...thread.unreadCounts,
+            myUid:
+                (existing?.thread.unreadCountFor(myUid) ?? 0) +
+                item.thread.unreadCountFor(myUid),
+          },
+        );
+        items[thread.threadId] = ThreadListItem(
+          thread: await _maskHiddenPreview(thread),
+          otherUser: existing?.otherUser ?? item.user,
         );
       }
-      if (isClosed) return;
-      final current = state;
-      emit(
-        ThreadListLoaded(
-          items,
-          presence: current is ThreadListLoaded ? current.presence : const {},
-        ),
+    } catch (error) {
+      _logSmsError(error);
+    }
+    if (isClosed || generation != _refreshGeneration) return;
+    final sorted = items.values.toList()
+      ..sort(
+        (a, b) => b.thread.lastMessageAt.compareTo(a.thread.lastMessageAt),
       );
-      _watchPresenceFor(items.map((i) => i.otherUser.uid).toList());
-    }, onError: (e) => emit(ThreadListError(e.toString())));
+    final current = state;
+    emit(
+      ThreadListLoaded(
+        sorted,
+        presence: current is ThreadListLoaded ? current.presence : const {},
+      ),
+    );
+    _watchPresenceFor(sorted.map((i) => i.otherUser.uid).toList());
   }
+
+  static void _logSmsError(Object error) =>
+      debugPrint('Data SMS thread list unavailable: ${error.runtimeType}');
 
   /// Blanks the preview when the last message is hidden on this device (the
   /// chat was cleared, or it predates the restore/install horizon).
@@ -174,6 +250,7 @@ class ThreadListCubit extends Cubit<ThreadListState> {
       final now = DateTime.now().toUtc();
       await messageCache.setClearedBefore(threadId, now);
       await messageCache.clearThread(threadId);
+      await _refreshSms();
     } catch (e) {
       emit(ThreadListError('Clear failed: $e'));
     }
@@ -185,6 +262,8 @@ class ThreadListCubit extends Cubit<ThreadListState> {
       await mediaRepository.deleteThreadMedia(threadId);
       await threadRepository.deleteThread(threadId);
       await messageCache.clearThread(threadId);
+      await dataSms?.forget(threadId);
+      await _refreshSms();
     } catch (e) {
       emit(ThreadListError('Delete failed: $e'));
     }
@@ -192,6 +271,7 @@ class ThreadListCubit extends Cubit<ThreadListState> {
 
   @override
   Future<void> close() async {
+    await _smsSub?.cancel();
     await _sub?.cancel();
     await _presenceSub?.cancel();
     return super.close();

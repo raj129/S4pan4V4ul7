@@ -434,6 +434,76 @@ void main() {
     await cubit.openThread(thread: _thread, otherUser: _other);
   }
 
+  group('mixed data SMS history', () {
+    ChatMessage sms(String id, int day) => ChatMessage(
+      messageId: id,
+      threadId: 'me_other',
+      senderId: 'other',
+      encryptedText: 'sms-$id',
+      sentAt: DateTime.utc(2024, 1, day),
+      deletedFor: const [],
+      transport: MessageTransport.dataSms,
+      smsSegments: 3,
+      smsDeliveryState: 'received',
+    );
+
+    test(
+      'internet snapshots preserve SMS in the same chronological history',
+      () async {
+        await cubit.close();
+        final cache = MemoryMessageCache();
+        await cache.save([sms('s1', 1), _msg('i2', 2), sms('s3', 3)]);
+        cubit = build(messageCache: cache);
+        await open();
+        messages.emitLive([_msg('i4', 4), _msg('i2', 2)]);
+        await Future<void>.delayed(const Duration(milliseconds: 30));
+        final state = cubit.state as ActiveThreadLoaded;
+        expect(state.messages.map((m) => m.messageId), [
+          'i4',
+          's3',
+          'i2',
+          's1',
+        ]);
+        expect(state.messages.every((m) => m.threadId == 'me_other'), isTrue);
+        expect(state.messages.where((m) => m.isDataSms), hasLength(2));
+        expect(
+          messages.deliveredReceipts.values.expand((ids) => ids),
+          isNot(contains('s3')),
+        );
+      },
+    );
+
+    test('empty server history still pages older local SMS', () async {
+      await cubit.close();
+      final cache = MemoryMessageCache();
+      await cache.save([for (var i = 1; i <= 36; i++) sms('s$i', i)]);
+      cubit = build(messageCache: cache);
+      await open();
+      expect((cubit.state as ActiveThreadLoaded).messages, hasLength(30));
+      await cubit.loadOlderMessages();
+      expect((cubit.state as ActiveThreadLoaded).messages, hasLength(36));
+    });
+
+    test(
+      'local SMS delete and unsupported actions never call internet APIs',
+      () async {
+        await cubit.close();
+        final cache = MemoryMessageCache();
+        final message = sms('s1', 1);
+        await cache.save([message]);
+        cubit = build(messageCache: cache);
+        await open();
+        expect(cubit.canEditMessage(message), isFalse);
+        await cubit.toggleReaction(message, 'like');
+        await cubit.deleteMessageForEveryone(message);
+        await cubit.deleteMessageForMe(message);
+        expect((await cache.loadById('s1'))!.isDeletedFor('me'), isTrue);
+        expect((cubit.state as ActiveThreadLoaded).visibleMessages, isEmpty);
+        expect(messages.sent, isEmpty);
+      },
+    );
+  });
+
   group('shared notes', () {
     test('sends a note marker and updates the thread preview', () async {
       await open();
