@@ -205,6 +205,7 @@ void main() {
           duration: const Duration(minutes: 15),
           initialPoint: firstPoint,
         );
+        await Future<void>.delayed(Duration.zero);
 
         expect(locationSource.config?.distanceFilterMeters, 0);
         expect(
@@ -255,7 +256,8 @@ void main() {
       expect(streams, hasLength(3));
 
       await streams[2].close();
-      await Future<void>.delayed(const Duration(milliseconds: 1100));
+      // Creating a stream without receiving a fix must not reset backoff.
+      await Future<void>.delayed(const Duration(milliseconds: 2100));
       expect(streams, hasLength(4));
 
       await recovering.stopSharing();
@@ -340,25 +342,28 @@ void main() {
     expect(repository.started, isEmpty);
   });
 
-  test('LiveLocationSession retains last known coordinates when ended or expired', () {
-    final stoppedAt = DateTime.utc(2026, 10, 21, 11, 12);
-    final session = LiveLocationSession(
-      sessionId: 'session_1',
-      threadId: 'alice_bob',
-      userId: 'alice',
-      isActive: false,
-      startedAt: DateTime.utc(2026, 10, 21, 11),
-      expiresAt: DateTime.utc(2026, 10, 21, 11, 15),
-      lastUpdatedAt: DateTime.utc(2026, 10, 21, 11, 10),
-      currentPoint: firstPoint,
-      stoppedAt: stoppedAt,
-    );
+  test(
+    'LiveLocationSession retains last known coordinates when ended or expired',
+    () {
+      final stoppedAt = DateTime.utc(2026, 10, 21, 11, 12);
+      final session = LiveLocationSession(
+        sessionId: 'session_1',
+        threadId: 'alice_bob',
+        userId: 'alice',
+        isActive: false,
+        startedAt: DateTime.utc(2026, 10, 21, 11),
+        expiresAt: DateTime.utc(2026, 10, 21, 11, 15),
+        lastUpdatedAt: DateTime.utc(2026, 10, 21, 11, 10),
+        currentPoint: firstPoint,
+        stoppedAt: stoppedAt,
+      );
 
-    expect(session.isActive, isFalse);
-    expect(session.isLive, isFalse);
-    expect(session.currentPoint, equals(firstPoint));
-    expect(session.stoppedAt, stoppedAt);
-  });
+      expect(session.isActive, isFalse);
+      expect(session.isLive, isFalse);
+      expect(session.currentPoint, equals(firstPoint));
+      expect(session.stoppedAt, stoppedAt);
+    },
+  );
 
   group('restore after the app process was stopped', () {
     test('re-attaches to an unexpired session and publishes again', () async {
@@ -515,83 +520,89 @@ void main() {
   });
 
   group('battery', () {
-    test('adds battery to published points and notifies partner once when low', () async {
-      final notices = <(String, String, String, int)>[];
-      final battery = _FakeBattery(const BatteryStatus(level: 14, charging: false));
-      final lowService = LiveLocationService(
-        repository: repository,
-        locationUpdates: () => positions.stream,
-        clock: () => now,
-        battery: battery,
-        onLowBattery: ({
-          required threadId,
-          required senderId,
-          required recipientUid,
-          required level,
-        }) async {
-          notices.add((threadId, senderId, recipientUid, level));
-        },
-      );
-      addTearDown(lowService.dispose);
+    test(
+      'adds battery to published points and notifies partner once when low',
+      () async {
+        final notices = <(String, String, String, int)>[];
+        final battery = _FakeBattery(
+          const BatteryStatus(level: 14, charging: false),
+        );
+        final lowService = LiveLocationService(
+          repository: repository,
+          locationUpdates: () => positions.stream,
+          clock: () => now,
+          battery: battery,
+          onLowBattery:
+              ({
+                required threadId,
+                required senderId,
+                required recipientUid,
+                required level,
+              }) async {
+                notices.add((threadId, senderId, recipientUid, level));
+              },
+        );
+        addTearDown(lowService.dispose);
 
-      await lowService.startSharing(
-        threadId: 'alice_bob',
-        userId: 'alice',
-        duration: const Duration(minutes: 15),
-        initialPoint: firstPoint,
-        recipientUid: 'bob',
-      );
-      expect(repository.started.single.initialPoint.batteryLevel, 14);
-      expect(repository.started.single.initialPoint.charging, isFalse);
+        await lowService.startSharing(
+          threadId: 'alice_bob',
+          userId: 'alice',
+          duration: const Duration(minutes: 15),
+          initialPoint: firstPoint,
+          recipientUid: 'bob',
+        );
+        expect(repository.started.single.initialPoint.batteryLevel, 14);
+        expect(repository.started.single.initialPoint.charging, isFalse);
 
-      now = now.add(const Duration(seconds: 11));
-      await lowService.onNewLocation(
-        LiveLocationPoint(
-          latitude: firstPoint.latitude + 0.0002,
-          longitude: firstPoint.longitude,
-          accuracy: 6,
-          timestamp: now,
-        ),
-      );
-      expect(notices, [('alice_bob', 'alice', 'bob', 14)]);
+        now = now.add(const Duration(seconds: 11));
+        await lowService.onNewLocation(
+          LiveLocationPoint(
+            latitude: firstPoint.latitude + 0.0002,
+            longitude: firstPoint.longitude,
+            accuracy: 6,
+            timestamp: now,
+          ),
+        );
+        expect(notices, [('alice_bob', 'alice', 'bob', 14)]);
 
-      battery.status = const BatteryStatus(level: 13, charging: false);
-      now = now.add(const Duration(seconds: 11));
-      await lowService.onNewLocation(
-        LiveLocationPoint(
-          latitude: firstPoint.latitude + 0.0004,
-          longitude: firstPoint.longitude,
-          accuracy: 6,
-          timestamp: now,
-        ),
-      );
-      expect(notices, hasLength(1));
+        battery.status = const BatteryStatus(level: 13, charging: false);
+        now = now.add(const Duration(seconds: 11));
+        await lowService.onNewLocation(
+          LiveLocationPoint(
+            latitude: firstPoint.latitude + 0.0004,
+            longitude: firstPoint.longitude,
+            accuracy: 6,
+            timestamp: now,
+          ),
+        );
+        expect(notices, hasLength(1));
 
-      battery.status = const BatteryStatus(level: 13, charging: true);
-      now = now.add(const Duration(seconds: 11));
-      await lowService.onNewLocation(
-        LiveLocationPoint(
-          latitude: firstPoint.latitude + 0.0006,
-          longitude: firstPoint.longitude,
-          accuracy: 6,
-          timestamp: now,
-        ),
-      );
-      battery.status = const BatteryStatus(level: 12, charging: false);
-      now = now.add(const Duration(seconds: 11));
-      await lowService.onNewLocation(
-        LiveLocationPoint(
-          latitude: firstPoint.latitude + 0.0008,
-          longitude: firstPoint.longitude,
-          accuracy: 6,
-          timestamp: now,
-        ),
-      );
-      expect(notices, hasLength(2));
-      expect(repository.updated.last.batteryLevel, 12);
+        battery.status = const BatteryStatus(level: 13, charging: true);
+        now = now.add(const Duration(seconds: 11));
+        await lowService.onNewLocation(
+          LiveLocationPoint(
+            latitude: firstPoint.latitude + 0.0006,
+            longitude: firstPoint.longitude,
+            accuracy: 6,
+            timestamp: now,
+          ),
+        );
+        battery.status = const BatteryStatus(level: 12, charging: false);
+        now = now.add(const Duration(seconds: 11));
+        await lowService.onNewLocation(
+          LiveLocationPoint(
+            latitude: firstPoint.latitude + 0.0008,
+            longitude: firstPoint.longitude,
+            accuracy: 6,
+            timestamp: now,
+          ),
+        );
+        expect(notices, hasLength(2));
+        expect(repository.updated.last.batteryLevel, 12);
 
-      await lowService.stopSharing();
-    });
+        await lowService.stopSharing();
+      },
+    );
   });
 }
 

@@ -536,7 +536,7 @@ GoRoute _settingsRoute(
           onNotificationSettingsChanged: () async {
             final locationService = deps.chatDependencies.liveLocationService;
             if (locationService?.isSharing == true) {
-              await locationService!.refreshSharing();
+              await locationService!.refreshNotification();
             }
           },
         ),
