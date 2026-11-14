@@ -105,6 +105,23 @@ requests high-accuracy updates every 10 seconds with a foreground notification
 and wake lock. Actual consumption has not been measured and depends on device
 and network conditions. The two features remain separate.
 
+Live sharing checks for missing GPS callbacks every 15 seconds and attempts
+bounded recovery after roughly 60 seconds of silence, with backoff if recovery
+keeps failing. **Signal paused** still means no update has reached the displayed
+session for over 90 seconds; it does not identify whether GPS, uploading, or the
+viewer's connection stalled. Refresh waits for a new fix to be published rather
+than treating a subscription restart as success. Old fixes are not republished
+with a new timestamp to hide a pause.
+
+The service retains up to 50 local diagnostic events (recovery reasons, times,
+retry counts and error types), without coordinates, account/chat IDs or message
+content. For troubleshooting, `LiveLocationService.healthSnapshot` and
+`health.events` expose current health and the retained history. Background
+permission and the ongoing location notification are still required. Recovery
+cannot run while Android has suspended/killed the Dart process, and Android may
+restrict restarting a foreground location service from the background. The
+Refresh button remains available; this is not a guarantee of uninterrupted GPS.
+
 ## Mock location (Developer options)
 
 - **Open it:** side drawer → **Location → Mock location** (always visible).

@@ -52,11 +52,14 @@ class AppLocation implements LocationSource {
   Stream<GeoFix> updates([
     LocationUpdateConfig config = const LocationUpdateConfig(),
   ]) {
-    // ignore: close_sinks - returned as the stream; closed in onCancel.
+    // ignore: close_sinks - owned by the returned stream.
     late StreamController<GeoFix> out;
     StreamSubscription<GeoFix>? inner;
     bool? listeningToMock;
     GeoFix? lastSent;
+    var generation = 0;
+    var cancelled = false;
+    Future<void> switching = Future.value();
 
     bool shouldSend(GeoFix fix) {
       final prev = lastSent;
@@ -70,27 +73,48 @@ class AppLocation implements LocationSource {
 
     void attach() {
       final useMock = mock.isActive;
-      if (listeningToMock == useMock && inner != null) return;
+      if (listeningToMock == useMock) return;
       listeningToMock = useMock;
-      unawaited(inner?.cancel());
-      if (useMock) {
-        inner = mock.fixes.listen((fix) {
-          if (shouldSend(fix)) {
-            lastSent = fix;
-            out.add(fix);
-          }
-        });
-        final now = mock.latest;
-        if (now != null && shouldSend(now)) {
-          lastSent = now;
-          out.add(now);
-        }
-      } else {
-        inner = _real.updates(config).listen((fix) {
-          lastSent = fix;
-          out.add(fix);
-        }, onError: out.addError);
-      }
+      final selected = ++generation;
+      switching = switching
+          .then((_) async {
+            final previous = inner;
+            inner = null;
+            await previous?.cancel().timeout(const Duration(seconds: 10));
+            if (cancelled || selected != generation) return;
+
+            void emit(GeoFix fix) {
+              if (cancelled || selected != generation || out.isClosed) return;
+              if (!useMock || shouldSend(fix)) {
+                lastSent = fix;
+                out.add(fix);
+              }
+            }
+
+            inner = (useMock ? mock.fixes : _real.updates(config)).listen(
+              emit,
+              onError: (Object error, StackTrace stack) {
+                if (!cancelled && selected == generation && !out.isClosed) {
+                  out.addError(error, stack);
+                }
+              },
+              onDone: () {
+                if (!cancelled && selected == generation) {
+                  unawaited(out.close());
+                }
+              },
+            );
+            if (out.isPaused) inner?.pause();
+            if (useMock) {
+              final latest = mock.latest;
+              if (latest != null) emit(latest);
+            }
+          })
+          .catchError((Object error, StackTrace stack) {
+            if (!cancelled && selected == generation && !out.isClosed) {
+              out.addError(error, stack);
+            }
+          });
     }
 
     void onModeChanged() {
@@ -105,8 +129,11 @@ class AppLocation implements LocationSource {
       onPause: () => inner?.pause(),
       onResume: () => inner?.resume(),
       onCancel: () async {
+        cancelled = true;
+        generation++;
         mock.removeListener(onModeChanged);
-        await inner?.cancel();
+        await switching;
+        await inner?.cancel().timeout(const Duration(seconds: 10));
         inner = null;
       },
     );
