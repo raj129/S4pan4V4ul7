@@ -8,6 +8,7 @@ import 'package:photo_vault/features/chat/data/repositories/local_sticker_pack_r
 import 'package:photo_vault/core/integrations/chat_vault_bridge.dart';
 import 'package:photo_vault/features/chat/application/crypto/chat_crypto_service.dart';
 import 'package:photo_vault/features/chat/application/services/data_sms_service.dart';
+import 'package:photo_vault/features/chat/application/services/profile_service.dart';
 import 'package:photo_vault/features/chat/domain/entities/chat_message.dart';
 import 'package:photo_vault/features/chat/domain/entities/chat_thread.dart';
 import 'package:photo_vault/features/chat/domain/entities/chat_user.dart';
@@ -83,6 +84,16 @@ class _UiSms implements DataSmsService {
   @override
   dynamic noSuchMethod(Invocation i) =>
       throw UnimplementedError('${i.memberName} not needed');
+}
+
+class _Profile extends ChangeNotifier implements ProfileService {
+  @override
+  String nameFor(ChatUser user) => user.displayName;
+  @override
+  String? aliasFor(String uid) => null;
+  @override
+  dynamic noSuchMethod(Invocation invocation) =>
+      throw UnimplementedError('${invocation.memberName}');
 }
 
 class _Messages implements MessageRepository {
@@ -336,6 +347,8 @@ void main() {
       final messages = _Messages();
       final unused = _Unused();
       final sms = _UiSms();
+      final profile = _Profile();
+      addTearDown(profile.dispose);
       final cubit = ActiveThreadCubit(
         messageRepository: messages,
         threadRepository: _Threads(),
@@ -371,6 +384,7 @@ void main() {
             child: ThreadScreen(
               thread: thread,
               otherUser: other,
+              profileService: profile,
               mediaLoader: ChatMediaLoader(
                 mediaRepository: unused,
                 cryptoService: _Crypto(),
@@ -387,9 +401,16 @@ void main() {
       await tester.pump(const Duration(milliseconds: 100));
       messages.live.add([_msg('internet', 'internet history')]);
       await tester.pump(const Duration(milliseconds: 100));
+      await tester.longPress(find.byIcon(Icons.send_rounded));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(find.text('Sending method'), findsOneWidget);
+      expect(tester.takeException(), isNull, reason: 'after longPress');
       await tester.tap(find.text('Data SMS'));
-      await tester.pump(const Duration(milliseconds: 100));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
       expect(find.text('Data SMS recipient'), findsOneWidget);
+      expect(tester.takeException(), isNull, reason: 'after tap Data SMS');
       await tester.enterText(
         find.descendant(
           of: find.byType(AlertDialog),
@@ -398,9 +419,10 @@ void main() {
         '+12345678901',
       );
       await tester.tap(find.text('Save'));
-      await tester.pump(const Duration(milliseconds: 350));
-      await tester.pump(const Duration(milliseconds: 100));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
       expect(sms.number, '+12345678901');
+      expect(tester.takeException(), isNull);
       expect(find.text('internet history'), findsOneWidget);
       final composer = find.descendant(
         of: find.byKey(const ValueKey('chat-composer-surface')),
@@ -409,11 +431,8 @@ void main() {
       await tester.enterText(composer, 'hello');
       await tester.pump(const Duration(milliseconds: 300));
       final count = cubit.estimateSms('hello')!;
-      expect(
-        find.text('5/${count.segments} SMS · limit 10 segments'),
-        findsOneWidget,
-      );
-      await tester.tap(find.byIcon(Icons.send_rounded));
+      expect(find.text('5 chars · ${count.segments}/10 SMS'), findsOneWidget);
+      await tester.tap(find.byIcon(Icons.sms_rounded));
       await tester.pump(const Duration(milliseconds: 300));
       expect(sms.sends, 1);
       expect(tester.widget<TextField>(composer).controller!.text, 'hello');
@@ -421,7 +440,7 @@ void main() {
       await tester.pump(const Duration(milliseconds: 300));
       await tester.enterText(composer, List.filled(2000, 'x').join());
       await tester.pump(const Duration(milliseconds: 100));
-      await tester.tap(find.byIcon(Icons.send_rounded));
+      await tester.tap(find.byIcon(Icons.sms_rounded));
       await tester.pump(const Duration(milliseconds: 100));
       expect(sms.sends, 1);
       expect(
@@ -431,6 +450,60 @@ void main() {
       expect(tester.widget<TextField>(composer).controller!.text.length, 2000);
       expect(find.text('internet history'), findsOneWidget);
       expect(tester.takeException(), isNull);
+      Future<void> settleRoute() async {
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 400));
+        await tester.pump();
+      }
+
+      FocusManager.instance.primaryFocus?.unfocus();
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.tap(find.text('Other').first);
+      await settleRoute();
+      expect(find.textContaining('+12345678901'), findsOneWidget);
+      await tester.tap(find.text('Data SMS number'));
+      await settleRoute();
+      await tester.enterText(
+        find.descendant(
+          of: find.byType(AlertDialog),
+          matching: find.byType(TextField),
+        ),
+        '+441234567890',
+      );
+      await tester.tap(find.text('Save'));
+      await settleRoute();
+      expect(sms.number, '+441234567890');
+      Navigator.of(tester.element(find.text('Data SMS number'))).pop();
+      await settleRoute();
+      ScaffoldMessenger.of(tester.element(composer)).removeCurrentSnackBar();
+      await settleRoute();
+      await tester.tap(find.byTooltip('Data SMS recipient number'));
+      await settleRoute();
+      expect(
+        tester
+            .widget<TextField>(
+              find.descendant(
+                of: find.byType(AlertDialog),
+                matching: find.byType(TextField),
+              ),
+            )
+            .controller!
+            .text,
+        '+441234567890',
+      );
+      await tester.tap(find.text('Cancel'));
+      await settleRoute();
+      await tester.tap(find.text('Other').first);
+      await settleRoute();
+      await tester.tap(find.text('Data SMS number'));
+      await settleRoute();
+      await tester.tap(find.text('Remove'));
+      await settleRoute();
+      Navigator.of(tester.element(find.text('Data SMS number'))).pop();
+      await settleRoute();
+      expect(sms.number, isNull);
+      expect(find.byTooltip('Data SMS recipient number'), findsNothing);
+      expect(find.byIcon(Icons.send_rounded), findsOneWidget);
       await tester.pumpWidget(const SizedBox.shrink());
       await tester.pump(const Duration(milliseconds: 100));
       await cubit.close();

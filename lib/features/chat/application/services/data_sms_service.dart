@@ -93,8 +93,7 @@ class DataSmsService {
     return (records[threadId] as Map?)?['phone'] as String?;
   }
 
-  Future<void> setPhone(String threadId, String? value) async {
-    final uid = _requireUid();
+  static String? normalizePhone(String? value) {
     final normalized = value?.replaceAll(RegExp(r'[\s().-]'), '');
     if (normalized != null &&
         normalized.isNotEmpty &&
@@ -103,10 +102,16 @@ class DataSmsService {
         'Use an international phone number, for example +919876543210.',
       );
     }
+    return normalized == null || normalized.isEmpty ? null : normalized;
+  }
+
+  Future<void> setPhone(String threadId, String? value) async {
+    final uid = _requireUid();
+    final normalized = normalizePhone(value);
     final records = await _contacts(uid);
     final record = (records[threadId] as Map?)?.cast<String, dynamic>();
     if (record == null) throw StateError('Open this conversation first.');
-    if (normalized == null || normalized.isEmpty) {
+    if (normalized == null) {
       record.remove('phone');
     } else {
       record['phone'] = normalized;
@@ -240,26 +245,24 @@ class DataSmsService {
     _checkAccount(uid);
     final id = const Uuid().v4();
     final at = DateTime.now().toUtc();
-    final encryptedEnvelope = await crypto.encryptMessage(
+    final encryptedText = await crypto.encryptMessage(
       threadId: thread.threadId,
-      plaintext: DataSmsProtocol.body(
-        id: id,
-        threadId: thread.threadId,
-        senderId: uid,
-        recipientId: recipient.uid,
-        sentAt: at.millisecondsSinceEpoch,
-        text: plain,
-      ),
+      plaintext: plain,
     );
-    final payload = DataSmsProtocol.pack(thread.threadId, encryptedEnvelope);
+    final encryptedPacket = await crypto.encryptDataSms(
+      threadId: thread.threadId,
+      sentAtMs: at.millisecondsSinceEpoch,
+      plaintext: plain,
+    );
+    final payload = DataSmsProtocol.packV2(
+      sentAtMs: at.millisecondsSinceEpoch,
+      encryptedBytes: encryptedPacket,
+    );
     var message = ChatMessage(
       messageId: id,
       threadId: thread.threadId,
       senderId: uid,
-      encryptedText: await crypto.encryptMessage(
-        threadId: thread.threadId,
-        plaintext: plain,
-      ),
+      encryptedText: encryptedText,
       sentAt: at,
       deletedFor: const [],
       transport: MessageTransport.dataSms,
@@ -292,6 +295,128 @@ class DataSmsService {
     _checkAccount(uid);
     await _save(message);
     return message.withDecryptedText(plain);
+  }
+
+  String _phoneMatchKey(String value) =>
+      value.replaceAll(RegExp(r'[^0-9]'), '');
+
+  MapEntry<String, Map<String, dynamic>>? _contactForPhone(
+    Map<String, dynamic> records,
+    String source,
+  ) {
+    final sourceKey = _phoneMatchKey(source);
+    if (sourceKey.isEmpty) return null;
+    MapEntry<String, Map<String, dynamic>>? match;
+    for (final entry in records.entries) {
+      if (entry.value is! Map) continue;
+      final record = (entry.value as Map).cast<String, dynamic>();
+      final number = record['phone'];
+      if (number is! String || _phoneMatchKey(number) != sourceKey) continue;
+      if (match != null) return null;
+      match = MapEntry(entry.key, record);
+    }
+    return match;
+  }
+
+  Future<void> _processIncoming(
+    NativeSmsIncoming incoming,
+    String uid,
+    Map<String, dynamic> records,
+  ) async {
+    final packet = DataSmsProtocol.unpack(incoming.payload);
+    final phoneContact = _contactForPhone(records, incoming.phone);
+    final threadId = packet.threadId ?? phoneContact?.key;
+    if (threadId == null) return;
+    final contact = records[threadId] as Map?;
+    if (contact == null || !await crypto.hasThreadKey(threadId)) return;
+    final user = (contact['user'] as Map).cast<String, dynamic>();
+    final senderId = user['uid'];
+    if (senderId is! String ||
+        threadId != ChatThread.buildId(uid, senderId) ||
+        (packet.version == 2 &&
+            (phoneContact?.key != threadId ||
+                _phoneMatchKey((contact['phone'] as String?) ?? '') !=
+                    _phoneMatchKey(incoming.phone)))) {
+      throw const FormatException('Data SMS sender does not match this chat.');
+    }
+
+    final DateTime at;
+    final String text;
+    if (packet.version == 1) {
+      final envelope = jsonDecode(
+        await crypto.decryptMessage(
+          threadId: threadId,
+          encryptedB64: packet.ciphertext!,
+        ),
+      );
+      if (envelope is! Map ||
+          envelope['v'] != 1 ||
+          envelope['id'] != incoming.id ||
+          envelope['t'] != threadId ||
+          envelope['r'] != uid ||
+          envelope['s'] != senderId ||
+          envelope['at'] is! int ||
+          (envelope['at'] as int) < 0 ||
+          (envelope['at'] as int) > 8640000000000000 ||
+          envelope['text'] is! String ||
+          (envelope['text'] as String).trim().isEmpty) {
+        throw const FormatException('Invalid authenticated Data SMS identity.');
+      }
+      at = DateTime.fromMillisecondsSinceEpoch(
+        envelope['at'] as int,
+        isUtc: true,
+      );
+      text = (envelope['text'] as String).trim();
+    } else {
+      final timestamp = packet.sentAtMs!;
+      text = (await crypto.decryptDataSms(
+        threadId: threadId,
+        sentAtMs: timestamp,
+        encryptedBytes: packet.encryptedBytes!,
+      )).trim();
+      if (text.isEmpty) {
+        throw const FormatException('Empty authenticated Data SMS.');
+      }
+      at = DateTime.fromMillisecondsSinceEpoch(timestamp, isUtc: true);
+    }
+
+    _checkAccount(uid);
+    final existing = await cache.loadById(incoming.id);
+    final seenKey = 'sms_seen_${uid}_${incoming.id}';
+    final seen = await cache.readSetting(seenKey) != null;
+    final cleared = await cache.getClearedBefore(threadId);
+    final horizon = await cache.getHistoryHorizon();
+    if (!seen &&
+        existing == null &&
+        (cleared == null || at.isAfter(cleared)) &&
+        (horizon == null || at.isAfter(horizon))) {
+      final message = ChatMessage(
+        messageId: incoming.id,
+        threadId: threadId,
+        senderId: senderId,
+        encryptedText: await crypto.encryptMessage(
+          threadId: threadId,
+          plaintext: text,
+        ),
+        sentAt: at,
+        deletedFor: const [],
+        transport: MessageTransport.dataSms,
+        smsSegments: packet.version == 1
+            ? DataSmsProtocol.legacySegmentCount(incoming.payload.length)
+            : DataSmsProtocol.segmentCount(incoming.payload.length),
+        smsDeliveryState: 'received',
+      );
+      _checkAccount(uid);
+      await _save(message);
+      await onIncoming?.call(
+        ChatThread.fromFirestore(
+          (contact['thread'] as Map).cast<String, dynamic>(),
+        ),
+      );
+    }
+    _checkAccount(uid);
+    await cache.writeSetting(seenKey, '1');
+    await native.acknowledge(messageId: incoming.id, source: incoming.phone);
   }
 
   Future<void> _save(ChatMessage message) async {
@@ -342,78 +467,7 @@ class DataSmsService {
         final rejectionId = '$uid:${incoming.phone}:${incoming.id}';
         if (_rejected.contains(rejectionId)) continue;
         try {
-          final wire = DataSmsProtocol.unpack(incoming.payload);
-          final contact = records[wire.threadId] as Map?;
-          if (contact == null || !await crypto.hasThreadKey(wire.threadId)) {
-            continue;
-          }
-          final envelope = jsonDecode(
-            await crypto.decryptMessage(
-              threadId: wire.threadId,
-              encryptedB64: wire.ciphertext,
-            ),
-          );
-          if (envelope is! Map ||
-              envelope['v'] != 1 ||
-              envelope['id'] != incoming.id ||
-              envelope['t'] != wire.threadId ||
-              envelope['r'] != uid ||
-              envelope['s'] != (contact['user'] as Map)['uid'] ||
-              wire.threadId !=
-                  ChatThread.buildId(uid, envelope['s'] as String) ||
-              envelope['at'] is! int ||
-              (envelope['at'] as int) < 0 ||
-              (envelope['at'] as int) > 8640000000000000 ||
-              envelope['text'] is! String ||
-              (envelope['text'] as String).trim().isEmpty) {
-            throw const FormatException(
-              'Invalid authenticated data SMS identity.',
-            );
-          }
-          _checkAccount(uid);
-          final existing = await cache.loadById(incoming.id);
-          final seenKey = 'sms_seen_${uid}_${incoming.id}';
-          final seen = await cache.readSetting(seenKey) != null;
-          final at = DateTime.fromMillisecondsSinceEpoch(
-            envelope['at'] as int,
-            isUtc: true,
-          );
-          final cleared = await cache.getClearedBefore(wire.threadId);
-          final horizon = await cache.getHistoryHorizon();
-          if (!seen &&
-              existing == null &&
-              (cleared == null || at.isAfter(cleared)) &&
-              (horizon == null || at.isAfter(horizon))) {
-            final message = ChatMessage(
-              messageId: incoming.id,
-              threadId: wire.threadId,
-              senderId: envelope['s'] as String,
-              encryptedText: await crypto.encryptMessage(
-                threadId: wire.threadId,
-                plaintext: envelope['text'] as String,
-              ),
-              sentAt: at,
-              deletedFor: const [],
-              transport: MessageTransport.dataSms,
-              smsSegments: DataSmsProtocol.segmentCount(
-                incoming.payload.length,
-              ),
-              smsDeliveryState: 'received',
-            );
-            _checkAccount(uid);
-            await _save(message);
-            await onIncoming?.call(
-              ChatThread.fromFirestore(
-                (contact['thread'] as Map).cast<String, dynamic>(),
-              ),
-            );
-          }
-          _checkAccount(uid);
-          await cache.writeSetting(seenKey, '1');
-          await native.acknowledge(
-            messageId: incoming.id,
-            source: incoming.phone,
-          );
+          await _processIncoming(incoming, uid, records);
         } on FormatException {
           _reject(rejectionId);
         } on SecretBoxAuthenticationError {

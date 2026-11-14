@@ -63,6 +63,7 @@ import '../widgets/chat_wallpaper.dart';
 import '../widgets/image_quality_sheet.dart';
 import '../widgets/video_quality_sheet.dart';
 import '../widgets/contact_info_sheet.dart';
+import '../widgets/data_sms_number_dialog.dart';
 import '../widgets/message_bubble.dart';
 import '../widgets/user_avatar.dart';
 import '../widgets/typing_indicator.dart';
@@ -1314,6 +1315,12 @@ class _ThreadScreenState extends State<ThreadScreen>
               context,
               profileService: service,
               user: widget.otherUser,
+              dataSms: context.read<ActiveThreadCubit>().dataSms,
+              onSmsNumberChanged: (number) {
+                if (mounted && number == null) {
+                  setState(() => _useDataSms = false);
+                }
+              },
               mediaLoader: widget.mediaLoader,
               mediaManagerService: widget.mediaManagerService,
               threadId: widget.thread.threadId,
@@ -1531,14 +1538,17 @@ class _ThreadScreenState extends State<ThreadScreen>
                           cubit.setReplyTarget(msg);
                           _inputFocus.requestFocus();
                         },
-                  onReact: _useDataSms ? null : (emoji) => cubit.toggleReaction(msg, emoji),
+                  onReact: _useDataSms
+                      ? null
+                      : (emoji) => cubit.toggleReaction(msg, emoji),
                   // Always wired up for own, non-media messages — eligibility
                   // (30-minute / edited-before-read rule) is checked once,
                   // centrally, inside `_promptEdit`, so both the long-press menu
                   // entry and the Signal-style double-tap give the same
                   // accept/reject behaviour instead of silently disappearing.
                   onEdit:
-                      !_useDataSms && isMine &&
+                      !_useDataSms &&
+                          isMine &&
                           !msg.isMedia &&
                           msg.mediaType != MessageType.liveLocation &&
                           !msg.isGeoShare &&
@@ -1572,7 +1582,9 @@ class _ThreadScreenState extends State<ThreadScreen>
                       ? () => unawaited(_saveAsSticker(msg, cubit))
                       : null,
                   onForward:
-                      _useDataSms || msg.isDataSms || msg.mediaType == MessageType.liveLocation ||
+                      _useDataSms ||
+                          msg.isDataSms ||
+                          msg.mediaType == MessageType.liveLocation ||
                           msg.isGeoShare
                       ? null
                       : () => _promptForward(msg),
@@ -1989,9 +2001,9 @@ class _ThreadScreenState extends State<ThreadScreen>
     }
     if (!context.mounted) return;
 
-    final allMine = !_useDataSms && selectedMsgs.every(
-      (m) => m.senderId == cubit.myUid && !m.isDataSms,
-    );
+    final allMine =
+        !_useDataSms &&
+        selectedMsgs.every((m) => m.senderId == cubit.myUid && !m.isDataSms);
     final count = selectedMsgs.length;
     final titleText = count == 1
         ? 'Delete message?'
@@ -2711,8 +2723,6 @@ class _ThreadScreenState extends State<ThreadScreen>
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          if (context.read<ActiveThreadCubit>().dataSms != null && !_isEditing)
-            _buildSmsSelector(context),
           AnimatedSize(
             duration: AppDuration.fast,
             curve: AppCurves.standard,
@@ -2728,171 +2738,131 @@ class _ThreadScreenState extends State<ThreadScreen>
     );
   }
 
-  Widget _buildSmsSelector(BuildContext context) {
+  Future<void> _switchSmsMode(bool useSms) async {
     final cubit = context.read<ActiveThreadCubit>();
-    final cs = Theme.of(context).colorScheme;
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Row(
-            children: [
-              Expanded(
-                child: SegmentedButton<bool>(
-                  segments: const [
-                    ButtonSegment(value: false, label: Text('Internet')),
-                    ButtonSegment(value: true, label: Text('Data SMS')),
-                  ],
-                  selected: {_useDataSms},
-                  onSelectionChanged: (selection) async {
-                    final useSms = selection.single;
-                    if (useSms) {
-                      try {
-                        if (await cubit.smsPhone() == null) {
-                          if (!mounted || !await _configureSmsNumber()) return;
-                        }
-                        await cubit.dataSms!.enable();
-                        if (!mounted) return;
-                        if (_showEmojiPicker) {
-                          await _dismissEmojiSheet(focusComposer: false);
-                        }
-                        cubit.clearReplyTarget();
-                        unawaited(cubit.setTyping(false));
-                      } catch (error) {
-                        if (context.mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(
-                              content: Text('Data SMS setup failed: $error'),
-                            ),
-                          );
-                        }
-                        return;
-                      }
-                    }
-                    if (mounted) setState(() => _useDataSms = useSms);
-                  },
-                ),
-              ),
-              if (_useDataSms)
-                IconButton(
-                  tooltip: 'Data SMS recipient number (unverified)',
-                  icon: const Icon(Icons.sim_card_outlined),
-                  onPressed: () => _configureSmsNumber(),
-                ),
-            ],
-          ),
-          if (_useDataSms) ...[
-            ValueListenableBuilder<TextEditingValue>(
-              valueListenable: _textCtrl,
-              builder: (_, value, _) {
-                final estimate = cubit.estimateSms(value.text);
-                return Text(
-                  '${estimate?.characters ?? 0}/${estimate?.segments ?? 0} SMS · limit 10 segments',
-                  style: TextStyle(
-                    color: (estimate?.segments ?? 0) > 10
-                        ? cs.error
-                        : cs.onSurfaceVariant,
-                    fontSize: 12,
-                  ),
-                );
-              },
-            ),
-            Text(
-              'Encrypted text only. SMS charges apply. Recipient number is unverified.',
-              style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant),
-            ),
-          ],
-        ],
-      ),
-    );
+    if (useSms) {
+      if (cubit.dataSms == null) return;
+      try {
+        if (await cubit.smsPhone() == null) {
+          if (!mounted || !await _configureSmsNumber()) return;
+        }
+        await cubit.dataSms!.enable();
+        if (!mounted) return;
+        if (_showEmojiPicker) {
+          await _dismissEmojiSheet(focusComposer: false);
+        }
+        cubit.clearReplyTarget();
+        unawaited(cubit.setTyping(false));
+      } catch (error) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Data SMS setup failed: $error')),
+          );
+        }
+        return;
+      }
+    }
+    if (mounted) setState(() => _useDataSms = useSms);
   }
 
-  Future<bool> _configureSmsNumber() async {
+  Future<void> _showTransportMenu() async {
     final cubit = context.read<ActiveThreadCubit>();
-    final current = await cubit.smsPhone();
-    if (!mounted) return false;
-    final controller = TextEditingController(text: current);
-    String? errorText;
-    final route = DialogRoute<bool>(
+    if (cubit.dataSms == null || _isEditing) return;
+    final selected = await showModalBottomSheet<bool>(
       context: context,
-      builder: (dialogContext) => StatefulBuilder(
-        builder: (_, updateDialog) => AlertDialog(
-          title: const Text('Data SMS recipient'),
-          content: SingleChildScrollView(
+      showDragHandle: true,
+      builder: (sheetContext) {
+        final cs = Theme.of(sheetContext).colorScheme;
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.only(bottom: AppSpacing.md),
             child: Column(
               mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                const Text(
-                  'Enter the other person\'s number, including + and country code. '
-                  'This number is not verified. Both phones need this app, cellular SMS service, '
-                  'and conversation keys previously set up online. Enable Data SMS and grant SMS permission '
-                  'on both phones before going offline. Each segment may be charged. '
-                  'No ordinary SMS or internet fallback is used.',
-                ),
-                TextField(
-                  controller: controller,
-                  keyboardType: TextInputType.phone,
-                  decoration: InputDecoration(
-                    labelText: 'Phone number',
-                    hintText: '+919876543210',
-                    errorText: errorText,
+                Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: AppSpacing.lg,
                   ),
+                  child: Text(
+                    'Sending method',
+                    style: Theme.of(sheetContext).textTheme.titleMedium
+                        ?.copyWith(fontWeight: FontWeight.w600),
+                  ),
+                ),
+                const SizedBox(height: AppSpacing.sm),
+                ListTile(
+                  leading: CircleAvatar(
+                    backgroundColor: !_useDataSms
+                        ? cs.primaryContainer
+                        : cs.surfaceContainerHighest,
+                    child: Icon(
+                      Icons.cloud_outlined,
+                      color: !_useDataSms
+                          ? cs.onPrimaryContainer
+                          : cs.onSurfaceVariant,
+                    ),
+                  ),
+                  title: const Text('Internet'),
+                  subtitle: const Text('Fast, free over Wi-Fi or mobile data'),
+                  trailing: !_useDataSms
+                      ? Icon(Icons.check_rounded, color: cs.primary)
+                      : null,
+                  onTap: () => Navigator.of(sheetContext).pop(false),
+                ),
+                ListTile(
+                  leading: CircleAvatar(
+                    backgroundColor: _useDataSms
+                        ? cs.tertiaryContainer
+                        : cs.surfaceContainerHighest,
+                    child: Icon(
+                      Icons.sim_card_outlined,
+                      color: _useDataSms
+                          ? cs.onTertiaryContainer
+                          : cs.onSurfaceVariant,
+                    ),
+                  ),
+                  title: const Text('Data SMS'),
+                  subtitle: const Text(
+                    'Encrypted offline SMS. Operator charges apply.',
+                  ),
+                  trailing: _useDataSms
+                      ? Icon(Icons.check_rounded, color: cs.tertiary)
+                      : null,
+                  onTap: () => Navigator.of(sheetContext).pop(true),
                 ),
               ],
             ),
           ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext, false),
-              child: const Text('Cancel'),
-            ),
-            if (current != null)
-              TextButton(
-                onPressed: () async {
-                  try {
-                    await cubit.setSmsPhone(null);
-                    if (mounted) setState(() => _useDataSms = false);
-                    if (dialogContext.mounted) {
-                      Navigator.pop(dialogContext, false);
-                    }
-                  } catch (error) {
-                    if (dialogContext.mounted) {
-                      updateDialog(() => errorText = error.toString());
-                    }
-                  }
-                },
-                child: const Text('Remove'),
-              ),
-            FilledButton(
-              onPressed: () async {
-                try {
-                  if (controller.text.trim().isEmpty) {
-                    updateDialog(() => errorText = 'Enter a phone number.');
-                    return;
-                  }
-                  await cubit.setSmsPhone(controller.text);
-                  if (dialogContext.mounted) {
-                    Navigator.pop(dialogContext, true);
-                  }
-                } catch (error) {
-                  if (dialogContext.mounted) {
-                    updateDialog(() => errorText = error.toString());
-                  }
-                }
-              },
-              child: const Text('Save'),
-            ),
-          ],
-        ),
-      ),
+        );
+      },
     );
+    if (selected != null && mounted) {
+      await _switchSmsMode(selected);
+    }
+  }
+
+  Future<bool> _configureSmsNumber() async {
+    final service = context.read<ActiveThreadCubit>().dataSms;
+    if (service == null) return false;
+    final threadId = widget.thread.threadId;
     try {
-      final result = await Navigator.of(context).push(route);
-      await route.completed;
-      return result ?? false;
-    } finally {
-      controller.dispose();
+      final current = await service.phone(threadId);
+      if (!mounted) return false;
+      final result = await showDataSmsNumberDialog(
+        context,
+        currentNumber: current,
+        saveNumber: (number) => service.setPhone(threadId, number),
+      );
+      if (mounted && result == false) setState(() => _useDataSms = false);
+      return result == true;
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not load Data SMS number: $error')),
+        );
+      }
+      return false;
     }
   }
 
@@ -2902,7 +2872,9 @@ class _ThreadScreenState extends State<ThreadScreen>
     FocusNode? inputFocusNode,
   }) {
     final cs = Theme.of(context).colorScheme;
+    final cubit = context.read<ActiveThreadCubit>();
     final composerFocusNode = inputFocusNode ?? _inputFocus;
+    final canUseSms = cubit.dataSms != null && !_isEditing;
     return SafeArea(
       top: false,
       bottom: applyBottomSafeArea,
@@ -2933,59 +2905,122 @@ class _ThreadScreenState extends State<ThreadScreen>
                   color: cs.surfaceContainerHigh,
                   borderRadius: BorderRadius.circular(18),
                   border: Border.all(
-                    color: cs.outlineVariant.withValues(alpha: 0.35),
-                    width: 1,
+                    color: _useDataSms
+                        ? cs.tertiary
+                        : cs.outlineVariant.withValues(alpha: 0.35),
+                    width: _useDataSms ? 2.0 : 1.0,
                   ),
                 ),
                 padding: const EdgeInsets.only(
                   left: AppSpacing.md,
                   right: AppSpacing.xxs,
                 ),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.end,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    Expanded(
-                      child: TextField(
-                        controller: _textCtrl,
-                        focusNode: composerFocusNode,
-                        maxLines: 5,
-                        minLines: 1,
-                        textCapitalization: TextCapitalization.sentences,
-                        style: Theme.of(context).textTheme.bodyLarge,
-                        onTap: () {
-                          if (_showEmojiPicker) {
-                            unawaited(_dismissEmojiSheet(focusComposer: true));
-                          }
-                        },
-                        decoration: InputDecoration(
-                          hintText: _isEditing ? 'Edit message' : 'Message…',
-                          filled: false,
-                          border: InputBorder.none,
-                          enabledBorder: InputBorder.none,
-                          focusedBorder: InputBorder.none,
-                          isDense: true,
-                          contentPadding: const EdgeInsets.symmetric(
-                            vertical: AppSpacing.md,
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: _textCtrl,
+                            focusNode: composerFocusNode,
+                            maxLines: 5,
+                            minLines: 1,
+                            textCapitalization: TextCapitalization.sentences,
+                            style: Theme.of(context).textTheme.bodyLarge,
+                            onTap: () {
+                              if (_showEmojiPicker) {
+                                unawaited(
+                                  _dismissEmojiSheet(focusComposer: true),
+                                );
+                              }
+                            },
+                            decoration: InputDecoration(
+                              hintText: _isEditing
+                                  ? 'Edit message'
+                                  : _useDataSms
+                                  ? 'Data SMS message…'
+                                  : 'Message…',
+                              filled: false,
+                              border: InputBorder.none,
+                              enabledBorder: InputBorder.none,
+                              focusedBorder: InputBorder.none,
+                              isDense: true,
+                              contentPadding: const EdgeInsets.symmetric(
+                                vertical: AppSpacing.md,
+                              ),
+                              hintStyle: Theme.of(context).textTheme.bodyLarge
+                                  ?.copyWith(color: cs.onSurfaceVariant),
+                            ),
+                            onChanged: (v) {
+                              if (_isEditing) {
+                                _hasText.value = v.trim().isNotEmpty;
+                                return;
+                              }
+                              if (!_useDataSms) {
+                                context.read<ActiveThreadCubit>().onTextChanged(
+                                  v,
+                                );
+                              }
+                            },
                           ),
-                          hintStyle: Theme.of(context).textTheme.bodyLarge
-                              ?.copyWith(color: cs.onSurfaceVariant),
                         ),
-                        onChanged: (v) {
-                          if (_isEditing) {
-                            _hasText.value = v.trim().isNotEmpty;
-                            return;
-                          }
-                          if (!_useDataSms) {
-                            context.read<ActiveThreadCubit>().onTextChanged(v);
-                          }
-                        },
+                        if (_useDataSms)
+                          _ComposerAction(
+                            icon: Icons.sim_card_outlined,
+                            tooltip: 'Data SMS recipient number',
+                            onPressed: () => _configureSmsNumber(),
+                          )
+                        else
+                          _ComposerAction(
+                            icon: Icons.add_rounded,
+                            tooltip: 'Attach',
+                            onPressed: () => _pickMedia(context),
+                          ),
+                      ],
+                    ),
+                    if (_useDataSms)
+                      Padding(
+                        padding: const EdgeInsets.only(
+                          bottom: AppSpacing.xs,
+                          left: AppSpacing.xxs,
+                          right: AppSpacing.xs,
+                        ),
+                        child: ValueListenableBuilder<TextEditingValue>(
+                          valueListenable: _textCtrl,
+                          builder: (_, value, _) {
+                            final estimate = cubit.estimateSms(value.text);
+                            final chars = estimate?.characters ?? 0;
+                            final segs = estimate?.segments ?? 0;
+                            final isOver = segs > 10;
+                            return Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  Icons.sim_card_outlined,
+                                  size: 13,
+                                  color: isOver ? cs.error : cs.tertiary,
+                                ),
+                                const SizedBox(width: 4),
+                                Flexible(
+                                  child: Text(
+                                    '$chars chars · $segs/10 SMS',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w600,
+                                      color: isOver ? cs.error : cs.tertiary,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            );
+                          },
+                        ),
                       ),
-                    ),
-                    _ComposerAction(
-                      icon: Icons.add_rounded,
-                      tooltip: 'Attach',
-                      onPressed: _useDataSms ? null : () => _pickMedia(context),
-                    ),
                   ],
                 ),
               ),
@@ -2994,6 +3029,8 @@ class _ThreadScreenState extends State<ThreadScreen>
             _SendButton(
               hasText: _hasText,
               onSend: _isEditing ? _commitEdit : _send,
+              onLongPress: canUseSms ? _showTransportMenu : null,
+              isDataSms: _useDataSms,
               icon: _isEditing ? Icons.check_rounded : Icons.send_rounded,
             ),
           ],
@@ -4878,16 +4915,22 @@ class _SendButton extends StatelessWidget {
   const _SendButton({
     required this.hasText,
     required this.onSend,
+    this.onLongPress,
     this.icon = Icons.send_rounded,
+    this.isDataSms = false,
   });
 
   final ValueListenable<bool> hasText;
   final VoidCallback onSend;
+  final VoidCallback? onLongPress;
   final IconData icon;
+  final bool isDataSms;
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final activeColor = isDataSms ? cs.tertiary : cs.primary;
+    final activeOnColor = isDataSms ? cs.onTertiary : cs.onPrimary;
     return ValueListenableBuilder<bool>(
       valueListenable: hasText,
       builder: (context, enabled, child) {
@@ -4897,21 +4940,26 @@ class _SendButton extends StatelessWidget {
           scale: enabled ? 1 : 0.85,
           child: AnimatedOpacity(
             duration: AppDuration.fast,
-            opacity: enabled ? 1 : 0.45,
+            opacity: enabled ? 1 : 0.65,
             child: Material(
-              color: enabled ? cs.primary : cs.surfaceContainerHighest,
+              color: enabled ? activeColor : cs.surfaceContainerHighest,
               shape: const CircleBorder(),
               elevation: enabled ? 2 : 0,
-              shadowColor: cs.primary.withValues(alpha: 0.4),
+              shadowColor: activeColor.withValues(alpha: 0.4),
               clipBehavior: Clip.antiAlias,
               child: InkWell(
-                onTap: enabled ? onSend : null,
+                onTap: enabled ? onSend : onLongPress,
+                onLongPress: onLongPress,
                 child: Padding(
                   padding: const EdgeInsets.all(AppSpacing.md),
                   child: Icon(
-                    icon,
+                    isDataSms && icon == Icons.send_rounded
+                        ? Icons.sms_rounded
+                        : icon,
                     size: 20,
-                    color: enabled ? cs.onPrimary : cs.onSurfaceVariant,
+                    color: enabled
+                        ? activeOnColor
+                        : (isDataSms ? cs.tertiary : cs.onSurfaceVariant),
                   ),
                 ),
               ),

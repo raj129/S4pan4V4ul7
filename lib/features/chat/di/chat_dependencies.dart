@@ -79,6 +79,7 @@ class ChatDependencies {
     required VaultSession vaultSession,
     SettingsRepository? settingsRepository,
     VaultDatabase? database,
+    VaultDatabase? Function()? databaseProvider,
     UserRepository? userRepository,
     ThreadRepository? threadRepository,
     MessageRepository? messageRepository,
@@ -93,7 +94,9 @@ class ChatDependencies {
   }) : _authRepository = authRepository,
        _vaultSession = vaultSession,
        _settingsRepository = settingsRepository,
-       _database = database {
+       _databaseOverride = database,
+       _databaseProvider = databaseProvider,
+       _providedDraftRepository = draftRepository {
     if (pushTokenRepository != null) {
       this.pushTokenRepository = pushTokenRepository;
     }
@@ -132,12 +135,6 @@ class ChatDependencies {
     if (cryptoService != null) {
       this.cryptoService = cryptoService;
     }
-    this.draftRepository =
-        draftRepository ??
-        switch (database) {
-          final VaultDatabase db => DriftChatDraftRepository(db),
-          _ => const NoopChatDraftRepository(),
-        };
     _vaultSession.addListener(_onVaultSessionChanged);
   }
 
@@ -168,7 +165,12 @@ class ChatDependencies {
   final SettingsRepository? _settingsRepository;
 
   /// Shared local database, or null in the in-memory test configuration.
-  final VaultDatabase? _database;
+  final VaultDatabase? _databaseOverride;
+  final VaultDatabase? Function()? _databaseProvider;
+  final ChatDraftRepository? _providedDraftRepository;
+
+  VaultDatabase? get _database =>
+      _databaseOverride ?? _databaseProvider?.call();
 
   late UserRepository userRepository = FirestoreUserRepository();
   late ThreadRepository threadRepository = FirestoreThreadRepository();
@@ -305,7 +307,12 @@ class ChatDependencies {
       : null;
 
   /// Ciphertext-only composer drafts, stored alongside the local chat cache.
-  late final ChatDraftRepository draftRepository;
+  late final ChatDraftRepository draftRepository =
+      _providedDraftRepository ??
+      switch (_database) {
+        final VaultDatabase db => DriftChatDraftRepository(db),
+        _ => const NoopChatDraftRepository(),
+      };
 
   /// Keyed local search index over the message cache.
   late final ChatSearchIndexRepository searchIndex = switch (_database) {

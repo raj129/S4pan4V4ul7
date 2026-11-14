@@ -5,7 +5,7 @@ import java.util.UUID
 
 internal object DataSmsProtocol {
     const val PORT = 42831
-    const val MAX_SMS_DATA_BYTES = 120
+    const val MAX_SMS_DATA_BYTES = 133
     const val HEADER_BYTES = 21
     const val PAYLOAD_BYTES = MAX_SMS_DATA_BYTES - HEADER_BYTES
     const val MAX_SEGMENTS = 10

@@ -352,6 +352,47 @@ class ChatCryptoService {
     return text;
   }
 
+  /// Encrypts the compact Data SMS body with the existing per-thread E2EE key.
+  ///
+  /// The timestamp and thread ID are authenticated as associated data instead
+  /// of being repeated inside the ciphertext envelope.
+  Future<Uint8List> encryptDataSms({
+    required String threadId,
+    required int sentAtMs,
+    required String plaintext,
+  }) async {
+    final key = await _loadThreadKey(threadId);
+    final nonce = _generateNonce();
+    final box = await _aesGcm.encrypt(
+      utf8.encode(plaintext),
+      secretKey: key,
+      nonce: nonce,
+      aad: _dataSmsAad(threadId, sentAtMs),
+    );
+    return _concat(nonce, box.cipherText, box.mac.bytes);
+  }
+
+  Future<String> decryptDataSms({
+    required String threadId,
+    required int sentAtMs,
+    required Uint8List encryptedBytes,
+  }) async {
+    final key = await _loadThreadKey(threadId);
+    if (encryptedBytes.length < 28) {
+      throw const FormatException('Invalid encrypted Data SMS.');
+    }
+    final box = _splitSecretBox(encryptedBytes);
+    final plaintext = await _aesGcm.decrypt(
+      box,
+      secretKey: key,
+      aad: _dataSmsAad(threadId, sentAtMs),
+    );
+    return utf8.decode(plaintext);
+  }
+
+  List<int> _dataSmsAad(String threadId, int sentAtMs) =>
+      utf8.encode('photo_vault/data_sms/v2/$threadId/$sentAtMs');
+
   void _cachePlaintext(String threadId, String ciphertext, String plaintext) {
     if (_plaintextCache.length >= _plaintextCacheLimit) {
       // Cheap FIFO eviction — order is insertion order for a Dart LinkedHashMap.
