@@ -156,6 +156,7 @@ Future<String?> _redirect(
   AppSessionState session,
   GoRouterState state,
 ) async {
+  await deps.initialize();
   final status = await deps.vaultRepository.getStatus();
   final loc = state.matchedLocation;
   final isReady = status == VaultStatus.ready;
@@ -322,6 +323,7 @@ GoRoute _chatRoute(AppDependencies deps, AppSessionState session) {
             }
             return BlocProvider<ActiveThreadCubit>(
               create: (_) => ActiveThreadCubit(
+                dataSms: deps.chatDependencies.dataSms,
                 messageRepository: deps.chatDependencies.messageRepository,
                 threadRepository: deps.chatDependencies.threadRepository,
                 userRepository: deps.chatDependencies.userRepository,
@@ -413,6 +415,7 @@ GoRoute _chatRoute(AppDependencies deps, AppSessionState session) {
             }
             return BlocProvider<ThreadListCubit>(
               create: (_) => ThreadListCubit(
+                dataSms: deps.chatDependencies.dataSms,
                 threadRepository: deps.chatDependencies.threadRepository,
                 userRepository: deps.chatDependencies.userRepository,
                 messageRepository: deps.chatDependencies.messageRepository,
@@ -433,6 +436,7 @@ GoRoute _chatRoute(AppDependencies deps, AppSessionState session) {
           return withThreadList(
             BlocProvider<ActiveThreadCubit>(
               create: (_) => ActiveThreadCubit(
+                dataSms: deps.chatDependencies.dataSms,
                 messageRepository: deps.chatDependencies.messageRepository,
                 threadRepository: deps.chatDependencies.threadRepository,
                 userRepository: deps.chatDependencies.userRepository,

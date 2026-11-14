@@ -201,7 +201,7 @@ class AppDependencies {
       authRepository: authRepository,
       vaultSession: vaultSession,
       settingsRepository: settingsRepository,
-      database: switch (photoRepository) {
+      databaseProvider: () => switch (photoRepository) {
         final PersistentPhotoRepositoryImpl repository => repository.database,
         _ => null,
       },
@@ -218,6 +218,7 @@ class AppDependencies {
   }();
 
   bool _chatInitialised = false;
+  Future<void>? _initialization;
   ChatDependencies? chatOverride;
 
   /// Touches [chat] and records that it now needs disposing.
@@ -229,7 +230,9 @@ class AppDependencies {
 
   /// Runs one-time async setup (e.g. opening the local database) that can't
   /// happen in the synchronous factory constructor.
-  Future<void> initialize() async {
+  Future<void> initialize() => _initialization ??= _initialize();
+
+  Future<void> _initialize() async {
     if (photoRepository case final PersistentPhotoRepositoryImpl repository) {
       await repository.initialize();
     }
@@ -239,6 +242,7 @@ class AppDependencies {
   Future<void> dispose() async {
     vaultSession.lock();
     if (_chatInitialised) chat.dispose();
+    await _initialization;
     if (photoRepository case final PersistentPhotoRepositoryImpl repository) {
       await repository.close();
     }

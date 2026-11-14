@@ -31,9 +31,15 @@ installation from that source in Android settings. Do not share signing keys.
 
 1. Sign in, unlock chat, and open the same conversation online on **both phones**
    first to establish encryption keys.
-2. In that chat select **Data SMS** and enter the recipient's international phone
-   number (`+` and country code). Numbers are manually entered, stored locally,
-   and **not verified**. Check carefully; a wrong number can incur charges.
+2. Tap the recipient's name at the top of the chat, then **Data SMS number**.
+   Choose a number from contacts or enter it manually, including `+` and country
+   code, then **Save**. If a contact has multiple numbers, select the intended
+   number. Local numbers require you to add the country code; it is never guessed.
+   Contacts permission is requested only when choosing from contacts. Manual entry
+   remains available if access is denied. Reopen this setting to change or remove
+   the number. It is saved only on your device for this chat account, **not
+   verified**, and not published to the recipient's profile. Check carefully; a
+   wrong number can incur charges.
 3. Enable Data SMS and accept the SMS permission prompt on **both phones** before
    going offline, including the phone that will only receive. On dual-SIM phones,
    configure a default SMS SIM in system settings; ambiguous selection is rejected.
@@ -42,6 +48,13 @@ installation from that source in Android settings. Do not share signing keys.
    Wi-Fi and mobile data are off.
 5. Check the bubble's delivery status in the same conversation. **Device
    delivered** confirms carrier reports for every segment, not app receipt or reading.
+
+Saving a number does not enable SMS or send a message. Select **Data SMS** above
+the composer to enable it; this also offers number setup if no number is saved.
+The SIM-card icon in Data SMS mode opens the same editor. The other person's app
+version does not control whether these settings appear on your phone. Data SMS
+requires the Android app with its local chat database; it is not offered on
+unsupported platforms.
 
 ## Debug and release feature parity
 
@@ -112,12 +125,21 @@ must never be distributed**, even though its filename says `release`.
   With no cellular coverage, receipt depends on the carrier's store-and-forward
   service and expiry. Data SMS is not Bluetooth or satellite messaging.
 - The counter shows `characters/SMS segments`, with a maximum of 10 segments.
-  Characters count Unicode grapheme clusters after trimming surrounding whitespace.
-  Encryption adds 28 bytes per message, plus routing/protocol headers. Emoji,
-  non-ASCII text, and JSON escaping can increase the byte count. Binary ciphertext
-  is sent without Base64 expansion; ordinary 160-character text-SMS limits do not
-  apply. The count equals the number of binary SMS submissions, not a carrier
-  billing guarantee. Each segment may be charged.
+  V2 carries a 1-byte version, 6-byte authenticated timestamp and AES-GCM
+  nonce/tag (34 bytes of framing/security overhead, plus the 1-byte version).
+  With the current 112-byte application payload per segment, up to 77 single-byte
+  ASCII characters fit in one segment. Unicode text uses UTF-8 bytes, so it may
+  fit fewer visible characters. Binary ciphertext is sent without Base64
+  expansion; ordinary 160-character text-SMS limits do not apply. The count is
+  the number of binary SMS submissions, not a carrier billing guarantee. Each
+  segment may be charged.
+- Compact V2 messages are routed by the sender's phone number to a saved,
+  linked conversation and encrypted with that conversation's existing E2EE key.
+  Both people must have established that encrypted conversation online first.
+  Unknown or ambiguous phone numbers are not imported or shown as new chats.
+  Legacy V1 messages remain readable. A shared application-wide key is not used:
+  a key shipped with every install could be extracted and would not provide
+  confidentiality from anyone who obtains the app.
 - Bubble colors and a **Data SMS** label identify the transport. **Device
   delivered** means every segment has a successful carrier delivery report,
   not that the app decrypted it or that a person read it. Missing reports remain

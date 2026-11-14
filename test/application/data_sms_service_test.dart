@@ -143,6 +143,26 @@ void main() {
     ),
   );
 
+  Future<NativeSmsIncoming> receivedV2({
+    String id = '12345678-1234-4234-8234-123456789012',
+    String phone = '+919876543210',
+    String text = 'offline hello',
+  }) async {
+    final sentAtMs = DateTime.now().toUtc().millisecondsSinceEpoch;
+    return NativeSmsIncoming(
+      id: id,
+      phone: phone,
+      payload: DataSmsProtocol.packV2(
+        sentAtMs: sentAtMs,
+        encryptedBytes: await crypto.encryptDataSms(
+          threadId: thread.threadId,
+          sentAtMs: sentAtMs,
+          plaintext: text,
+        ),
+      ),
+    );
+  }
+
   test(
     'manual number normalizes but is not published to message storage',
     () async {
@@ -173,24 +193,22 @@ void main() {
       final stored = await cache.loadById(message.messageId);
       expect(stored!.localDecryptedText, isNull);
       expect(cache.rows.values.single.payloadJson, isNot(contains('hello')));
-      final wire = DataSmsProtocol.unpack(native.payload!);
-      final envelope =
-          jsonDecode(
-                await crypto.decryptMessage(
-                  threadId: wire.threadId,
-                  encryptedB64: wire.ciphertext,
-                ),
-              )
-              as Map;
-      expect(envelope['id'], message.messageId);
-      expect(envelope['s'], 'alice');
-      expect(envelope['r'], 'bob');
-      expect(envelope['t'], thread.threadId);
-      expect(envelope['text'], 'hello');
+      final packet = DataSmsProtocol.unpack(native.payload!);
+      expect(packet.version, 2);
+      expect(packet.sentAtMs, message.sentAt.millisecondsSinceEpoch);
+      expect(
+        await crypto.decryptDataSms(
+          threadId: thread.threadId,
+          sentAtMs: packet.sentAtMs!,
+          encryptedBytes: packet.encryptedBytes!,
+        ),
+        'hello',
+      );
       expect(
         message.smsSegments,
         DataSmsProtocol.segmentCount(native.payload!.length),
       );
+      expect(message.smsSegments, 1);
       expect(native.destination, '+919876543210');
       await Future<void>.delayed(Duration.zero);
       expect(native.submissions, 1);
@@ -278,6 +296,67 @@ void main() {
       expect(native.acknowledged, hasLength(2));
     },
   );
+
+  test(
+    'compact V2 routes by sender phone to the linked encrypted thread',
+    () async {
+      final incoming = await receivedV2(text: 'V2 from phone');
+      native.incoming.add(incoming);
+      await service.refresh();
+
+      expect(native.acknowledged, [incoming.id]);
+      final stored = await cache.loadById(incoming.id);
+      expect(stored?.threadId, thread.threadId);
+      expect(stored?.senderId, 'bob');
+      expect(stored?.smsSegments, 1);
+      expect(
+        await crypto.decryptMessage(
+          threadId: thread.threadId,
+          encryptedB64: stored!.encryptedText,
+        ),
+        'V2 from phone',
+      );
+    },
+  );
+
+  test(
+    'compact V2 from an unlinked phone is not routed or acknowledged',
+    () async {
+      native.incoming.add(
+        await receivedV2(phone: '+12025550123', text: 'unlinked'),
+      );
+      await service.refresh();
+      expect(cache.rows, isEmpty);
+      expect(native.acknowledged, isEmpty);
+    },
+  );
+
+  test('ambiguous phone mappings do not guess a destination thread', () async {
+    final otherThread = ChatThread(
+      threadId: 'alice_carol',
+      participantIds: const ['alice', 'carol'],
+      lastMessage: '',
+      lastMessageAt: DateTime.utc(2026),
+      createdAt: DateTime.utc(2026),
+      unreadCounts: const {},
+    );
+    final carol = ChatUser(
+      uid: 'carol',
+      email: 'carol@example.com',
+      displayName: 'Carol',
+      publicKey: '',
+      createdAt: DateTime.utc(2026),
+    );
+    await service.remember(otherThread, carol);
+    await service.setPhone(otherThread.threadId, '+919876543210');
+    final incoming = await receivedV2(text: 'ambiguous phone');
+    native.incoming.add(incoming);
+
+    await service.refresh();
+
+    expect(cache.rows, isEmpty);
+    expect(native.acknowledged, isEmpty);
+  });
 
   test(
     'wrong recipient and tampered ciphertext are never imported or acknowledged',

@@ -22,18 +22,13 @@ void main() {
 
   Future<Uint8List> payload(String text) async {
     final crypto = ChatCryptoService();
-    return DataSmsProtocol.pack(
-      thread,
-      await crypto.encryptMessage(
+    final sentAtMs = DateTime.now().toUtc().millisecondsSinceEpoch;
+    return DataSmsProtocol.packV2(
+      sentAtMs: sentAtMs,
+      encryptedBytes: await crypto.encryptDataSms(
         threadId: thread,
-        plaintext: DataSmsProtocol.body(
-          id: id,
-          threadId: thread,
-          senderId: 'alice',
-          recipientId: 'bob',
-          sentAt: DateTime.now().toUtc().millisecondsSinceEpoch,
-          text: text,
-        ),
+        sentAtMs: sentAtMs,
+        plaintext: text.trim(),
       ),
     );
   }
@@ -45,82 +40,121 @@ void main() {
     recipientId: 'bob',
   );
 
-  test(
-    'counter equals actual binary encrypted payload for Unicode and escapes',
-    () async {
-      for (final text in [
-        'hello',
-        '  hello  ',
-        'नमस्ते',
-        '👨‍👩‍👧‍👦',
-        '"\\\n\t',
-      ]) {
-        final bytes = await payload(text);
-        expect(
-          estimate(text).segments,
-          DataSmsProtocol.segmentCount(bytes.length),
-        );
-        final wire = DataSmsProtocol.unpack(bytes);
-        expect(wire.threadId, thread);
-        final plain = await ChatCryptoService().decryptMessage(
-          threadId: thread,
-          encryptedB64: wire.ciphertext,
-        );
-        final envelope = jsonDecode(plain) as Map;
-        expect(envelope['text'], text.trim());
-        expect(envelope['id'], id);
-        expect(envelope['r'], 'bob');
-        expect(envelope['t'], thread);
-      }
-      expect(estimate('👨‍👩‍👧‍👦').characters, 1);
-      expect(estimate('   ').characters, 0);
-      expect(estimate('   ').segments, 0);
-    },
-  );
-
-  test('AES-GCM overhead is included without Base64 wire expansion', () async {
-    final bytes = await payload('hello');
-    final decoded = DataSmsProtocol.unpack(bytes);
-    final encryptedBytes = base64Decode(decoded.ciphertext);
-    final plain = await ChatCryptoService().decryptMessage(
-      threadId: thread,
-      encryptedB64: decoded.ciphertext,
-    );
-    expect(encryptedBytes.length, utf8.encode(plain).length + 28);
-    expect(
-      bytes.length,
-      2 + utf8.encode(thread).length + encryptedBytes.length,
-    );
-  });
-
-  test(
-    'physical segment boundaries and hard cap match actual serialization',
-    () async {
-      expect(DataSmsProtocol.segmentCount(99), 1);
-      expect(DataSmsProtocol.segmentCount(100), 2);
-      expect(DataSmsProtocol.segmentCount(990), 10);
-      expect(DataSmsProtocol.segmentCount(991), 11);
-      var maxText = '';
-      while (estimate('${maxText}x').segments <= 10) {
-        maxText += 'x';
-      }
-      expect(estimate(maxText).segments, 10);
-      expect((await payload(maxText)).length, 990);
-      expect(estimate('${maxText}x').segments, 11);
-      await expectLater(payload('${maxText}x'), throwsFormatException);
-    },
-  );
-
-  test('malformed binary routing and oversized payloads are rejected', () {
-    for (final bytes in [
-      Uint8List(0),
-      Uint8List(31),
-      Uint8List(991),
-      Uint8List.fromList([255, 255, ...List.filled(29, 0)]),
+  test('V2 counter matches actual encrypted wire bytes', () async {
+    for (final text in [
+      'hello',
+      '  hello  ',
+      'नमस्ते',
+      '👨‍👩‍👧‍👦',
+      '"\\\n\t',
     ]) {
-      expect(() => DataSmsProtocol.unpack(bytes), throwsFormatException);
+      final bytes = await payload(text);
+      expect(
+        estimate(text).segments,
+        DataSmsProtocol.segmentCount(bytes.length),
+      );
+      final packet = DataSmsProtocol.unpack(bytes);
+      expect(packet.version, 2);
+      expect(packet.threadId, isNull);
+      expect(
+        await ChatCryptoService().decryptDataSms(
+          threadId: thread,
+          sentAtMs: packet.sentAtMs!,
+          encryptedBytes: packet.encryptedBytes!,
+        ),
+        text.trim(),
+      );
     }
+    expect(estimate('👨‍👩‍👧‍👦').characters, 1);
+    expect(estimate('   ').characters, 0);
+    expect(estimate('   ').segments, 0);
   });
+
+  test('V2 envelope adds exactly 35 bytes without Base64 expansion', () async {
+    final bytes = await payload('hello');
+    final packet = DataSmsProtocol.unpack(bytes);
+    expect(packet.encryptedBytes!.length, utf8.encode('hello').length + 28);
+    expect(bytes.length, utf8.encode('hello').length + 35);
+  });
+
+  test('malformed compact timestamps and short ciphertext are rejected', () {
+    expect(
+      () => DataSmsProtocol.packV2(
+        sentAtMs: 1 << 48,
+        encryptedBytes: Uint8List(28),
+      ),
+      throwsFormatException,
+    );
+    expect(
+      () => DataSmsProtocol.packV2(sentAtMs: 1, encryptedBytes: Uint8List(27)),
+      throwsFormatException,
+    );
+    expect(
+      () => DataSmsProtocol.unpack(
+        Uint8List.fromList([2, ...List.filled(33, 0)]),
+      ),
+      throwsFormatException,
+    );
+  });
+
+  test('timestamp is authenticated and cannot be changed in transit', () async {
+    final bytes = await payload('authenticated');
+    final packet = DataSmsProtocol.unpack(bytes);
+    expect(
+      () => ChatCryptoService().decryptDataSms(
+        threadId: thread,
+        sentAtMs: packet.sentAtMs! + 1,
+        encryptedBytes: packet.encryptedBytes!,
+      ),
+      throwsA(isA<Exception>()),
+    );
+  });
+
+  test('one SMS carries up to 77 ASCII characters at 112 app bytes', () async {
+    expect(DataSmsProtocol.segmentCount(112), 1);
+    expect(DataSmsProtocol.segmentCount(113), 2);
+    expect(estimate('x' * 77).segments, 1);
+    expect(estimate('x' * 78).segments, 2);
+    expect((await payload('x' * 77)).length, 112);
+    expect(DataSmsProtocol.segmentCount(1120), 10);
+    expect(DataSmsProtocol.segmentCount(1121), 11);
+    expect(estimate('x' * 1085).segments, 10);
+    expect(estimate('x' * 1086).segments, 11);
+    await expectLater(payload('x' * 1086), throwsFormatException);
+  });
+
+  test(
+    'legacy V1 packet round-trips and malformed packets are rejected',
+    () async {
+      final crypto = ChatCryptoService();
+      final legacyCiphertext = await crypto.encryptMessage(
+        threadId: thread,
+        plaintext: DataSmsProtocol.body(
+          id: id,
+          threadId: thread,
+          senderId: 'alice',
+          recipientId: 'bob',
+          sentAt: DateTime.now().toUtc().millisecondsSinceEpoch,
+          text: 'old message',
+        ),
+      );
+      final legacy = DataSmsProtocol.pack(thread, legacyCiphertext);
+      final decoded = DataSmsProtocol.unpack(legacy);
+      expect(decoded.version, 1);
+      expect(decoded.threadId, thread);
+      expect(decoded.ciphertext, legacyCiphertext);
+
+      for (final bytes in [
+        Uint8List(0),
+        Uint8List(31),
+        Uint8List(1121),
+        Uint8List.fromList([255, 255, ...List.filled(29, 0)]),
+        Uint8List.fromList([2, 0]),
+      ]) {
+        expect(() => DataSmsProtocol.unpack(bytes), throwsFormatException);
+      }
+    },
+  );
 
   test('mixed transport cache and backup codec retain SMS state', () {
     final internet = ChatMessage(
@@ -143,13 +177,13 @@ void main() {
       sentAt: DateTime.utc(2026),
       deletedFor: const [],
       transport: MessageTransport.dataSms,
-      smsSegments: 3,
+      smsSegments: 1,
       smsDeliveryState: 'unconfirmed',
       smsError: 'Report unavailable',
     );
     final restored = CachedMessageCodec.decode(CachedMessageCodec.encode(sms))!;
     expect(restored, sms);
-    expect(restored.copyWith(localDecryptedText: 'hello').smsSegments, 3);
+    expect(restored.copyWith(localDecryptedText: 'hello').smsSegments, 1);
     expect(restored.copyWith(localDecryptedText: 'hello').isDataSms, isTrue);
   });
 }
