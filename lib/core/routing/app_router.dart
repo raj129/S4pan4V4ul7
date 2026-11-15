@@ -19,6 +19,7 @@ import '../../features/chat/presentation/screens/new_chat_screen.dart';
 import '../../features/chat/presentation/screens/my_locations_route.dart';
 import '../../features/chat/presentation/screens/profile_screen.dart';
 import '../../features/chat/presentation/screens/thread_screen.dart';
+import '../../features/chat/presentation/screens/ring_alert_settings_screen.dart';
 import '../../features/chat/domain/entities/chat_user.dart';
 import '../../features/vault/presentation/screens/files/files_screen.dart';
 import '../../features/vault/presentation/screens/gallery/gallery_home_screen.dart';
@@ -544,6 +545,23 @@ GoRoute _settingsRoute(
             }
           },
         ),
+      ),
+      GoRoute(
+        path: 'ring-alerts',
+        builder: (context, state) {
+          final uid = deps.chatDependencies.authService.currentUid;
+          if (uid == null) {
+            return const Scaffold(
+              body: Center(
+                child: Text('Sign in to chat to configure ring requests.'),
+              ),
+            );
+          }
+          return RingAlertSettingsScreen(
+            repository: deps.chatDependencies.ringAlertPreferencesRepository,
+            uid: uid,
+          );
+        },
       ),
       GoRoute(
         path: 'change-pin',

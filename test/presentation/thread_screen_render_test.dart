@@ -162,6 +162,7 @@ class _Messages implements MessageRepository {
     MediaMeta? mediaMeta,
     MessageReply? replyTo,
     bool isForwarded = false,
+    ChatEventType? eventType,
   }) => Completer<ChatMessage>().future;
 
   @override
@@ -722,6 +723,7 @@ void main() {
     await tester.tap(find.byTooltip('Lock vault'));
     expect(locked, isTrue);
     expect(drafts.values['t'], 'cipher:typed after picker');
+    expect(find.byTooltip('Request ring'), findsNothing);
 
     await tester.tap(find.byType(PopupMenuButton<String>));
     await tester.pump();
@@ -729,6 +731,15 @@ void main() {
     expect(find.text('Jump to date'), findsOneWidget);
     expect(find.text('Clear messages'), findsOneWidget);
     expect(find.text('Delete thread'), findsOneWidget);
+    expect(find.text('Request ring'), findsOneWidget);
+    final requestRingItem = find.ancestor(
+      of: find.text('Request ring'),
+      matching: find.byType(PopupMenuItem<String>),
+    );
+    expect(
+      find.descendant(of: requestRingItem, matching: find.byType(Icon)),
+      findsNothing,
+    );
     expect(find.text('Manage media'), findsNothing);
 
     await tester.pumpWidget(const SizedBox.shrink());

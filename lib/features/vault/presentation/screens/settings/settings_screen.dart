@@ -566,6 +566,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 trailing: const Icon(Icons.chevron_right_rounded),
                 onTap: () => unawaited(context.push('/settings/notifications')),
               ),
+              ListTile(
+                key: const Key('ring-alert-settings-navigation-tile'),
+                leading: const Icon(Icons.ring_volume_outlined),
+                title: const Text('Chat ring requests'),
+                subtitle: const Text(
+                  'Choose whether ring requests vibrate, ring, or stay silent.',
+                ),
+                trailing: const Icon(Icons.chevron_right_rounded),
+                onTap: () => unawaited(context.push('/settings/ring-alerts')),
+              ),
             ],
           ),
           const SectionHeader('Backup & sync'),

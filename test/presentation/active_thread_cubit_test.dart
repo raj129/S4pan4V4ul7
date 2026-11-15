@@ -209,6 +209,7 @@ class _FakeMessageRepository implements MessageRepository {
     MediaMeta? mediaMeta,
     MessageReply? replyTo,
     bool isForwarded = false,
+    ChatEventType? eventType,
   }) async {
     final failure = failNextSend;
     if (failure != null) {
@@ -228,6 +229,7 @@ class _FakeMessageRepository implements MessageRepository {
       sharedNoteId: sharedNoteId,
       mediaMeta: mediaMeta,
       replyTo: replyTo,
+      eventType: eventType,
       isForwarded: isForwarded,
       status: MessageStatus.sent,
     );
@@ -529,6 +531,27 @@ void main() {
         isNull,
       );
     });
+  });
+
+  group('ring requests', () {
+    test(
+      'sends a timestamped ring event without message unread count',
+      () async {
+        await open();
+        messages.emitLive(const []);
+        await Future<void>.delayed(Duration.zero);
+
+        final sent = await cubit.requestRing();
+
+        expect(sent, isTrue);
+        expect(messages.sent, hasLength(1));
+        expect(messages.sent.single.eventType, ChatEventType.ringRequest);
+        expect(messages.sent.single.encryptedText, 'Asked you to ring.');
+        expect(threads.previews, ['Ring request']);
+        expect(threads.unreadBumps, isEmpty);
+        expect((cubit.state as ActiveThreadLoaded).scrollRequest, isNotNull);
+      },
+    );
   });
 
   group('offline', () {

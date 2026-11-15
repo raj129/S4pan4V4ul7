@@ -1222,6 +1222,8 @@ class _ThreadScreenState extends State<ThreadScreen>
               _confirmClearMessages(context);
             } else if (value == 'delete') {
               _confirmDeleteThread(context);
+            } else if (value == 'ring') {
+              unawaited(_requestRing());
             }
           },
           itemBuilder: (context) => [
@@ -1232,6 +1234,7 @@ class _ThreadScreenState extends State<ThreadScreen>
             const PopupMenuItem(value: 'date', child: Text('Jump to date')),
             const PopupMenuItem(value: 'clear', child: Text('Clear messages')),
             const PopupMenuItem(value: 'delete', child: Text('Delete thread')),
+            const PopupMenuItem(value: 'ring', child: Text('Request ring')),
           ],
         ),
         IconButton(
@@ -1330,6 +1333,14 @@ class _ThreadScreenState extends State<ThreadScreen>
         },
       ),
     );
+  }
+
+  Future<void> _requestRing() async {
+    final sent = await context.read<ActiveThreadCubit>().requestRing();
+    if (!mounted || !sent) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(const SnackBar(content: Text('Ring request sent.')));
   }
 
   void _stopSearch() {

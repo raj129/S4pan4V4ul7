@@ -75,5 +75,27 @@ void main() {
       );
       expect(ChatMessage.fromFirestore(data).status, isNull);
     });
+
+    test('ring-request events retain their type and delivery receipt', () {
+      final original = ChatMessage(
+        messageId: 'ring-1',
+        threadId: 'sender_recipient',
+        senderId: 'sender',
+        encryptedText: 'ciphertext',
+        sentAt: DateTime.utc(2026, 1, 1),
+        deletedFor: const [],
+        eventType: ChatEventType.ringRequest,
+        deliveredTo: const ['recipient'],
+      );
+
+      final restored = ChatMessage.fromFirestore(original.toFirestore());
+
+      expect(restored.eventType, ChatEventType.ringRequest);
+      expect(restored.deliveredTo, ['recipient']);
+      expect(
+        restored.copyWith(deliveredTo: const []).eventType,
+        ChatEventType.ringRequest,
+      );
+    });
   });
 }
