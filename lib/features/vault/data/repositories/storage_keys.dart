@@ -22,6 +22,8 @@ class StorageKeys {
   static const String showLastSeen = 'settings.show_last_seen';
   static const String screenshotProtectionEnabled =
       'settings.screenshot_protection_enabled';
+  static const String hdrPhotoPreviewEnabled =
+      'settings.hdr_photo_preview_enabled';
   static const String photoSyncEnabled = 'settings.photo_sync_enabled';
   static const String vmkBackupEnabled = 'settings.vmk_backup_enabled';
   static const String externalStorageMirrorEnabled =

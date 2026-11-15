@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../features/vault/domain/repositories/settings_repository.dart';
+
 enum MediaAnimationMode { loop, once }
 
 class MediaAnimationPreference {
@@ -60,31 +62,53 @@ class HdrPreviewPreference {
   HdrPreviewPreference._();
 
   static final instance = HdrPreviewPreference._();
-  static const _preferenceKey = 'settings.hdr_preview_enabled';
 
   final enabled = ValueNotifier<bool>(true);
+  SettingsRepository? _settingsRepository;
   Future<void>? _load;
   bool _hasExplicitPreference = false;
+
+  void configure(SettingsRepository settingsRepository) {
+    if (identical(_settingsRepository, settingsRepository)) return;
+    _settingsRepository = settingsRepository;
+    _load = null;
+    _hasExplicitPreference = false;
+  }
 
   Future<void> load() => _load ??= _loadSavedPreference();
 
   Future<void> _loadSavedPreference() async {
     if (_hasExplicitPreference) return;
-    // HDR always starts on; an earlier saved 'off' is ignored at startup.
-    enabled.value = true;
+    final settingsRepository = _settingsRepository;
+    if (settingsRepository == null) {
+      throw StateError('HDR preview settings repository is not configured.');
+    }
+    final savedValue = await settingsRepository.isHdrPhotoPreviewEnabled();
+    if (!_hasExplicitPreference) enabled.value = savedValue;
   }
 
   Future<void> setEnabled(bool value) async {
+    final settingsRepository = _settingsRepository;
+    if (settingsRepository == null) {
+      throw StateError('HDR preview settings repository is not configured.');
+    }
     final previous = enabled.value;
     _hasExplicitPreference = true;
     enabled.value = value;
     try {
-      final preferences = await SharedPreferences.getInstance();
-      await preferences.setBool(_preferenceKey, value);
+      await settingsRepository.setHdrPhotoPreviewEnabled(value);
     } catch (_) {
       enabled.value = previous;
       rethrow;
     }
+  }
+
+  @visibleForTesting
+  void resetForTesting() {
+    _settingsRepository = null;
+    _load = null;
+    _hasExplicitPreference = false;
+    enabled.value = true;
   }
 
   Future<void> toggle() async {

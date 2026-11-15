@@ -12,9 +12,12 @@ import './external_activity_guard.dart';
 import './android_chat_viewer_guard.dart';
 import '../di/app_dependencies.dart';
 import '../location/presentation/mock_location_banner.dart';
+import '../media/animated_media.dart';
+import '../platform/hdr_preview_capability.dart';
 import '../platform/screenshot_protection.dart';
 import '../routing/app_router.dart';
 import '../widgets/app_navigation_drawer.dart';
+import '../widgets/main_scaffold_scope.dart';
 import '../../features/vault/presentation/state/onboarding_cubit.dart';
 import '../../features/vault/domain/repositories/settings_repository.dart';
 import '../presentation/theme/app_colors.dart';
@@ -77,6 +80,8 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
     );
     _router.routeInformationProvider.addListener(_updateChatVisibility);
     _updateChatVisibility();
+    HdrPreviewPreference.instance.configure(_deps.settingsRepository);
+    unawaited(HdrPreviewCapability.instance.load());
     _initShareIntentHandling();
     // Database/storage setup failing must not be silent: report it (to
     // Crashlytics in release via FlutterError.onError) instead of leaving the
@@ -292,16 +297,19 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
       themeMode: _themeMode,
       routerConfig: _router,
       scaffoldMessengerKey: _scaffoldMessengerKey,
-      builder: (context, child) => AppDrawerScope(
-        hasMyLocations: () =>
-            Platform.isAndroid &&
-            _deps.chatDependencies.authService.currentUid != null,
-        child: MockLocationBanner(
-          controller: _deps.location.mock,
-          visibilityListenable: _session,
-          isVisible: () => _session.isUnlocked,
-          onOpen: () => _router.push('/settings/developer'),
-          child: child ?? const SizedBox.shrink(),
+      builder: (context, child) => VaultLockScope(
+        onLock: _lockSession,
+        child: AppDrawerScope(
+          hasMyLocations: () =>
+              Platform.isAndroid &&
+              _deps.chatDependencies.authService.currentUid != null,
+          child: MockLocationBanner(
+            controller: _deps.location.mock,
+            visibilityListenable: _session,
+            isVisible: () => _session.isUnlocked,
+            onOpen: () => _router.push('/settings/developer'),
+            child: child ?? const SizedBox.shrink(),
+          ),
         ),
       ),
     );

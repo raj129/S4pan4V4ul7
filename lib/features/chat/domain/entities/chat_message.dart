@@ -21,6 +21,10 @@ enum MessageType {
 
 enum DeleteScope { forMe, forEveryone }
 
+enum MessageTransport { internet, dataSms }
+
+enum ChatEventType { ringRequest }
+
 class ChatMessage extends Equatable {
   const ChatMessage({
     required this.messageId,
@@ -44,6 +48,11 @@ class ChatMessage extends Equatable {
     this.editedAt,
     this.isForwarded = false,
     this.status,
+    this.transport = MessageTransport.internet,
+    this.smsSegments,
+    this.smsDeliveryState,
+    this.smsError,
+    this.eventType,
   });
 
   final String messageId;
@@ -98,6 +107,13 @@ class ChatMessage extends Equatable {
 
   /// Local delivery-state override for optimistic bubbles; not serialized.
   final MessageStatus? status;
+  final MessageTransport transport;
+  final int? smsSegments;
+  final String? smsDeliveryState;
+  final String? smsError;
+  final ChatEventType? eventType;
+
+  bool get isDataSms => transport == MessageTransport.dataSms;
 
   final DateTime sentAt;
 
@@ -203,6 +219,10 @@ class ChatMessage extends Equatable {
     String? liveLocationSessionId,
     String? sharedNoteId,
     MediaMeta? mediaMeta,
+    String? smsDeliveryState,
+    String? smsError,
+    bool clearSmsError = false,
+    ChatEventType? eventType,
   }) {
     return ChatMessage(
       messageId: messageId,
@@ -227,6 +247,11 @@ class ChatMessage extends Equatable {
       editedAt: editedAt ?? this.editedAt,
       isForwarded: isForwarded ?? this.isForwarded,
       status: status ?? this.status,
+      transport: transport,
+      smsSegments: smsSegments,
+      smsDeliveryState: smsDeliveryState ?? this.smsDeliveryState,
+      smsError: clearSmsError ? null : smsError ?? this.smsError,
+      eventType: eventType ?? this.eventType,
     );
   }
 
@@ -244,6 +269,10 @@ class ChatMessage extends Equatable {
     'reactions': reactions,
     'readBy': readBy,
     'deliveredTo': deliveredTo,
+    if (isDataSms) 'transport': transport.name,
+    if (smsSegments != null) 'smsSegments': smsSegments,
+    if (smsDeliveryState != null) 'smsDeliveryState': smsDeliveryState,
+    if (smsError != null) 'smsError': smsError,
     if (mediaRef != null) 'mediaRef': mediaRef,
     if (mediaType != null) 'mediaType': mediaType!.name,
     if (liveLocationSessionId != null)
@@ -254,6 +283,7 @@ class ChatMessage extends Equatable {
     if (replyTo != null) 'replyTo': replyTo!.toFirestore(),
     if (editedAt != null) 'editedAt': editedAt!.toUtc().millisecondsSinceEpoch,
     if (isForwarded) 'isForwarded': true,
+    if (eventType != null) 'eventType': eventType!.name,
   };
 
   factory ChatMessage.fromFirestore(
@@ -290,6 +320,13 @@ class ChatMessage extends Equatable {
     editedAt: _timestamp(data['editedAt']),
     isForwarded: data['isForwarded'] as bool? ?? false,
     status: hasPendingWrites ? MessageStatus.sending : null,
+    transport: data['transport'] == 'dataSms'
+        ? MessageTransport.dataSms
+        : MessageTransport.internet,
+    smsSegments: (data['smsSegments'] as num?)?.toInt(),
+    smsDeliveryState: data['smsDeliveryState'] as String?,
+    smsError: data['smsError'] as String?,
+    eventType: _parseEventType(data['eventType'] as String?),
   );
 
   /// Reads a millisecond epoch written by [toFirestore].
@@ -304,6 +341,14 @@ class ChatMessage extends Equatable {
   static MessageType? _parseMediaType(String? name) {
     if (name == null) return null;
     for (final type in MessageType.values) {
+      if (type.name == name) return type;
+    }
+    return null;
+  }
+
+  static ChatEventType? _parseEventType(String? name) {
+    if (name == null) return null;
+    for (final type in ChatEventType.values) {
       if (type.name == name) return type;
     }
     return null;
@@ -330,5 +375,10 @@ class ChatMessage extends Equatable {
     deliveredTo,
     editedAt,
     status,
+    transport,
+    smsSegments,
+    smsDeliveryState,
+    smsError,
+    eventType,
   ];
 }

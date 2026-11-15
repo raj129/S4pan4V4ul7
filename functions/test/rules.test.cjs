@@ -152,6 +152,36 @@ test('Firestore denies writing another participant’s live location', async () 
   );
 });
 
+test('Firestore keeps ring-request preferences private to their owner', async () => {
+  const aliceDb = testEnvironment.authenticatedContext('alice').firestore();
+  const bobDb = testEnvironment.authenticatedContext('bob').firestore();
+  const alicePreferences = doc(
+    aliceDb,
+    'users/alice/private/ringAlertPreferences',
+  );
+  const bobPreferences = doc(
+    bobDb,
+    'users/alice/private/ringAlertPreferences',
+  );
+
+  await assertSucceeds(
+    setDoc(alicePreferences, {
+      enabled: false,
+      mode: 'vibrate',
+      timeoutSeconds: 60,
+    }),
+  );
+  await assertSucceeds(getDoc(alicePreferences));
+  await assertFails(getDoc(bobPreferences));
+  await assertFails(
+    setDoc(bobPreferences, {
+      enabled: true,
+      mode: 'ringtone',
+      timeoutSeconds: 30,
+    }),
+  );
+});
+
 test('Firestore denies client access to Google Drive refresh tokens', async () => {
   const ownerDb = testEnvironment.authenticatedContext('alice').firestore();
   const tokenDocument = doc(ownerDb, 'googleDriveAuthTokens/alice');

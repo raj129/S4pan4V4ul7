@@ -209,6 +209,7 @@ class _FakeMessageRepository implements MessageRepository {
     MediaMeta? mediaMeta,
     MessageReply? replyTo,
     bool isForwarded = false,
+    ChatEventType? eventType,
   }) async {
     final failure = failNextSend;
     if (failure != null) {
@@ -228,6 +229,7 @@ class _FakeMessageRepository implements MessageRepository {
       sharedNoteId: sharedNoteId,
       mediaMeta: mediaMeta,
       replyTo: replyTo,
+      eventType: eventType,
       isForwarded: isForwarded,
       status: MessageStatus.sent,
     );
@@ -434,6 +436,76 @@ void main() {
     await cubit.openThread(thread: _thread, otherUser: _other);
   }
 
+  group('mixed data SMS history', () {
+    ChatMessage sms(String id, int day) => ChatMessage(
+      messageId: id,
+      threadId: 'me_other',
+      senderId: 'other',
+      encryptedText: 'sms-$id',
+      sentAt: DateTime.utc(2024, 1, day),
+      deletedFor: const [],
+      transport: MessageTransport.dataSms,
+      smsSegments: 3,
+      smsDeliveryState: 'received',
+    );
+
+    test(
+      'internet snapshots preserve SMS in the same chronological history',
+      () async {
+        await cubit.close();
+        final cache = MemoryMessageCache();
+        await cache.save([sms('s1', 1), _msg('i2', 2), sms('s3', 3)]);
+        cubit = build(messageCache: cache);
+        await open();
+        messages.emitLive([_msg('i4', 4), _msg('i2', 2)]);
+        await Future<void>.delayed(const Duration(milliseconds: 30));
+        final state = cubit.state as ActiveThreadLoaded;
+        expect(state.messages.map((m) => m.messageId), [
+          'i4',
+          's3',
+          'i2',
+          's1',
+        ]);
+        expect(state.messages.every((m) => m.threadId == 'me_other'), isTrue);
+        expect(state.messages.where((m) => m.isDataSms), hasLength(2));
+        expect(
+          messages.deliveredReceipts.values.expand((ids) => ids),
+          isNot(contains('s3')),
+        );
+      },
+    );
+
+    test('empty server history still pages older local SMS', () async {
+      await cubit.close();
+      final cache = MemoryMessageCache();
+      await cache.save([for (var i = 1; i <= 36; i++) sms('s$i', i)]);
+      cubit = build(messageCache: cache);
+      await open();
+      expect((cubit.state as ActiveThreadLoaded).messages, hasLength(30));
+      await cubit.loadOlderMessages();
+      expect((cubit.state as ActiveThreadLoaded).messages, hasLength(36));
+    });
+
+    test(
+      'local SMS delete and unsupported actions never call internet APIs',
+      () async {
+        await cubit.close();
+        final cache = MemoryMessageCache();
+        final message = sms('s1', 1);
+        await cache.save([message]);
+        cubit = build(messageCache: cache);
+        await open();
+        expect(cubit.canEditMessage(message), isFalse);
+        await cubit.toggleReaction(message, 'like');
+        await cubit.deleteMessageForEveryone(message);
+        await cubit.deleteMessageForMe(message);
+        expect((await cache.loadById('s1'))!.isDeletedFor('me'), isTrue);
+        expect((cubit.state as ActiveThreadLoaded).visibleMessages, isEmpty);
+        expect(messages.sent, isEmpty);
+      },
+    );
+  });
+
   group('shared notes', () {
     test('sends a note marker and updates the thread preview', () async {
       await open();
@@ -459,6 +531,27 @@ void main() {
         isNull,
       );
     });
+  });
+
+  group('ring requests', () {
+    test(
+      'sends a timestamped ring event without message unread count',
+      () async {
+        await open();
+        messages.emitLive(const []);
+        await Future<void>.delayed(Duration.zero);
+
+        final sent = await cubit.requestRing();
+
+        expect(sent, isTrue);
+        expect(messages.sent, hasLength(1));
+        expect(messages.sent.single.eventType, ChatEventType.ringRequest);
+        expect(messages.sent.single.encryptedText, 'Asked you to ring.');
+        expect(threads.previews, ['Ring request']);
+        expect(threads.unreadBumps, isEmpty);
+        expect((cubit.state as ActiveThreadLoaded).scrollRequest, isNotNull);
+      },
+    );
   });
 
   group('offline', () {
@@ -953,8 +1046,23 @@ void main() {
         messages.failNextSend = StateError('offline');
         outbox.markFailedError = StateError('database is locked');
 
-        await expectLater(cubit.sendText('hello'), completes);
+        final previousDebugPrint = debugPrint;
+        final debugMessages = <String>[];
+        debugPrint = (message, {wrapWidth}) {
+          if (message != null) debugMessages.add(message);
+        };
+        try {
+          await expectLater(cubit.sendText('hello'), completes);
+        } finally {
+          debugPrint = previousDebugPrint;
+        }
 
+        final debugOutput = debugMessages.join('\n');
+        expect(
+          debugOutput,
+          contains('Could not persist failed outbox attempt'),
+        );
+        expect(debugOutput, contains('database is locked'));
         expect(outbox.items, hasLength(1));
         expect(
           (cubit.state as ActiveThreadLoaded).actionError,

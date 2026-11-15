@@ -8083,7 +8083,16 @@ class $$PhotosTableTableManager
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0
-              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .map(
+                (e) => (
+                  e.readTable<$PhotosTable, VaultPhoto>(table),
+                  BaseReferences<_$VaultDatabase, $PhotosTable, VaultPhoto>(
+                    db,
+                    table,
+                    e,
+                  ),
+                ),
+              )
               .toList(),
           prefetchHooksCallback: null,
         ),
@@ -8265,7 +8274,16 @@ class $$AlbumsTableTableManager
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0
-              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .map(
+                (e) => (
+                  e.readTable<$AlbumsTable, VaultAlbum>(table),
+                  BaseReferences<_$VaultDatabase, $AlbumsTable, VaultAlbum>(
+                    db,
+                    table,
+                    e,
+                  ),
+                ),
+              )
               .toList(),
           prefetchHooksCallback: null,
         ),
@@ -8422,7 +8440,16 @@ class $$TagsTableTableManager
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0
-              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .map(
+                (e) => (
+                  e.readTable<$TagsTable, VaultTag>(table),
+                  BaseReferences<_$VaultDatabase, $TagsTable, VaultTag>(
+                    db,
+                    table,
+                    e,
+                  ),
+                ),
+              )
               .toList(),
           prefetchHooksCallback: null,
         ),
@@ -8562,7 +8589,16 @@ class $$PhotoTagsTableTableManager
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0
-              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .map(
+                (e) => (
+                  e.readTable<$PhotoTagsTable, PhotoTagLink>(table),
+                  BaseReferences<
+                    _$VaultDatabase,
+                    $PhotoTagsTable,
+                    PhotoTagLink
+                  >(db, table, e),
+                ),
+              )
               .toList(),
           prefetchHooksCallback: null,
         ),
@@ -8768,7 +8804,16 @@ class $$VaultTableTableManager
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0
-              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .map(
+                (e) => (
+                  e.readTable<$VaultTable, VaultMetadata>(table),
+                  BaseReferences<_$VaultDatabase, $VaultTable, VaultMetadata>(
+                    db,
+                    table,
+                    e,
+                  ),
+                ),
+              )
               .toList(),
           prefetchHooksCallback: null,
         ),
@@ -9031,7 +9076,16 @@ class $$ThumbnailsTableTableManager
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0
-              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .map(
+                (e) => (
+                  e.readTable<$ThumbnailsTable, VaultThumbnail>(table),
+                  BaseReferences<
+                    _$VaultDatabase,
+                    $ThumbnailsTable,
+                    VaultThumbnail
+                  >(db, table, e),
+                ),
+              )
               .toList(),
           prefetchHooksCallback: null,
         ),
@@ -9279,7 +9333,16 @@ class $$SyncStateTableTableManager
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0
-              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .map(
+                (e) => (
+                  e.readTable<$SyncStateTable, SyncStateEntry>(table),
+                  BaseReferences<
+                    _$VaultDatabase,
+                    $SyncStateTable,
+                    SyncStateEntry
+                  >(db, table, e),
+                ),
+              )
               .toList(),
           prefetchHooksCallback: null,
         ),
@@ -9447,7 +9510,16 @@ class $$BackupStateTableTableManager
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0
-              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .map(
+                (e) => (
+                  e.readTable<$BackupStateTable, BackupStateEntry>(table),
+                  BaseReferences<
+                    _$VaultDatabase,
+                    $BackupStateTable,
+                    BackupStateEntry
+                  >(db, table, e),
+                ),
+              )
               .toList(),
           prefetchHooksCallback: null,
         ),
@@ -9652,7 +9724,18 @@ class $$EncryptionVersionsTableTableManager
                 active: active,
               ),
           withReferenceMapper: (p0) => p0
-              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .map(
+                (e) => (
+                  e.readTable<$EncryptionVersionsTable, EncryptionVersionEntry>(
+                    table,
+                  ),
+                  BaseReferences<
+                    _$VaultDatabase,
+                    $EncryptionVersionsTable,
+                    EncryptionVersionEntry
+                  >(db, table, e),
+                ),
+              )
               .toList(),
           prefetchHooksCallback: null,
         ),
@@ -9923,7 +10006,16 @@ class $$ImportJobsTableTableManager
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0
-              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .map(
+                (e) => (
+                  e.readTable<$ImportJobsTable, ImportJobEntry>(table),
+                  BaseReferences<
+                    _$VaultDatabase,
+                    $ImportJobsTable,
+                    ImportJobEntry
+                  >(db, table, e),
+                ),
+              )
               .toList(),
           prefetchHooksCallback: null,
         ),
@@ -10154,7 +10246,16 @@ class $$ShareExportsTableTableManager
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0
-              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .map(
+                (e) => (
+                  e.readTable<$ShareExportsTable, ShareExportEntry>(table),
+                  BaseReferences<
+                    _$VaultDatabase,
+                    $ShareExportsTable,
+                    ShareExportEntry
+                  >(db, table, e),
+                ),
+              )
               .toList(),
           prefetchHooksCallback: null,
         ),
@@ -10339,7 +10440,16 @@ class $$TrashItemsTableTableManager
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0
-              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .map(
+                (e) => (
+                  e.readTable<$TrashItemsTable, TrashItem>(table),
+                  BaseReferences<_$VaultDatabase, $TrashItemsTable, TrashItem>(
+                    db,
+                    table,
+                    e,
+                  ),
+                ),
+              )
               .toList(),
           prefetchHooksCallback: null,
         ),
@@ -10500,7 +10610,16 @@ class $$AppSettingsTableTableManager
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0
-              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .map(
+                (e) => (
+                  e.readTable<$AppSettingsTable, AppSettingEntry>(table),
+                  BaseReferences<
+                    _$VaultDatabase,
+                    $AppSettingsTable,
+                    AppSettingEntry
+                  >(db, table, e),
+                ),
+              )
               .toList(),
           prefetchHooksCallback: null,
         ),
@@ -10710,7 +10829,16 @@ class $$SecurityEventsTableTableManager
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0
-              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .map(
+                (e) => (
+                  e.readTable<$SecurityEventsTable, SecurityEvent>(table),
+                  BaseReferences<
+                    _$VaultDatabase,
+                    $SecurityEventsTable,
+                    SecurityEvent
+                  >(db, table, e),
+                ),
+              )
               .toList(),
           prefetchHooksCallback: null,
         ),
@@ -10937,7 +11065,16 @@ class $$ChatMessagesTableTableManager
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0
-              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .map(
+                (e) => (
+                  e.readTable<$ChatMessagesTable, CachedChatMessage>(table),
+                  BaseReferences<
+                    _$VaultDatabase,
+                    $ChatMessagesTable,
+                    CachedChatMessage
+                  >(db, table, e),
+                ),
+              )
               .toList(),
           prefetchHooksCallback: null,
         ),
@@ -11299,7 +11436,16 @@ class $$OutboxMessagesTableTableManager
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0
-              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .map(
+                (e) => (
+                  e.readTable<$OutboxMessagesTable, OutboxEntry>(table),
+                  BaseReferences<
+                    _$VaultDatabase,
+                    $OutboxMessagesTable,
+                    OutboxEntry
+                  >(db, table, e),
+                ),
+              )
               .toList(),
           prefetchHooksCallback: null,
         ),
@@ -11465,7 +11611,16 @@ class $$ChatDraftsTableTableManager
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0
-              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .map(
+                (e) => (
+                  e.readTable<$ChatDraftsTable, ChatDraftEntry>(table),
+                  BaseReferences<
+                    _$VaultDatabase,
+                    $ChatDraftsTable,
+                    ChatDraftEntry
+                  >(db, table, e),
+                ),
+              )
               .toList(),
           prefetchHooksCallback: null,
         ),

@@ -20,6 +20,7 @@ import 'package:photo_vault/core/presentation/theme/app_typography.dart';
 import 'package:photo_vault/core/presentation/theme/chat_theme.dart';
 import 'animated_emoji.dart';
 import 'chat_bubble_shape.dart';
+import 'data_sms_meta.dart';
 import 'chat_media_preview.dart';
 import 'chat_media_sizes.dart';
 import 'chat_audio_player.dart';
@@ -27,18 +28,12 @@ import 'attachment_download_progress.dart';
 import 'live_location_bubble.dart';
 import 'geo_share_bubble.dart';
 import 'shared_note_bubble.dart';
+import 'reply_swipe.dart';
 import '../../domain/repositories/notes_repository.dart';
 import '../../application/media/media_send_status.dart';
 
 /// Emoji offered in the quick reaction bar, matching WhatsApp's default set.
 const kQuickReactions = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
-
-/// Soft tick the moment a reply swipe crosses the threshold, once per swipe.
-void _replySwipeHaptic(DismissUpdateDetails details) {
-  if (details.reached && !details.previousReached) {
-    HapticFeedback.lightImpact();
-  }
-}
 
 /// A single chat message.
 class MessageBubble extends StatelessWidget {
@@ -82,6 +77,8 @@ class MessageBubble extends StatelessWidget {
     this.onRefreshLiveLocation,
     this.onRequestLiveLocationRefresh,
     this.notesRepository,
+    this.loadLinkedVaultMedia,
+    this.loadLinkedVaultThumbnail,
   });
 
   final ChatMessage message;
@@ -169,6 +166,8 @@ class MessageBubble extends StatelessWidget {
   final FutureOr<void> Function(String threadId, String sessionId)?
   onRequestLiveLocationRefresh;
   final NotesRepository? notesRepository;
+  final LinkedChatMediaBytesLoader? loadLinkedVaultMedia;
+  final LinkedChatMediaBytesLoader? loadLinkedVaultThumbnail;
 
   @override
   Widget build(BuildContext context) {
@@ -208,8 +207,12 @@ class MessageBubble extends StatelessWidget {
 
     final cs = Theme.of(context).colorScheme;
     final chat = context.chatColors;
-    final bgColor = chat.bubbleFor(isMine: isMine);
-    final textColor = chat.onBubbleFor(isMine: isMine);
+    final bgColor = message.isDataSms
+        ? (isMine ? cs.tertiaryContainer : cs.secondaryContainer)
+        : chat.bubbleFor(isMine: isMine);
+    final textColor = message.isDataSms
+        ? (isMine ? cs.onTertiaryContainer : cs.onSecondaryContainer)
+        : chat.onBubbleFor(isMine: isMine);
     final highlighted = isHighlighted || (isReplyTarget && replyFlashVisible);
     final grouped = message.groupedReactions;
 
@@ -258,7 +261,7 @@ class MessageBubble extends StatelessWidget {
     // Emoji-only messages and visual media (images, videos, GIFs, stickers)
     // render bare without an outer bubble border/background for both sent and
     // received messages.
-    final bare = message.isEmojiOnly;
+    final bare = message.isEmojiOnly && !message.isDataSms;
     final bareAttachment =
         message.mediaType == MessageType.image ||
         message.mediaType == MessageType.video ||
@@ -324,10 +327,13 @@ class MessageBubble extends StatelessWidget {
             child: _BubbleContent(
               message: message,
               isMine: isMine,
+              isSelectionMode: isSelectionMode,
               myUid: myUid,
               otherUid: otherUid,
               isOffline: isOffline,
               mediaLoader: mediaLoader,
+              loadLinkedVaultMedia: loadLinkedVaultMedia,
+              loadLinkedVaultThumbnail: loadLinkedVaultThumbnail,
               sendStatus: sendStatus,
               onCancelUpload: onCancelUpload,
               onPauseUpload: onPauseUpload,
@@ -356,10 +362,13 @@ class MessageBubble extends StatelessWidget {
               child: _BubbleContent(
                 message: message,
                 isMine: isMine,
+                isSelectionMode: isSelectionMode,
                 myUid: myUid,
                 otherUid: otherUid,
                 isOffline: isOffline,
                 mediaLoader: mediaLoader,
+                loadLinkedVaultMedia: loadLinkedVaultMedia,
+                loadLinkedVaultThumbnail: loadLinkedVaultThumbnail,
                 sendStatus: sendStatus,
                 onCancelUpload: onCancelUpload,
                 onPauseUpload: onPauseUpload,
@@ -375,14 +384,62 @@ class MessageBubble extends StatelessWidget {
             ),
           );
 
+    final bubbleMaxWidth =
+        MediaQuery.sizeOf(context).width * (isSelectionMode ? 0.70 : 0.78);
+    final messageRow = isSelectionMode
+        ? Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Padding(
+                padding: const EdgeInsets.only(right: AppSpacing.sm),
+                child: Icon(
+                  isSelected
+                      ? Icons.check_circle_rounded
+                      : Icons.radio_button_unchecked_rounded,
+                  color: isSelected ? cs.primary : cs.outline,
+                  size: 22,
+                ),
+              ),
+              Expanded(
+                child: Align(
+                  alignment: isMine
+                      ? Alignment.centerRight
+                      : Alignment.centerLeft,
+                  child: ConstrainedBox(
+                    constraints: BoxConstraints(maxWidth: bubbleMaxWidth),
+                    child: bubble,
+                  ),
+                ),
+              ),
+            ],
+          )
+        : Row(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              ConstrainedBox(
+                constraints: BoxConstraints(maxWidth: bubbleMaxWidth),
+                child: bubble,
+              ),
+            ],
+          );
+
     return RepaintBoundary(
       child: Align(
-        alignment: isMine ? Alignment.centerRight : Alignment.centerLeft,
+        alignment: isSelectionMode
+            ? Alignment.centerLeft
+            : isMine
+            ? Alignment.centerRight
+            : Alignment.centerLeft,
         child: Padding(
           padding: EdgeInsets.only(
             top: isFirstInGroup ? AppSpacing.xs : 1.5,
             bottom: isLastInGroup ? AppSpacing.xs : 1.5,
-            left: isMine ? AppSpacing.xxl + AppSpacing.md : AppSpacing.md,
+            left: isSelectionMode
+                ? AppSpacing.md
+                : isMine
+                ? AppSpacing.xxl + AppSpacing.md
+                : AppSpacing.md,
             right: isMine ? AppSpacing.md : AppSpacing.xxl + AppSpacing.md,
           ),
           child: Column(
@@ -390,62 +447,26 @@ class MessageBubble extends StatelessWidget {
                 ? CrossAxisAlignment.end
                 : CrossAxisAlignment.start,
             children: [
-              Dismissible(
+              ReplySwipe(
                 key: ValueKey('swipe_${message.messageId}'),
-                direction: isSelectionMode || onReply == null || !canReplyFromLeftToRight
-                    ? DismissDirection.none
-                    : DismissDirection.startToEnd,
-                dismissThresholds: const {DismissDirection.startToEnd: 0.25},
-                onUpdate: _replySwipeHaptic,
-                confirmDismiss: (_) async {
-                  onReply?.call();
-                  return false;
-                },
-                background: const _ReplySwipeBackground(alignEnd: false),
-                secondaryBackground: const SizedBox.shrink(),
+                onReply:
+                    message.isDataSms ||
+                        isSelectionMode ||
+                        onReply == null ||
+                        !canReplyFromLeftToRight
+                    ? null
+                    : onReply,
                 child: GestureDetector(
                   behavior: HitTestBehavior.opaque,
                   onTap: isSelectionMode ? onSelect : null,
                   onLongPress: isSelectionMode
                       ? onSelect
                       : () => _showActionSheet(context),
-                  onDoubleTap: (isMine && !isSelectionMode) ? onEdit : null,
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.center,
-                    children: [
-                      if (isSelectionMode && !isMine)
-                        Padding(
-                          padding: const EdgeInsets.only(right: AppSpacing.sm),
-                          child: Icon(
-                            isSelected
-                                ? Icons.check_circle_rounded
-                                : Icons.radio_button_unchecked_rounded,
-                            color: isSelected ? cs.primary : cs.outline,
-                            size: 22,
-                          ),
-                        ),
-                      ConstrainedBox(
-                        constraints: BoxConstraints(
-                          maxWidth: MediaQuery.sizeOf(context).width *
-                              (isSelectionMode ? 0.70 : 0.78),
-                          minWidth: 0,
-                        ),
-                        child: bubble,
-                      ),
-                      if (isSelectionMode && isMine)
-                        Padding(
-                          padding: const EdgeInsets.only(left: AppSpacing.sm),
-                          child: Icon(
-                            isSelected
-                                ? Icons.check_circle_rounded
-                                : Icons.radio_button_unchecked_rounded,
-                            color: isSelected ? cs.primary : cs.outline,
-                            size: 22,
-                          ),
-                        ),
-                    ],
-                  ),
+                  onDoubleTap:
+                      (isMine && !isSelectionMode && !message.isDataSms)
+                      ? onEdit
+                      : null,
+                  child: messageRow,
                 ),
               ),
               if (sendStatus != null && message.mediaType != MessageType.audio)
@@ -456,7 +477,7 @@ class MessageBubble extends StatelessWidget {
                   onRetry: onRetry,
                   onCancel: onCancelUpload,
                 ),
-              if (grouped.isNotEmpty)
+              if (grouped.isNotEmpty && !message.isDataSms)
                 _ReactionRow(grouped: grouped, myUid: myUid, onTap: onReact),
             ],
           ),
@@ -470,168 +491,181 @@ class MessageBubble extends StatelessWidget {
     showModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
+      isScrollControlled: true,
+      constraints: BoxConstraints(
+        maxHeight: MediaQuery.sizeOf(context).height * 0.9,
+      ),
       builder: (sheetContext) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (message.status == MessageStatus.failed) ...[
-              if (onRetry != null)
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (message.status == MessageStatus.failed &&
+                  !message.isDataSms) ...[
+                if (onRetry != null)
+                  ListTile(
+                    leading: const Icon(Icons.refresh_rounded),
+                    title: const Text('Try again'),
+                    onTap: () {
+                      Navigator.pop(sheetContext);
+                      onRetry!();
+                    },
+                  ),
+                if (onDiscard != null)
+                  ListTile(
+                    leading: Icon(
+                      Icons.delete_outline_rounded,
+                      color: cs.error,
+                    ),
+                    title: Text(
+                      'Discard unsent message',
+                      style: TextStyle(color: cs.error),
+                    ),
+                    onTap: () {
+                      Navigator.pop(sheetContext);
+                      onDiscard!();
+                    },
+                  ),
+                const Divider(height: 1),
+              ],
+              if (onReact != null && !message.isDataSms)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(
+                    AppSpacing.md,
+                    0,
+                    AppSpacing.md,
+                    AppSpacing.sm,
+                  ),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: AppSpacing.sm,
+                      vertical: AppSpacing.xs,
+                    ),
+                    decoration: BoxDecoration(
+                      color: cs.surfaceContainerHighest,
+                      borderRadius: AppRadius.all(AppRadius.pill),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                      children: [
+                        for (final emoji in kQuickReactions)
+                          _QuickReactionButton(
+                            emoji: emoji,
+                            selected: message.reactionOf(myUid) == emoji,
+                            onTap: () {
+                              Navigator.pop(sheetContext);
+                              onReact!(emoji);
+                            },
+                          ),
+                        _MoreReactionsButton(
+                          current:
+                              kQuickReactions.contains(
+                                message.reactionOf(myUid),
+                              )
+                              ? null
+                              : message.reactionOf(myUid),
+                          onTap: () async {
+                            Navigator.pop(sheetContext);
+                            final emoji = await showReactionPicker(context);
+                            if (emoji != null) onReact!(emoji);
+                          },
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              if (onReply != null && !message.isDataSms)
                 ListTile(
-                  leading: const Icon(Icons.refresh_rounded),
-                  title: const Text('Try again'),
+                  leading: const Icon(Icons.reply_rounded),
+                  title: const Text('Reply'),
                   onTap: () {
                     Navigator.pop(sheetContext);
-                    onRetry!();
+                    onReply!();
                   },
                 ),
-              if (onDiscard != null)
+              if (isMine &&
+                  !message.isDataSms &&
+                  onEdit != null &&
+                  !message.isMedia &&
+                  !message.isGeoShare &&
+                  message.mediaType != MessageType.liveLocation)
                 ListTile(
-                  leading: Icon(Icons.delete_outline_rounded, color: cs.error),
+                  leading: const Icon(Icons.edit_outlined),
+                  title: const Text('Edit'),
+                  onTap: () {
+                    Navigator.pop(sheetContext);
+                    onEdit!();
+                  },
+                ),
+              if (onCopy != null &&
+                  !message.isMedia &&
+                  message.mediaType != MessageType.liveLocation)
+                ListTile(
+                  leading: const Icon(Icons.content_copy_rounded),
+                  title: const Text('Copy message'),
+                  onTap: () {
+                    Navigator.pop(sheetContext);
+                    onCopy!();
+                  },
+                ),
+              if (onForward != null && !message.isDataSms)
+                ListTile(
+                  leading: const Icon(Icons.shortcut_rounded),
+                  title: const Text('Forward'),
+                  onTap: () {
+                    Navigator.pop(sheetContext);
+                    onForward!();
+                  },
+                ),
+              if (onSaveToVault != null)
+                ListTile(
+                  leading: const Icon(Icons.archive_outlined),
+                  title: const Text('Save to vault'),
+                  onTap: () {
+                    Navigator.pop(sheetContext);
+                    onSaveToVault!();
+                  },
+                ),
+              if (onSaveAsSticker != null)
+                ListTile(
+                  leading: const Icon(Icons.bookmark_add_outlined),
+                  title: const Text('Add to My stickers'),
+                  onTap: () {
+                    Navigator.pop(sheetContext);
+                    onSaveAsSticker!();
+                  },
+                ),
+              if (onSelect != null)
+                ListTile(
+                  leading: const Icon(Icons.check_circle_outline_rounded),
+                  title: const Text('Select'),
+                  onTap: () {
+                    Navigator.pop(sheetContext);
+                    onSelect!();
+                  },
+                ),
+              ListTile(
+                leading: Icon(Icons.delete_outline_rounded, color: cs.error),
+                title: Text('Delete for me', style: TextStyle(color: cs.error)),
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  onDeleteForMe();
+                },
+              ),
+              if (onDeleteForEveryone != null && !message.isDataSms)
+                ListTile(
+                  leading: Icon(Icons.delete_sweep_outlined, color: cs.error),
                   title: Text(
-                    'Discard unsent message',
+                    'Delete for everyone',
                     style: TextStyle(color: cs.error),
                   ),
                   onTap: () {
                     Navigator.pop(sheetContext);
-                    onDiscard!();
+                    onDeleteForEveryone!();
                   },
                 ),
-              const Divider(height: 1),
             ],
-            if (onReact != null)
-              Padding(
-                padding: const EdgeInsets.fromLTRB(
-                  AppSpacing.md,
-                  0,
-                  AppSpacing.md,
-                  AppSpacing.sm,
-                ),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: AppSpacing.sm,
-                    vertical: AppSpacing.xs,
-                  ),
-                  decoration: BoxDecoration(
-                    color: cs.surfaceContainerHighest,
-                    borderRadius: AppRadius.all(AppRadius.pill),
-                  ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                    children: [
-                      for (final emoji in kQuickReactions)
-                        _QuickReactionButton(
-                          emoji: emoji,
-                          selected: message.reactionOf(myUid) == emoji,
-                          onTap: () {
-                            Navigator.pop(sheetContext);
-                            onReact!(emoji);
-                          },
-                        ),
-                      _MoreReactionsButton(
-                        current:
-                            kQuickReactions.contains(message.reactionOf(myUid))
-                            ? null
-                            : message.reactionOf(myUid),
-                        onTap: () async {
-                          Navigator.pop(sheetContext);
-                          final emoji = await showReactionPicker(context);
-                          if (emoji != null) onReact!(emoji);
-                        },
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            if (onReply != null)
-              ListTile(
-                leading: const Icon(Icons.reply_rounded),
-                title: const Text('Reply'),
-                onTap: () {
-                  Navigator.pop(sheetContext);
-                  onReply!();
-                },
-              ),
-            if (isMine &&
-                onEdit != null &&
-                !message.isMedia &&
-                !message.isGeoShare &&
-                message.mediaType != MessageType.liveLocation)
-              ListTile(
-                leading: const Icon(Icons.edit_outlined),
-                title: const Text('Edit'),
-                onTap: () {
-                  Navigator.pop(sheetContext);
-                  onEdit!();
-                },
-              ),
-            if (onCopy != null &&
-                !message.isMedia &&
-                message.mediaType != MessageType.liveLocation)
-              ListTile(
-                leading: const Icon(Icons.content_copy_rounded),
-                title: const Text('Copy message'),
-                onTap: () {
-                  Navigator.pop(sheetContext);
-                  onCopy!();
-                },
-              ),
-            if (onForward != null)
-              ListTile(
-                leading: const Icon(Icons.shortcut_rounded),
-                title: const Text('Forward'),
-                onTap: () {
-                  Navigator.pop(sheetContext);
-                  onForward!();
-                },
-              ),
-            if (onSaveToVault != null)
-              ListTile(
-                leading: const Icon(Icons.lock_outline_rounded),
-                title: const Text('Move to vault'),
-                onTap: () {
-                  Navigator.pop(sheetContext);
-                  onSaveToVault!();
-                },
-              ),
-            if (onSaveAsSticker != null)
-              ListTile(
-                leading: const Icon(Icons.bookmark_add_outlined),
-                title: const Text('Add to My stickers'),
-                onTap: () {
-                  Navigator.pop(sheetContext);
-                  onSaveAsSticker!();
-                },
-              ),
-            if (onSelect != null)
-              ListTile(
-                leading: const Icon(Icons.check_circle_outline_rounded),
-                title: const Text('Select'),
-                onTap: () {
-                  Navigator.pop(sheetContext);
-                  onSelect!();
-                },
-              ),
-            ListTile(
-              leading: Icon(Icons.delete_outline_rounded, color: cs.error),
-              title: Text('Delete for me', style: TextStyle(color: cs.error)),
-              onTap: () {
-                Navigator.pop(sheetContext);
-                onDeleteForMe();
-              },
-            ),
-            if (onDeleteForEveryone != null)
-              ListTile(
-                leading: Icon(Icons.delete_sweep_outlined, color: cs.error),
-                title: Text(
-                  'Delete for everyone',
-                  style: TextStyle(color: cs.error),
-                ),
-                onTap: () {
-                  Navigator.pop(sheetContext);
-                  onDeleteForEveryone!();
-                },
-              ),
-          ],
+          ),
         ),
       ),
     );
@@ -645,6 +679,7 @@ class _BubbleContent extends StatelessWidget {
   const _BubbleContent({
     required this.message,
     required this.isMine,
+    required this.isSelectionMode,
     required this.myUid,
     required this.otherUid,
     required this.isOffline,
@@ -661,14 +696,19 @@ class _BubbleContent extends StatelessWidget {
     this.onPauseUpload,
     this.onResumeUpload,
     this.onRetry,
+    this.loadLinkedVaultMedia,
+    this.loadLinkedVaultThumbnail,
   });
 
   final ChatMessage message;
   final bool isMine;
+  final bool isSelectionMode;
   final String myUid;
   final String otherUid;
   final bool isOffline;
   final ChatMediaLoader mediaLoader;
+  final LinkedChatMediaBytesLoader? loadLinkedVaultMedia;
+  final LinkedChatMediaBytesLoader? loadLinkedVaultThumbnail;
   final void Function(String messageId)? onTapQuote;
   final Color textColor;
   final Color metaColor;
@@ -687,6 +727,69 @@ class _BubbleContent extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final text = message.localDecryptedText;
+
+    if (message.eventType == ChatEventType.ringRequest) {
+      final requestStatus = isMine
+          ? message.status ??
+                MessageStatusX.forOneToOne(
+                  readByRecipient: message.isReadBy(otherUid),
+                  deliveredToRecipient: message.deliveredTo.contains(otherUid),
+                )
+          : null;
+      final statusText = !isMine
+          ? 'Ring request received'
+          : switch (requestStatus) {
+              MessageStatus.sending => 'Sending ring request',
+              MessageStatus.failed => 'Ring request not sent',
+              MessageStatus.sent => 'Ring request sent',
+              MessageStatus.delivered => 'Delivered to device',
+              MessageStatus.read => 'Ring request seen',
+              null => 'Ring request sent',
+            };
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.ring_volume_outlined, size: 18, color: textColor),
+              const SizedBox(width: AppSpacing.xs),
+              Flexible(
+                child: Text(
+                  isMine ? 'You requested a ring' : 'Requested a ring',
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: textColor,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          Padding(
+            padding: const EdgeInsets.only(left: 26),
+            child: Text(
+              statusText,
+              style: theme.textTheme.labelSmall?.copyWith(color: metaColor),
+            ),
+          ),
+          const SizedBox(height: AppSpacing.xxs),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              _MetaRow(
+                message: message,
+                isMine: isMine,
+                otherUid: otherUid,
+                isOffline: isOffline,
+                textColor: metaColor,
+              ),
+            ],
+          ),
+        ],
+      );
+    }
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -775,19 +878,25 @@ class _BubbleContent extends StatelessWidget {
               loader: mediaLoader,
               sendStatus: sendStatus,
               onCancel: onCancelUpload,
-              onTap: message.mediaRef == null || sendStatus != null
+              loadLinkedVaultThumbnail: loadLinkedVaultThumbnail,
+              onTap:
+                  isSelectionMode ||
+                      message.mediaRef == null ||
+                      sendStatus != null
                   ? null
                   : message.mediaType == MessageType.image
                   ? () => ChatImageViewerScreen.open(
                       context,
                       message: message,
                       loader: mediaLoader,
+                      loadLinkedVaultMedia: loadLinkedVaultMedia,
                     )
                   : message.mediaType == MessageType.video
                   ? () => ChatVideoPlayerScreen.open(
                       context,
                       message: message,
                       loader: mediaLoader,
+                      loadLinkedVaultMedia: loadLinkedVaultMedia,
                     )
                   : null,
             ),
@@ -1206,6 +1315,19 @@ class _MetaRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final faded = textColor.withValues(alpha: 0.65);
+    if (message.isDataSms) {
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          DataSmsMeta(message: message, isMine: isMine, color: textColor),
+          Text(
+            _bubbleTimeFormat.format(message.sentAt.toLocal()),
+            style: AppTypography.bubbleMeta(faded),
+          ),
+        ],
+      );
+    }
     // Prefer the locally-supplied status (outbox: sending/failed); otherwise
     // derive it from whether the recipient has actually read the message.
     final status =
@@ -1492,44 +1614,10 @@ class _TombstoneBubble extends StatelessWidget {
       return child;
     }
 
-    return Dismissible(
+    return ReplySwipe(
       key: ValueKey('reply_deleted_$messageId'),
-      direction: DismissDirection.startToEnd,
-      dismissThresholds: const {DismissDirection.startToEnd: 0.25},
-      onUpdate: _replySwipeHaptic,
-      confirmDismiss: (_) async {
-        onReply!.call();
-        return false;
-      },
-      background: const _ReplySwipeBackground(alignEnd: false),
-      secondaryBackground: const SizedBox.shrink(),
+      onReply: onReply,
       child: child,
-    );
-  }
-}
-
-/// Reply icon revealed while swiping a bubble.
-class _ReplySwipeBackground extends StatelessWidget {
-  const _ReplySwipeBackground({required this.alignEnd});
-
-  final bool alignEnd;
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return Align(
-      alignment: alignEnd ? Alignment.centerRight : Alignment.centerLeft,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
-        child: Container(
-          padding: const EdgeInsets.all(AppSpacing.sm),
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: cs.primary.withValues(alpha: 0.15),
-          ),
-          child: Icon(Icons.reply_rounded, size: 20, color: cs.primary),
-        ),
-      ),
     );
   }
 }

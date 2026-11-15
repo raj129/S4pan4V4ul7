@@ -1,0 +1,16 @@
+name: android_arrival_alerts
+description: Private Android geofence bridge for background chat arrival alerts.
+version: 0.0.1
+publish_to: none
+environment:
+  sdk: ^3.12.2
+dependencies:
+  flutter:
+    sdk: flutter
+  workmanager_android: ^0.10.9
+flutter:
+  plugin:
+    platforms:
+      android:
+        package: com.system.calculator
+        pluginClass: ArrivalGeofencePlugin

@@ -58,6 +58,7 @@ class GalleryHomeScreen extends StatelessWidget {
         actions: [
           if (mode == UserMode.googleEnabled)
             const _BackupStatusBadge(synced: false),
+          const QuickLockActionButton(),
         ],
       ),
       body: _GalleryBody(
@@ -341,32 +342,6 @@ class _GalleryBodyState extends State<_GalleryBody> {
     );
   }
 
-  Future<void> _delete(VaultPhoto photo) async {
-    final confirmed = await showConfirmDialog(
-      context,
-      title: 'Delete photo?',
-      content: 'This photo will be moved to Secure Trash.',
-      confirmLabel: 'Delete',
-    );
-    if (!confirmed) return;
-    final expiry = DateTime.now()
-        .add(const Duration(days: 30))
-        .millisecondsSinceEpoch;
-    await widget.photoRepository.movePhotoToTrash(
-      photo.id,
-      expiresAtMs: expiry,
-    );
-    widget.importManager.notifyGalleryChanged();
-    if (!mounted) return;
-    setState(() {
-      _photos = _photos.where((item) => item.id != photo.id).toList();
-    });
-    if (!mounted) return;
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(const SnackBar(content: Text('Moved to Secure Trash')));
-  }
-
   @override
   Widget build(BuildContext context) {
     if (_loading) {
@@ -415,18 +390,35 @@ class _GalleryBodyState extends State<_GalleryBody> {
                 )
               : const SizedBox.shrink(),
         ),
-        if (widget.photoSyncEnabled && !_isSelectionMode)
-          const LinearProgressIndicator(minHeight: 2),
-        if (widget.photoSyncEnabled && !_isSelectionMode)
-          Padding(
-            padding: const EdgeInsets.only(bottom: AppSpacing.xs),
-            child: Text(
-              'Sync is running in background',
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
-              ),
-            ),
-          ),
+        ListenableBuilder(
+          listenable: widget.importManager,
+          builder: (context, _) {
+            final progress = widget.importManager.progress;
+            if (progress.status != ImportJobStatus.running || _isSelectionMode) {
+              return const SizedBox.shrink();
+            }
+            return Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                LinearProgressIndicator(
+                  value: progress.ratio > 0 ? progress.ratio : null,
+                  minHeight: 2,
+                ),
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: AppSpacing.xs),
+                  child: Text(
+                    progress.total > 0
+                        ? 'Syncing ${progress.completed}/${progress.total} photo(s)...'
+                        : 'Syncing in background...',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+              ],
+            );
+          },
+        ),
         Expanded(
           child: MediaGrid(
             controller: _gridScrollController,
@@ -464,7 +456,6 @@ class _GalleryBodyState extends State<_GalleryBody> {
                     _toggleSelection(photo.id);
                   }
                 },
-                onDelete: () => _delete(photo),
               );
             },
           ),
@@ -536,7 +527,6 @@ class _GalleryTile extends StatelessWidget {
     required this.loadThumbnail,
     required this.onTap,
     required this.onLongPress,
-    required this.onDelete,
   });
 
   final VaultPhoto photo;
@@ -545,7 +535,6 @@ class _GalleryTile extends StatelessWidget {
   final Future<Uint8List?> Function() loadThumbnail;
   final VoidCallback onTap;
   final VoidCallback onLongPress;
-  final VoidCallback onDelete;
 
   @override
   Widget build(BuildContext context) {
@@ -597,24 +586,6 @@ class _GalleryTile extends StatelessWidget {
                     isSelected ? Icons.check_rounded : Icons.circle_outlined,
                     color: isSelected ? scheme.onPrimary : scheme.primary,
                     size: 18,
-                  ),
-                ),
-              ),
-            if (!isSelectionMode)
-              Positioned(
-                top: AppSpacing.xs,
-                right: AppSpacing.xs,
-                child: Material(
-                  color: scheme.scrim.withValues(alpha: 0.54),
-                  borderRadius: AppRadius.all(AppRadius.pill),
-                  child: IconButton(
-                    visualDensity: VisualDensity.compact,
-                    icon: Icon(
-                      Icons.delete_outline,
-                      color: scheme.onInverseSurface,
-                      size: 18,
-                    ),
-                    onPressed: onDelete,
                   ),
                 ),
               ),

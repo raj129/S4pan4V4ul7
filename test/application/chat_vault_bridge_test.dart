@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:crypto/crypto.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
@@ -419,19 +420,69 @@ void main() {
     );
     await File(first.item.encryptedFilePath).writeAsString('{}');
     var cleaned = false;
-    await expectLater(
-      bridge.moveToVault(
-        bytes: document,
-        filename: 'document.pdf',
-        sourceId: 'alice/thread/second',
-        onMarkMoved: () async {},
-        onSourceCleanup: () async {
-          cleaned = true;
-        },
-      ),
-      throwsA(anything),
-    );
+    final previousDebugPrint = debugPrint;
+    final debugMessages = <String>[];
+    debugPrint = (message, {wrapWidth}) {
+      if (message != null) debugMessages.add(message);
+    };
+    try {
+      await expectLater(
+        bridge.moveToVault(
+          bytes: document,
+          filename: 'document.pdf',
+          sourceId: 'alice/thread/second',
+          onMarkMoved: () async {},
+          onSourceCleanup: () async {
+            cleaned = true;
+          },
+        ),
+        throwsA(anything),
+      );
+    } finally {
+      debugPrint = previousDebugPrint;
+    }
+
+    expect(debugMessages.join('\n'), contains('Error loading photo bytes'));
     expect(cleaned, isFalse);
+  });
+
+  test('chat vault sources share one linked vault item', () async {
+    const firstSource = 'alice/thread/first-link';
+    const secondSource = 'alice/thread/second-link';
+    final first = await bridge.moveToVault(
+      bytes: document,
+      filename: 'document.pdf',
+      sourceId: firstSource,
+    );
+    final second = await bridge.moveToVault(
+      bytes: document,
+      filename: 'document.pdf',
+      sourceId: secondSource,
+    );
+    manager.dispose();
+    bridge = createBridge();
+
+    expect(second.item.id, first.item.id);
+    expect(
+      await bridge.linkedAttachmentSources(first.item.id),
+      unorderedEquals([firstSource, secondSource]),
+    );
+    expect(
+      await bridge.loadLinkedAttachment(firstSource),
+      orderedEquals(document),
+    );
+
+    await bridge.unlinkAttachment(firstSource);
+    expect(await bridge.linkedAttachment(firstSource), isNull);
+    expect(await bridge.linkedAttachmentSources(first.item.id), [secondSource]);
+    final lastLink = await bridge.linkedAttachment(secondSource);
+    expect(lastLink?.id, first.item.id);
+    await bridge.moveAttachmentToTrash(
+      lastLink!,
+      expiresAtMs: DateTime.utc(2025).millisecondsSinceEpoch,
+    );
+    expect(await bridge.linkedAttachment(secondSource), isNull);
+    expect(await repository.listTrashPhotos(), hasLength(1));
   });
 
   test('source identity mismatch and oversized/empty inputs fail', () async {

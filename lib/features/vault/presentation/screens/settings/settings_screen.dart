@@ -6,6 +6,7 @@ import 'package:package_info_plus/package_info_plus.dart';
 
 import 'package:photo_vault/features/chat/application/services/chat_backup_service.dart';
 import 'package:photo_vault/core/media/animated_media.dart';
+import 'package:photo_vault/core/platform/hdr_preview_capability.dart';
 import 'package:photo_vault/features/vault/application/services/pin_validator.dart';
 import 'package:photo_vault/features/vault/application/usecases/unlock_vault_usecase.dart';
 import 'package:photo_vault/core/widgets/app_surfaces.dart';
@@ -85,10 +86,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   void initState() {
     super.initState();
+    HdrPreviewPreference.instance.configure(widget.settingsRepository);
     MediaAnimationPreference.instance.mode.addListener(
       _onMotionPhotoModeChanged,
     );
     HdrPreviewPreference.instance.enabled.addListener(_onHdrPreviewChanged);
+    unawaited(HdrPreviewCapability.instance.load());
     unawaited(_loadMediaPreviewPreferences());
     _loadSettings();
     unawaited(_loadAbout());
@@ -563,6 +566,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 trailing: const Icon(Icons.chevron_right_rounded),
                 onTap: () => unawaited(context.push('/settings/notifications')),
               ),
+              ListTile(
+                key: const Key('ring-alert-settings-navigation-tile'),
+                leading: const Icon(Icons.ring_volume_outlined),
+                title: const Text('Chat ring requests'),
+                subtitle: const Text(
+                  'Choose whether ring requests vibrate, ring, or stay silent.',
+                ),
+                trailing: const Icon(Icons.chevron_right_rounded),
+                onTap: () => unawaited(context.push('/settings/ring-alerts')),
+              ),
             ],
           ),
           const SectionHeader('Backup & sync'),
@@ -787,14 +800,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ],
                 ),
               ),
-              _SettingsSwitch(
-                icon: Icons.hdr_on_rounded,
-                title: 'HDR photo preview',
-                subtitle: _hdrPreviewEnabled
-                    ? 'Use HDR rendering where supported.'
-                    : 'Use the standard photo preview.',
-                value: _hdrPreviewEnabled,
-                onChanged: _setHdrPreview,
+              ValueListenableBuilder<bool>(
+                valueListenable: HdrPreviewCapability.instance.available,
+                builder: (context, isAvailable, _) => isAvailable
+                    ? _SettingsSwitch(
+                        icon: Icons.hdr_on_rounded,
+                        title: 'HDR photo preview',
+                        subtitle: _hdrPreviewEnabled
+                            ? 'Use HDR rendering for supported photos.'
+                            : 'Use the standard photo preview.',
+                        value: _hdrPreviewEnabled,
+                        onChanged: _setHdrPreview,
+                      )
+                    : const SizedBox.shrink(),
               ),
             ],
           ),
