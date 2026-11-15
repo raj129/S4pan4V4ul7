@@ -36,6 +36,7 @@ import '../data/repositories/drift_message_cache_repository.dart';
 import '../data/repositories/drift_outbox_repository.dart';
 import '../data/repositories/firebase_avatar_storage.dart';
 import '../data/repositories/firestore_push_token_repository.dart';
+import '../data/repositories/firestore_ring_alert_preferences_repository.dart';
 import '../data/repositories/google_drive_chat_backup_store.dart';
 import '../data/repositories/local_chat_backup_store.dart';
 import '../data/repositories/firestore_message_repository.dart';
@@ -53,6 +54,7 @@ import '../domain/repositories/message_repository.dart';
 import '../domain/repositories/live_location_repository.dart';
 import '../domain/repositories/presence_repository.dart';
 import '../domain/repositories/push_token_repository.dart';
+import '../domain/repositories/ring_alert_preferences_repository.dart';
 import '../domain/repositories/thread_repository.dart';
 import '../domain/repositories/typing_repository.dart';
 import '../domain/repositories/user_repository.dart';
@@ -173,6 +175,8 @@ class ChatDependencies {
       _databaseOverride ?? _databaseProvider?.call();
 
   late UserRepository userRepository = FirestoreUserRepository();
+  late RingAlertPreferencesRepository ringAlertPreferencesRepository =
+      FirestoreRingAlertPreferencesRepository();
   late ThreadRepository threadRepository = FirestoreThreadRepository();
   late MessageRepository messageRepository = FirestoreMessageRepository();
   late MediaRepository mediaRepository = FirebaseMediaRepository();

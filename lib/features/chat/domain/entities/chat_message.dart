@@ -23,6 +23,8 @@ enum DeleteScope { forMe, forEveryone }
 
 enum MessageTransport { internet, dataSms }
 
+enum ChatEventType { ringRequest }
+
 class ChatMessage extends Equatable {
   const ChatMessage({
     required this.messageId,
@@ -50,6 +52,7 @@ class ChatMessage extends Equatable {
     this.smsSegments,
     this.smsDeliveryState,
     this.smsError,
+    this.eventType,
   });
 
   final String messageId;
@@ -108,6 +111,7 @@ class ChatMessage extends Equatable {
   final int? smsSegments;
   final String? smsDeliveryState;
   final String? smsError;
+  final ChatEventType? eventType;
 
   bool get isDataSms => transport == MessageTransport.dataSms;
 
@@ -218,6 +222,7 @@ class ChatMessage extends Equatable {
     String? smsDeliveryState,
     String? smsError,
     bool clearSmsError = false,
+    ChatEventType? eventType,
   }) {
     return ChatMessage(
       messageId: messageId,
@@ -246,6 +251,7 @@ class ChatMessage extends Equatable {
       smsSegments: smsSegments,
       smsDeliveryState: smsDeliveryState ?? this.smsDeliveryState,
       smsError: clearSmsError ? null : smsError ?? this.smsError,
+      eventType: eventType ?? this.eventType,
     );
   }
 
@@ -277,6 +283,7 @@ class ChatMessage extends Equatable {
     if (replyTo != null) 'replyTo': replyTo!.toFirestore(),
     if (editedAt != null) 'editedAt': editedAt!.toUtc().millisecondsSinceEpoch,
     if (isForwarded) 'isForwarded': true,
+    if (eventType != null) 'eventType': eventType!.name,
   };
 
   factory ChatMessage.fromFirestore(
@@ -319,6 +326,7 @@ class ChatMessage extends Equatable {
     smsSegments: (data['smsSegments'] as num?)?.toInt(),
     smsDeliveryState: data['smsDeliveryState'] as String?,
     smsError: data['smsError'] as String?,
+    eventType: _parseEventType(data['eventType'] as String?),
   );
 
   /// Reads a millisecond epoch written by [toFirestore].
@@ -333,6 +341,14 @@ class ChatMessage extends Equatable {
   static MessageType? _parseMediaType(String? name) {
     if (name == null) return null;
     for (final type in MessageType.values) {
+      if (type.name == name) return type;
+    }
+    return null;
+  }
+
+  static ChatEventType? _parseEventType(String? name) {
+    if (name == null) return null;
+    for (final type in ChatEventType.values) {
       if (type.name == name) return type;
     }
     return null;
@@ -363,5 +379,6 @@ class ChatMessage extends Equatable {
     smsSegments,
     smsDeliveryState,
     smsError,
+    eventType,
   ];
 }

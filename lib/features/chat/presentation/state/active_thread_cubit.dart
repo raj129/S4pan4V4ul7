@@ -827,6 +827,54 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
     }
   }
 
+  /// Adds a ring-request event to this chat. Ring requests are delivered by
+  /// the normal FCM path, but do not increment the message unread counter.
+  Future<bool> requestRing() async {
+    final threadId = _currentThreadId;
+    final recipientUid = _otherUser?.uid;
+    if (threadId == null || recipientUid == null) {
+      _reportActionError('Open a chat before requesting a ring.');
+      return false;
+    }
+
+    if (_detached) await jumpToLatest();
+    const preview = 'Ring request';
+    late final ChatMessage sent;
+    try {
+      final encrypted = await cryptoService.encryptMessage(
+        threadId: threadId,
+        plaintext: 'Asked you to ring.',
+      );
+      sent = await messageRepository
+          .sendMessage(
+            threadId: threadId,
+            senderId: myUid,
+            encryptedText: encrypted,
+            messageId: _uuid.v4(),
+            eventType: ChatEventType.ringRequest,
+          )
+          .timeout(const Duration(seconds: 20));
+    } catch (error) {
+      _reportActionError('Could not send ring request: $error');
+      return false;
+    }
+
+    _requestScroll(null);
+    try {
+      await threadRepository.updateLastMessage(
+        threadId: threadId,
+        preview: preview,
+        sentAt: sent.sentAt,
+      );
+    } catch (error) {
+      _reportActionError(
+        'Ring request was sent, but the chat preview could not be updated: '
+        '$error',
+      );
+    }
+    return true;
+  }
+
   /// Sends a chat marker linking to a note stored for this thread.
   Future<bool> sendSharedNoteMessage({required String noteId}) async {
     final threadId = _currentThreadId;
@@ -835,7 +883,6 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
       _reportActionError('Open a chat before sharing a note.');
       return false;
     }
-
     const preview = 'Shared a note';
     if (_detached) await jumpToLatest();
     late final ChatMessage sent;

@@ -728,6 +728,69 @@ class _BubbleContent extends StatelessWidget {
     final theme = Theme.of(context);
     final text = message.localDecryptedText;
 
+    if (message.eventType == ChatEventType.ringRequest) {
+      final requestStatus = isMine
+          ? message.status ??
+                MessageStatusX.forOneToOne(
+                  readByRecipient: message.isReadBy(otherUid),
+                  deliveredToRecipient: message.deliveredTo.contains(otherUid),
+                )
+          : null;
+      final statusText = !isMine
+          ? 'Ring request received'
+          : switch (requestStatus) {
+              MessageStatus.sending => 'Sending ring request',
+              MessageStatus.failed => 'Ring request not sent',
+              MessageStatus.sent => 'Ring request sent',
+              MessageStatus.delivered => 'Delivered to device',
+              MessageStatus.read => 'Ring request seen',
+              null => 'Ring request sent',
+            };
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.ring_volume_outlined, size: 18, color: textColor),
+              const SizedBox(width: AppSpacing.xs),
+              Flexible(
+                child: Text(
+                  isMine ? 'You requested a ring' : 'Requested a ring',
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: textColor,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          Padding(
+            padding: const EdgeInsets.only(left: 26),
+            child: Text(
+              statusText,
+              style: theme.textTheme.labelSmall?.copyWith(color: metaColor),
+            ),
+          ),
+          const SizedBox(height: AppSpacing.xxs),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              _MetaRow(
+                message: message,
+                isMine: isMine,
+                otherUid: otherUid,
+                isOffline: isOffline,
+                textColor: metaColor,
+              ),
+            ],
+          ),
+        ],
+      );
+    }
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
