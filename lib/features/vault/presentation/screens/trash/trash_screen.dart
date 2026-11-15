@@ -167,6 +167,7 @@ class _DefaultAppBar extends StatelessWidget implements PreferredSizeWidget {
       actions: [
         if (hasPhotos)
           TextButton(onPressed: onEmptyBin, child: const Text('Empty')),
+        const QuickLockActionButton(),
       ],
     );
   }
@@ -204,6 +205,7 @@ class _SelectionAppBar extends StatelessWidget implements PreferredSizeWidget {
           tooltip: 'Permanently delete selected',
           onPressed: onDelete,
         ),
+        const QuickLockActionButton(),
       ],
     );
   }

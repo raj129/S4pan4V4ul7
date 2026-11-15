@@ -196,6 +196,12 @@ class ChatNotificationService {
     );
   }
 
+  Future<void> notifyDataSms(ChatThread thread) async {
+    if (isActiveThread(thread.threadId)) return;
+    await init();
+    await _notify(thread);
+  }
+
   Future<void> showTestNotification() async {
     await init();
     final title = await _incomingChatAlertTitle();

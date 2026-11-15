@@ -6,7 +6,7 @@ import org.json.JSONObject
 import java.util.UUID
 
 /**
- * Durable queue of geofence enter events. Each entry stays until Dart acks it,
+ * Durable queue shared by foreground and headless engines. Each entry stays until Dart acks it,
  * so a send that fails (offline, signed out) is retried by the next worker run.
  */
 object ArrivalQueue {

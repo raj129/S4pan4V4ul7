@@ -7,6 +7,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:photo_vault/features/chat/data/repositories/local_sticker_pack_repository.dart';
 import 'package:photo_vault/core/integrations/chat_vault_bridge.dart';
 import 'package:photo_vault/features/chat/application/crypto/chat_crypto_service.dart';
+import 'package:photo_vault/features/chat/application/services/data_sms_service.dart';
+import 'package:photo_vault/features/chat/application/services/profile_service.dart';
 import 'package:photo_vault/features/chat/domain/entities/chat_message.dart';
 import 'package:photo_vault/features/chat/domain/entities/chat_thread.dart';
 import 'package:photo_vault/features/chat/domain/entities/chat_user.dart';
@@ -27,6 +29,7 @@ import 'package:photo_vault/features/chat/presentation/widgets/chat_bubble_shape
 import 'package:photo_vault/features/chat/presentation/widgets/chat_media_picker.dart';
 import 'package:photo_vault/features/chat/presentation/widgets/chat_media_preview.dart';
 import 'package:photo_vault/features/chat/presentation/widgets/message_bubble.dart';
+import 'package:photo_vault/features/vault/domain/entities/vault_photo.dart';
 
 class _Crypto implements ChatCryptoService {
   @override
@@ -49,6 +52,48 @@ class _Crypto implements ChatCryptoService {
   @override
   dynamic noSuchMethod(Invocation i) =>
       throw UnimplementedError('${i.memberName} not needed');
+}
+
+class _UiSms implements DataSmsService {
+  int sends = 0;
+  String? number;
+  @override
+  Stream<ChatMessage> get changes => const Stream.empty();
+  @override
+  Future<void> remember(ChatThread thread, ChatUser other) async {}
+  @override
+  Future<void> markRead(String threadId) async {}
+  @override
+  void start() {}
+  @override
+  Future<String?> phone(String threadId) async => number;
+  @override
+  Future<void> setPhone(String threadId, String? value) async => number = value;
+  @override
+  Future<void> enable() async {}
+  @override
+  Future<ChatMessage> send({
+    required ChatThread thread,
+    required ChatUser recipient,
+    required String text,
+  }) async {
+    sends++;
+    throw StateError('SMS unavailable for this test');
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation i) =>
+      throw UnimplementedError('${i.memberName} not needed');
+}
+
+class _Profile extends ChangeNotifier implements ProfileService {
+  @override
+  String nameFor(ChatUser user) => user.displayName;
+  @override
+  String? aliasFor(String uid) => null;
+  @override
+  dynamic noSuchMethod(Invocation invocation) =>
+      throw UnimplementedError('${invocation.memberName}');
 }
 
 class _Messages implements MessageRepository {
@@ -117,6 +162,7 @@ class _Messages implements MessageRepository {
     MediaMeta? mediaMeta,
     MessageReply? replyTo,
     bool isForwarded = false,
+    ChatEventType? eventType,
   }) => Completer<ChatMessage>().future;
 
   @override
@@ -228,8 +274,45 @@ class _Unused implements UserRepository, MediaRepository, ChatVaultBridge {
   @override
   final Listenable vaultSessionChanges = ValueNotifier(0);
 
+  bool unlocked = false;
+  final linked = <String, VaultPhoto>{};
+  final trashed = <String>[];
+  final unlinked = <String>[];
+  Future<void> Function()? beforeTrash;
+
   @override
-  bool get isUnlocked => false;
+  bool get isUnlocked => unlocked;
+
+  @override
+  Future<VaultPhoto?> linkedAttachment(String sourceId) async =>
+      linked[sourceId];
+
+  @override
+  Future<List<String>> linkedAttachmentSources(String photoId) async => linked
+      .entries
+      .where((entry) => entry.value.id == photoId)
+      .map((entry) => entry.key)
+      .toList();
+
+  @override
+  Future<void> moveAttachmentToTrash(
+    VaultPhoto photo, {
+    required int expiresAtMs,
+  }) async {
+    await beforeTrash?.call();
+    trashed.add(photo.id);
+  }
+
+  @override
+  Future<void> restoreAttachmentFromTrash(String photoId) async {
+    trashed.remove(photoId);
+  }
+
+  @override
+  Future<void> unlinkAttachment(String sourceId) async {
+    unlinked.add(sourceId);
+    linked.remove(sourceId);
+  }
 
   @override
   dynamic noSuchMethod(Invocation i) =>
@@ -255,6 +338,180 @@ ChatMessage _msg(
 );
 
 void main() {
+  testWidgets(
+    'SMS mode keeps the chat, counts segments, blocks oversize and retains failed drafts',
+    (tester) async {
+      tester.view.physicalSize = const Size(1080, 2400);
+      tester.view.devicePixelRatio = 3;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final messages = _Messages();
+      final unused = _Unused();
+      final sms = _UiSms();
+      final profile = _Profile();
+      addTearDown(profile.dispose);
+      final cubit = ActiveThreadCubit(
+        messageRepository: messages,
+        threadRepository: _Threads(),
+        userRepository: unused,
+        typingRepository: _Typing(),
+        presenceRepository: _Presence(),
+        mediaRepository: unused,
+        messageCache: const NoopMessageCacheRepository(),
+        outbox: _Outbox(),
+        cryptoService: _Crypto(),
+        myUid: 'me',
+        dataSms: sms,
+      );
+      final thread = ChatThread(
+        threadId: 't',
+        participantIds: const ['me', 'other'],
+        lastMessage: '',
+        lastMessageAt: DateTime.utc(2024),
+        createdAt: DateTime.utc(2024),
+        unreadCounts: const {},
+      );
+      final other = ChatUser(
+        uid: 'other',
+        email: 'other@example.com',
+        displayName: 'Other',
+        publicKey: '',
+        createdAt: DateTime.utc(2024),
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          home: BlocProvider.value(
+            value: cubit,
+            child: ThreadScreen(
+              thread: thread,
+              otherUser: other,
+              profileService: profile,
+              mediaLoader: ChatMediaLoader(
+                mediaRepository: unused,
+                cryptoService: _Crypto(),
+              ),
+              vaultBridge: unused,
+              onLock: () {},
+              chatDraftRepository: _Drafts(),
+              stickerPackFactory: (uid) =>
+                  LocalStickerPackRepository(userId: uid),
+            ),
+          ),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 100));
+      messages.live.add([_msg('internet', 'internet history')]);
+      await tester.pump(const Duration(milliseconds: 100));
+      await tester.longPress(find.byIcon(Icons.send_rounded));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(find.text('Sending method'), findsOneWidget);
+      expect(tester.takeException(), isNull, reason: 'after longPress');
+      await tester.tap(find.text('Data SMS'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(find.text('Data SMS recipient'), findsOneWidget);
+      expect(tester.takeException(), isNull, reason: 'after tap Data SMS');
+      await tester.enterText(
+        find.descendant(
+          of: find.byType(AlertDialog),
+          matching: find.byType(TextField),
+        ),
+        '+12345678901',
+      );
+      await tester.tap(find.text('Save'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(sms.number, '+12345678901');
+      expect(tester.takeException(), isNull);
+      expect(find.text('internet history'), findsOneWidget);
+      final composer = find.descendant(
+        of: find.byKey(const ValueKey('chat-composer-surface')),
+        matching: find.byType(TextField),
+      );
+      await tester.enterText(composer, 'hello');
+      await tester.pump(const Duration(milliseconds: 300));
+      final count = cubit.estimateSms('hello')!;
+      expect(find.text('5 chars · ${count.segments}/10 SMS'), findsOneWidget);
+      await tester.tap(find.byIcon(Icons.sms_rounded));
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(sms.sends, 1);
+      expect(tester.widget<TextField>(composer).controller!.text, 'hello');
+      ScaffoldMessenger.of(tester.element(composer)).removeCurrentSnackBar();
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.enterText(composer, List.filled(2000, 'x').join());
+      await tester.pump(const Duration(milliseconds: 100));
+      await tester.tap(find.byIcon(Icons.sms_rounded));
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(sms.sends, 1);
+      expect(
+        find.text('Shorten the message to 10 SMS segments or choose Internet.'),
+        findsOneWidget,
+      );
+      expect(tester.widget<TextField>(composer).controller!.text.length, 2000);
+      expect(find.text('internet history'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      Future<void> settleRoute() async {
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 400));
+        await tester.pump();
+      }
+
+      FocusManager.instance.primaryFocus?.unfocus();
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.tap(find.text('Other').first);
+      await settleRoute();
+      expect(find.textContaining('+12345678901'), findsOneWidget);
+      await tester.tap(find.text('Data SMS number'));
+      await settleRoute();
+      await tester.enterText(
+        find.descendant(
+          of: find.byType(AlertDialog),
+          matching: find.byType(TextField),
+        ),
+        '+441234567890',
+      );
+      await tester.tap(find.text('Save'));
+      await settleRoute();
+      expect(sms.number, '+441234567890');
+      Navigator.of(tester.element(find.text('Data SMS number'))).pop();
+      await settleRoute();
+      ScaffoldMessenger.of(tester.element(composer)).removeCurrentSnackBar();
+      await settleRoute();
+      await tester.tap(find.byTooltip('Data SMS recipient number'));
+      await settleRoute();
+      expect(
+        tester
+            .widget<TextField>(
+              find.descendant(
+                of: find.byType(AlertDialog),
+                matching: find.byType(TextField),
+              ),
+            )
+            .controller!
+            .text,
+        '+441234567890',
+      );
+      await tester.tap(find.text('Cancel'));
+      await settleRoute();
+      await tester.tap(find.text('Other').first);
+      await settleRoute();
+      await tester.tap(find.text('Data SMS number'));
+      await settleRoute();
+      await tester.tap(find.text('Remove'));
+      await settleRoute();
+      Navigator.of(tester.element(find.text('Data SMS number'))).pop();
+      await settleRoute();
+      expect(sms.number, isNull);
+      expect(find.byTooltip('Data SMS recipient number'), findsNothing);
+      expect(find.byIcon(Icons.send_rounded), findsOneWidget);
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump(const Duration(milliseconds: 100));
+      await cubit.close();
+      await messages.live.close();
+    },
+  );
+
   test('bubble shape tolerates a rect narrower than its tail', () {
     for (final isMine in [true, false]) {
       final shape = ChatBubbleShape(isMine: isMine);
@@ -466,6 +723,7 @@ void main() {
     await tester.tap(find.byTooltip('Lock vault'));
     expect(locked, isTrue);
     expect(drafts.values['t'], 'cipher:typed after picker');
+    expect(find.byTooltip('Request ring'), findsNothing);
 
     await tester.tap(find.byType(PopupMenuButton<String>));
     await tester.pump();
@@ -473,6 +731,15 @@ void main() {
     expect(find.text('Jump to date'), findsOneWidget);
     expect(find.text('Clear messages'), findsOneWidget);
     expect(find.text('Delete thread'), findsOneWidget);
+    expect(find.text('Request ring'), findsOneWidget);
+    final requestRingItem = find.ancestor(
+      of: find.text('Request ring'),
+      matching: find.byType(PopupMenuItem<String>),
+    );
+    expect(
+      find.descendant(of: requestRingItem, matching: find.byType(Icon)),
+      findsNothing,
+    );
     expect(find.text('Manage media'), findsNothing);
 
     await tester.pumpWidget(const SizedBox.shrink());
@@ -805,8 +1072,148 @@ void main() {
     },
   );
 
+  testWidgets('can select multiple messages and delete them', (tester) async {
+    tester.view.physicalSize = const Size(1080, 2400);
+    tester.view.devicePixelRatio = 3.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final messages = _Messages();
+    final unused = _Unused();
+    final cubit = ActiveThreadCubit(
+      messageRepository: messages,
+      threadRepository: _Threads(),
+      userRepository: unused,
+      typingRepository: _Typing(),
+      presenceRepository: _Presence(),
+      mediaRepository: unused,
+      messageCache: const NoopMessageCacheRepository(),
+      outbox: _Outbox(),
+      cryptoService: _Crypto(),
+      myUid: 'me',
+    );
+    final thread = ChatThread(
+      threadId: 't',
+      participantIds: const ['me', 'other'],
+      lastMessage: '',
+      createdAt: DateTime.utc(2024),
+      lastMessageAt: DateTime.utc(2024),
+      unreadCounts: const {},
+    );
+    final other = ChatUser(
+      uid: 'other',
+      email: 'other@example.com',
+      displayName: 'Other',
+      publicKey: '',
+      createdAt: DateTime.utc(2024),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: BlocProvider.value(
+          value: cubit,
+          child: ThreadScreen(
+            thread: thread,
+            otherUser: other,
+            mediaLoader: ChatMediaLoader(
+              mediaRepository: unused,
+              cryptoService: _Crypto(),
+            ),
+            vaultBridge: unused,
+            onLock: () {},
+            chatDraftRepository: _Drafts(),
+            stickerPackFactory: (uid) =>
+                LocalStickerPackRepository(userId: uid),
+          ),
+        ),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 50));
+    messages.live.add([
+      _msg('msg-1', 'First message', sender: 'me'),
+      _msg('msg-2', 'Second message', sender: 'me'),
+    ]);
+    await tester.pump(const Duration(milliseconds: 50));
+    await tester.pump(const Duration(milliseconds: 500));
+
+    expect(find.text('First message'), findsOneWidget);
+    expect(find.text('Second message'), findsOneWidget);
+
+    // Invoke select on first bubble
+    final bubble1 = tester.widget<MessageBubble>(
+      find.byKey(const ValueKey('bubble-msg-1')),
+    );
+    expect(bubble1.onSelect, isNotNull);
+    bubble1.onSelect!.call();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    // Selection mode active
+    expect(find.text('1 selected'), findsOneWidget);
+    expect(find.byTooltip('Delete selected messages'), findsOneWidget);
+    expect(find.byTooltip('Save selected media to vault'), findsNothing);
+    final selectedCheck = tester.getRect(
+      find.byIcon(Icons.check_circle_rounded),
+    );
+    final firstBubbleRect = tester.getRect(find.text('First message'));
+    expect(selectedCheck.left, lessThan(40));
+    expect(selectedCheck.right, lessThan(firstBubbleRect.left));
+    expect(firstBubbleRect.right, greaterThan(300));
+
+    // Tapping the message row toggles its selection indicator.
+    await tester.ensureVisible(find.text('Second message'));
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.tap(find.text('Second message'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.text('2 selected'), findsOneWidget);
+    expect(find.byIcon(Icons.check_circle_rounded), findsNWidgets(2));
+    expect(find.byTooltip('Save selected media to vault'), findsNothing);
+
+    // Tap delete button
+    await tester.tap(find.byTooltip('Delete selected messages'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 200));
+
+    expect(find.text('Delete 2 messages?'), findsOneWidget);
+    expect(find.text('Delete for me'), findsOneWidget);
+    expect(find.text('Delete for everyone'), findsOneWidget);
+
+    // Tap "Delete for everyone"
+    await tester.tap(find.text('Delete for everyone'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 200));
+
+    // Verify messages were deleted for everyone
+    expect(
+      messages.deletedForEveryone.map((e) => e.messageId),
+      unorderedEquals(['msg-1', 'msg-2']),
+    );
+    // Verify selection mode exited
+    expect(find.text('2 selected'), findsNothing);
+
+    messages.live.add([
+      _msg(
+        'video-msg',
+        'Video attachment',
+      ).copyWith(mediaType: MessageType.video, mediaRef: 'video-ref'),
+    ]);
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 300));
+    final videoBubble = tester.widget<MessageBubble>(
+      find.byKey(const ValueKey('bubble-video-msg')),
+    );
+    videoBubble.onSelect!.call();
+    await tester.pump();
+    expect(find.byTooltip('Save selected media to vault'), findsOneWidget);
+    expect(find.byIcon(Icons.archive_outlined), findsOneWidget);
+
+    await cubit.close();
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
   testWidgets(
-    'can select multiple messages and delete them',
+    'deleting a linked message trashes its vault item with progress',
     (tester) async {
       tester.view.physicalSize = const Size(1080, 2400);
       tester.view.devicePixelRatio = 3.0;
@@ -814,7 +1221,38 @@ void main() {
       addTearDown(tester.view.resetDevicePixelRatio);
 
       final messages = _Messages();
-      final unused = _Unused();
+      final unused = _Unused()..unlocked = true;
+      final mediaLoader = ChatMediaLoader(
+        mediaRepository: unused,
+        cryptoService: _Crypto(),
+        accountId: 'me',
+      );
+      final message = _msg(
+        'linked-video',
+        'Video attachment',
+      ).copyWith(mediaType: MessageType.video, mediaRef: 'attachment-path');
+      final sourceId = 'me:t:${message.messageId}:${message.mediaRef}';
+      const vaultPhoto = VaultPhoto(
+        id: 'vault-linked-video',
+        originalFilename: 'video.mp4',
+        encryptedFilePath: 'video.enc',
+        thumbnailPath: 'video-thumb.enc',
+        wrappedDek: 'wrapped',
+        photoNonce: 'nonce',
+        thumbnailNonce: 'nonce',
+        encryptionVersion: 1,
+        checksumSha256: 'checksum',
+        fileSize: 5,
+        mimeType: 'video/mp4',
+        createdTimeMs: 0,
+        importedTimeMs: 0,
+        modifiedTimeMs: 0,
+        favorite: false,
+        isTrashed: false,
+      );
+      unused.linked[sourceId] = vaultPhoto;
+      final trashGate = Completer<void>();
+      unused.beforeTrash = () => trashGate.future;
       final cubit = ActiveThreadCubit(
         messageRepository: messages,
         threadRepository: _Threads(),
@@ -850,10 +1288,7 @@ void main() {
             child: ThreadScreen(
               thread: thread,
               otherUser: other,
-              mediaLoader: ChatMediaLoader(
-                mediaRepository: unused,
-                cryptoService: _Crypto(),
-              ),
+              mediaLoader: mediaLoader,
               vaultBridge: unused,
               onLock: () {},
               chatDraftRepository: _Drafts(),
@@ -864,62 +1299,91 @@ void main() {
         ),
       );
       await tester.pump(const Duration(milliseconds: 50));
-      messages.live.add([
-        _msg('msg-1', 'First message', sender: 'me'),
-        _msg('msg-2', 'Second message', sender: 'me'),
-      ]);
+      messages.live.add([message]);
       await tester.pump(const Duration(milliseconds: 50));
-      await tester.pump(const Duration(milliseconds: 500));
+      await tester.pump(const Duration(milliseconds: 300));
 
-      expect(find.text('First message'), findsOneWidget);
-      expect(find.text('Second message'), findsOneWidget);
-
-      // Invoke select on first bubble
-      final bubble1 = tester.widget<MessageBubble>(
-        find.byKey(const ValueKey('bubble-msg-1')),
-      );
-      expect(bubble1.onSelect, isNotNull);
-      bubble1.onSelect!.call();
+      tester
+          .widget<MessageBubble>(
+            find.byKey(const ValueKey('bubble-linked-video')),
+          )
+          .onSelect!
+          .call();
       await tester.pump();
-      await tester.pump(const Duration(milliseconds: 100));
-
-      // Selection mode active
-      expect(find.text('1 selected'), findsOneWidget);
-      expect(find.byTooltip('Delete selected messages'), findsOneWidget);
-
-      // Select second bubble
-      final bubble2 = tester.widget<MessageBubble>(
-        find.byKey(const ValueKey('bubble-msg-2')),
-      );
-      expect(bubble2.onSelect, isNotNull);
-      bubble2.onSelect!.call();
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 100));
-      expect(find.text('2 selected'), findsOneWidget);
-
-      // Tap delete button
       await tester.tap(find.byTooltip('Delete selected messages'));
       await tester.pump();
-      await tester.pump(const Duration(milliseconds: 200));
-
-      expect(find.text('Delete 2 messages?'), findsOneWidget);
-      expect(find.text('Delete for me'), findsOneWidget);
-      expect(find.text('Delete for everyone'), findsOneWidget);
-
-      // Tap "Delete for everyone"
-      await tester.tap(find.text('Delete for everyone'));
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(find.textContaining('will also be moved to Bin'), findsOneWidget);
+      await tester.tap(find.text('Delete for me'));
       await tester.pump();
-      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump(const Duration(milliseconds: 300));
 
-      // Verify messages were deleted for everyone
-      expect(
-        messages.deletedForEveryone.map((e) => e.messageId),
-        unorderedEquals(['msg-1', 'msg-2']),
+      expect(find.text('Deleting selected messages'), findsOneWidget);
+      expect(find.byType(LinearProgressIndicator), findsOneWidget);
+      expect(messages.deletedForUser, isEmpty);
+
+      trashGate.complete();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+      await tester.pump(const Duration(milliseconds: 500));
+      expect(messages.deletedForUser.single.messageId, message.messageId);
+      expect(unused.trashed, ['vault-linked-video']);
+      expect(unused.unlinked, [sourceId]);
+      expect(find.text('Deleting selected messages'), findsNothing);
+
+      final singleMessage = _msg('single-linked-video', 'Single video')
+          .copyWith(
+            mediaType: MessageType.video,
+            mediaRef: 'single-attachment-path',
+          );
+      final singleSourceId =
+          'me:t:${singleMessage.messageId}:${singleMessage.mediaRef}';
+      const singlePhoto = VaultPhoto(
+        id: 'vault-single-video',
+        originalFilename: 'single-video.mp4',
+        encryptedFilePath: 'single-video.enc',
+        thumbnailPath: 'single-video-thumb.enc',
+        wrappedDek: 'wrapped',
+        photoNonce: 'nonce',
+        thumbnailNonce: 'nonce',
+        encryptionVersion: 1,
+        checksumSha256: 'single-checksum',
+        fileSize: 5,
+        mimeType: 'video/mp4',
+        createdTimeMs: 0,
+        importedTimeMs: 0,
+        modifiedTimeMs: 0,
+        favorite: false,
+        isTrashed: false,
       );
-      // Verify selection mode exited
-      expect(find.text('2 selected'), findsNothing);
+      unused.linked[singleSourceId] = singlePhoto;
+      messages.live.add([singleMessage]);
+      await tester.pump(const Duration(milliseconds: 100));
+      await tester.pump(const Duration(milliseconds: 300));
+      tester
+          .widget<MessageBubble>(
+            find.byKey(const ValueKey('bubble-single-linked-video')),
+          )
+          .onDeleteForMe
+          .call();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(
+        find.textContaining('linked Vault item will also be moved to Bin'),
+        findsOneWidget,
+      );
+      await tester.tap(find.text('Delete'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(
+        messages.deletedForUser.map((entry) => entry.messageId),
+        contains('single-linked-video'),
+      );
+      expect(unused.trashed, contains('vault-single-video'));
+      expect(unused.unlinked, contains(singleSourceId));
 
       await cubit.close();
+      mediaLoader.dispose();
       await tester.pumpWidget(const SizedBox.shrink());
     },
   );

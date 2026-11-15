@@ -198,6 +198,16 @@ class PersistentSettingsRepository implements SettingsRepository {
       _kv.write(StorageKeys.screenshotProtectionEnabled, enabled.toString());
 
   @override
+  Future<bool> isHdrPhotoPreviewEnabled() async {
+    final raw = await _kv.read(StorageKeys.hdrPhotoPreviewEnabled);
+    return raw == null ? true : raw == 'true';
+  }
+
+  @override
+  Future<void> setHdrPhotoPreviewEnabled(bool enabled) =>
+      _kv.write(StorageKeys.hdrPhotoPreviewEnabled, enabled.toString());
+
+  @override
   Future<String?> getThemePaletteId() => _kv.read(StorageKeys.themePalette);
 
   @override

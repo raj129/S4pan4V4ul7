@@ -44,6 +44,7 @@ import '../../domain/entities/chat_message.dart';
 import '../../domain/entities/message_metadata.dart';
 import '../../domain/entities/chat_thread.dart';
 import '../../domain/entities/chat_user.dart';
+import 'package:photo_vault/features/vault/domain/entities/vault_photo.dart';
 import '../../domain/entities/live_location.dart';
 import '../../domain/repositories/chat_draft_repository.dart';
 import '../../domain/repositories/live_location_repository.dart';
@@ -62,6 +63,7 @@ import '../widgets/chat_wallpaper.dart';
 import '../widgets/image_quality_sheet.dart';
 import '../widgets/video_quality_sheet.dart';
 import '../widgets/contact_info_sheet.dart';
+import '../widgets/data_sms_number_dialog.dart';
 import '../widgets/message_bubble.dart';
 import '../widgets/user_avatar.dart';
 import '../widgets/typing_indicator.dart';
@@ -193,6 +195,7 @@ class _ThreadScreenState extends State<ThreadScreen>
   final _emojiPickerController = ChatMediaPickerSheetController();
 
   bool _showEmojiPicker = false;
+  bool _useDataSms = false;
   Future<void>? _emojiPickerRoute;
   bool _searching = false;
   final _searchCtrl = TextEditingController();
@@ -278,6 +281,69 @@ class _ThreadScreenState extends State<ThreadScreen>
   void _clearMessageSelection() {
     if (_selectedMessageIds.isEmpty) return;
     setState(() => _selectedMessageIds.clear());
+  }
+
+  List<ChatMessage> _selectedMessages(ActiveThreadLoaded state) => state
+      .visibleMessages
+      .where((message) => _selectedMessageIds.contains(message.messageId))
+      .toList();
+
+  bool _isBulkVaultSelection(ActiveThreadLoaded state) {
+    final selected = _selectedMessages(state);
+    return selected.isNotEmpty &&
+        selected.every(
+          (message) =>
+              message.mediaRef != null &&
+              const {
+                MessageType.image,
+                MessageType.video,
+              }.contains(message.mediaType) &&
+              !state.uploadProgress.containsKey(message.messageId),
+        );
+  }
+
+  Future<void> _showBulkProgress({
+    required String title,
+    required int total,
+    required Future<void> Function(void Function(int, String) update) operation,
+  }) async {
+    final progress = ValueNotifier<(int, String)>((0, 'Preparing…'));
+    final dialog = showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => PopScope(
+        canPop: false,
+        child: AlertDialog(
+          title: Text(title),
+          content: ValueListenableBuilder<(int, String)>(
+            valueListenable: progress,
+            builder: (context, value, _) => Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(value.$2),
+                const SizedBox(height: AppSpacing.md),
+                LinearProgressIndicator(
+                  value: total == 0 ? 1 : value.$1 / total,
+                ),
+                const SizedBox(height: AppSpacing.sm),
+                Text('${value.$1} of $total complete'),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    try {
+      await WidgetsBinding.instance.endOfFrame;
+      await operation((completed, status) {
+        progress.value = (completed, status);
+      });
+    } finally {
+      if (mounted) Navigator.of(context, rootNavigator: true).pop();
+      await dialog;
+      progress.dispose();
+    }
   }
 
   @override
@@ -447,44 +513,50 @@ class _ThreadScreenState extends State<ThreadScreen>
     for (final message in state.messages) {
       final ref = message.mediaRef;
       if (!mounted || !widget.vaultBridge.isUnlocked) return;
-      if (ref == null ||
-          message.senderId == uid ||
-          !_moveRecoveryChecked.add(ref)) {
-        continue;
-      }
-      final key = '$uid:$ref';
+      if (ref == null) continue;
+      final previewRef = message.previewRef;
+      final paths = {ref, ?previewRef};
+      final keys = paths.map(widget.mediaLoader.diskKey).toList();
       void checkOwner() {
         if (!mounted || widget.mediaLoader.accountId != uid) {
           throw StateError('Chat account changed during move recovery.');
         }
       }
 
-      try {
-        // Resume only a previously recorded, user-requested move. This never
-        // creates a new vault import or downloads attachment bytes.
-        final result = await widget.vaultBridge.resumeMove(
-          sourceId: '$uid:${message.threadId}:$ref',
-          onMarkMoved: () async {
-            checkOwner();
-            await widget.mediaLoader.diskCache.markMoved(key);
-          },
-          onSourceCleanup: () async {
-            checkOwner();
-            await widget.mediaLoader.removeAfterVaultMove(ref);
-          },
-        );
-        if (result?.cleanupPending == true) {
-          throw StateError('Committed attachment cleanup remains pending.');
-        }
-      } catch (_) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text(
-                'Previous vault move needs attention. Tap Move to vault to retry.',
-              ),
-            ),
+      for (final sourceId in _vaultSourceIds(message, uid)) {
+        if (!_moveRecoveryChecked.add(sourceId)) continue;
+        try {
+          // Resume only a previously recorded, user-requested move. This never
+          // creates a new vault import or downloads attachment bytes.
+          final result = await widget.vaultBridge.resumeMove(
+            sourceId: sourceId,
+            onMarkMoved: () async {
+              checkOwner();
+              for (final key in keys) {
+                await widget.mediaLoader.diskCache.markMoved(key);
+              }
+            },
+            onSourceCleanup: () async {
+              checkOwner();
+              for (final path in paths) {
+                await widget.mediaLoader.removeAfterVaultMove(path);
+              }
+            },
           );
+          if (result?.cleanupPending == true) {
+            throw StateError('Committed attachment cleanup remains pending.');
+          }
+          if (result != null) break;
+        } catch (_) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text(
+                  'Previous vault save needs attention. Tap Save to vault to retry.',
+                ),
+              ),
+            );
+          }
         }
       }
     }
@@ -1017,6 +1089,7 @@ class _ThreadScreenState extends State<ThreadScreen>
   PreferredSizeWidget _buildAppBar(BuildContext context) {
     if (_isSelectionMode) {
       final count = _selectedMessageIds.length;
+      final state = context.read<ActiveThreadCubit>().state;
       return AppBar(
         leading: IconButton(
           icon: const Icon(Icons.close),
@@ -1025,11 +1098,17 @@ class _ThreadScreenState extends State<ThreadScreen>
         ),
         title: Text(
           '$count selected',
-          style: Theme.of(context).textTheme.titleMedium?.copyWith(
-            fontWeight: FontWeight.w600,
-          ),
+          style: Theme.of(
+            context,
+          ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
         ),
         actions: [
+          if (state is ActiveThreadLoaded && _isBulkVaultSelection(state))
+            IconButton(
+              icon: const Icon(Icons.archive_outlined),
+              tooltip: 'Save selected media to vault',
+              onPressed: () => unawaited(_moveSelectedMediaToVault()),
+            ),
           IconButton(
             icon: const Icon(Icons.delete_outline_rounded),
             tooltip: 'Delete selected messages',
@@ -1143,6 +1222,8 @@ class _ThreadScreenState extends State<ThreadScreen>
               _confirmClearMessages(context);
             } else if (value == 'delete') {
               _confirmDeleteThread(context);
+            } else if (value == 'ring') {
+              unawaited(_requestRing());
             }
           },
           itemBuilder: (context) => [
@@ -1153,6 +1234,7 @@ class _ThreadScreenState extends State<ThreadScreen>
             const PopupMenuItem(value: 'date', child: Text('Jump to date')),
             const PopupMenuItem(value: 'clear', child: Text('Clear messages')),
             const PopupMenuItem(value: 'delete', child: Text('Delete thread')),
+            const PopupMenuItem(value: 'ring', child: Text('Request ring')),
           ],
         ),
         IconButton(
@@ -1236,6 +1318,12 @@ class _ThreadScreenState extends State<ThreadScreen>
               context,
               profileService: service,
               user: widget.otherUser,
+              dataSms: context.read<ActiveThreadCubit>().dataSms,
+              onSmsNumberChanged: (number) {
+                if (mounted && number == null) {
+                  setState(() => _useDataSms = false);
+                }
+              },
               mediaLoader: widget.mediaLoader,
               mediaManagerService: widget.mediaManagerService,
               threadId: widget.thread.threadId,
@@ -1245,6 +1333,14 @@ class _ThreadScreenState extends State<ThreadScreen>
         },
       ),
     );
+  }
+
+  Future<void> _requestRing() async {
+    final sent = await context.read<ActiveThreadCubit>().requestRing();
+    if (!mounted || !sent) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(const SnackBar(content: Text('Ring request sent.')));
   }
 
   void _stopSearch() {
@@ -1418,6 +1514,8 @@ class _ThreadScreenState extends State<ThreadScreen>
                   isSelected: _selectedMessageIds.contains(msg.messageId),
                   onSelect: () => _toggleMessageSelection(msg.messageId),
                   mediaLoader: widget.mediaLoader,
+                  loadLinkedVaultMedia: _loadLinkedVaultMedia,
+                  loadLinkedVaultThumbnail: _loadLinkedVaultThumbnail,
                   liveLocationRepository: widget.liveLocationRepository,
                   notesRepository: widget.notesRepository,
                   onStopLiveLocation: _stopLiveLocation,
@@ -1445,18 +1543,23 @@ class _ThreadScreenState extends State<ThreadScreen>
                       : '',
                   isFirstInGroup: item.isFirstInGroup,
                   isLastInGroup: item.isLastInGroup,
-                  onReply: () {
-                    cubit.setReplyTarget(msg);
-                    _inputFocus.requestFocus();
-                  },
-                  onReact: (emoji) => cubit.toggleReaction(msg, emoji),
+                  onReply: _useDataSms || msg.isDataSms
+                      ? null
+                      : () {
+                          cubit.setReplyTarget(msg);
+                          _inputFocus.requestFocus();
+                        },
+                  onReact: _useDataSms
+                      ? null
+                      : (emoji) => cubit.toggleReaction(msg, emoji),
                   // Always wired up for own, non-media messages — eligibility
                   // (30-minute / edited-before-read rule) is checked once,
                   // centrally, inside `_promptEdit`, so both the long-press menu
                   // entry and the Signal-style double-tap give the same
                   // accept/reject behaviour instead of silently disappearing.
                   onEdit:
-                      isMine &&
+                      !_useDataSms &&
+                          isMine &&
                           !msg.isMedia &&
                           msg.mediaType != MessageType.liveLocation &&
                           !msg.isGeoShare &&
@@ -1470,7 +1573,13 @@ class _ThreadScreenState extends State<ThreadScreen>
                       : null,
                   canReplyFromLeftToRight: true,
                   onTapQuote: _jumpToMessage,
-                  onSaveToVault: msg.isMedia && msg.senderId != cubit.myUid
+                  onSaveToVault:
+                      msg.mediaRef != null &&
+                          sendStatus == null &&
+                          const {
+                            MessageType.image,
+                            MessageType.video,
+                          }.contains(msg.mediaType)
                       ? () => _saveToVault(msg)
                       : null,
                   onSaveAsSticker:
@@ -1484,7 +1593,9 @@ class _ThreadScreenState extends State<ThreadScreen>
                       ? () => unawaited(_saveAsSticker(msg, cubit))
                       : null,
                   onForward:
-                      msg.mediaType == MessageType.liveLocation ||
+                      _useDataSms ||
+                          msg.isDataSms ||
+                          msg.mediaType == MessageType.liveLocation ||
                           msg.isGeoShare
                       ? null
                       : () => _promptForward(msg),
@@ -1495,7 +1606,7 @@ class _ThreadScreenState extends State<ThreadScreen>
                       ? () => cubit.discardMessage(msg.messageId)
                       : null,
                   onDeleteForMe: () => _confirmDeleteForMe(msg),
-                  onDeleteForEveryone: isMine
+                  onDeleteForEveryone: isMine && !_useDataSms && !msg.isDataSms
                       ? () => _confirmDeleteForEveryone(msg)
                       : null,
                 ),
@@ -1737,8 +1848,16 @@ class _ThreadScreenState extends State<ThreadScreen>
           'Remove every message from your view of this chat? '
           'The other person will not be affected and can still see them.',
         ),
+        actionsAlignment: MainAxisAlignment.end,
+        actionsOverflowButtonSpacing: AppSpacing.md,
+        actionsPadding: const EdgeInsets.fromLTRB(
+          AppSpacing.lg,
+          AppSpacing.xs,
+          AppSpacing.lg,
+          AppSpacing.lg,
+        ),
         actions: [
-          TextButton(
+          OutlinedButton(
             onPressed: () => Navigator.pop(dialogContext, false),
             child: const Text('Cancel'),
           ),
@@ -1769,12 +1888,24 @@ class _ThreadScreenState extends State<ThreadScreen>
         content: const Text(
           'Delete this conversation and all its messages? This cannot be undone.',
         ),
+        actionsAlignment: MainAxisAlignment.end,
+        actionsOverflowButtonSpacing: AppSpacing.md,
+        actionsPadding: const EdgeInsets.fromLTRB(
+          AppSpacing.lg,
+          AppSpacing.xs,
+          AppSpacing.lg,
+          AppSpacing.lg,
+        ),
         actions: [
-          TextButton(
+          OutlinedButton(
             onPressed: () => Navigator.pop(dialogContext, false),
             child: const Text('Cancel'),
           ),
           FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(dialogContext).colorScheme.error,
+              foregroundColor: Theme.of(dialogContext).colorScheme.onError,
+            ),
             onPressed: () => Navigator.pop(dialogContext, true),
             child: const Text('Delete'),
           ),
@@ -1827,36 +1958,112 @@ class _ThreadScreenState extends State<ThreadScreen>
     final cubit = this.context.read<ActiveThreadCubit>();
     final state = cubit.state;
     if (state is! ActiveThreadLoaded) return;
-    final selectedMsgs = state.visibleMessages
-        .where((m) => _selectedMessageIds.contains(m.messageId))
-        .toList();
+    final selectedMsgs = _selectedMessages(state);
     if (selectedMsgs.isEmpty) return;
 
-    final allMine = selectedMsgs.every((m) => m.senderId == cubit.myUid);
+    final hasAttachments = selectedMsgs.any(
+      (message) => message.mediaRef != null,
+    );
+    if (hasAttachments && !widget.vaultBridge.isUnlocked) {
+      ScaffoldMessenger.of(this.context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Unlock the vault to check for linked items before deleting media.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    final linkedByMessage = <String, ({String sourceId, VaultPhoto photo})>{};
+    try {
+      for (final message in selectedMsgs) {
+        final linked = await _findLinkedVaultSource(message, cubit.myUid);
+        if (linked != null) linkedByMessage[message.messageId] = linked;
+      }
+    } catch (error) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not check linked vault items: $error')),
+      );
+      return;
+    }
+
+    final selectedSourceIds = linkedByMessage.values
+        .map((link) => link.sourceId)
+        .toSet();
+    final vaultPhotosToTrash = <String>{};
+    try {
+      for (final photo in linkedByMessage.values.map((link) => link.photo)) {
+        if (vaultPhotosToTrash.contains(photo.id)) continue;
+        final sources = await widget.vaultBridge.linkedAttachmentSources(
+          photo.id,
+        );
+        if (sources.isEmpty || sources.every(selectedSourceIds.contains)) {
+          vaultPhotosToTrash.add(photo.id);
+        }
+      }
+    } catch (error) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not verify vault links: $error')),
+      );
+      return;
+    }
+    if (!context.mounted) return;
+
+    final allMine =
+        !_useDataSms &&
+        selectedMsgs.every((m) => m.senderId == cubit.myUid && !m.isDataSms);
     final count = selectedMsgs.length;
-    final titleText = count == 1 ? 'Delete message?' : 'Delete $count messages?';
+    final titleText = count == 1
+        ? 'Delete message?'
+        : 'Delete $count messages?';
+    final baseContent = allMine
+        ? (count == 1
+              ? 'Delete this message for yourself or for everyone in this chat?'
+              : 'Delete these messages for yourself or for everyone in this chat?')
+        : (count == 1
+              ? 'Remove this message from your copy of the chat? '
+                    'The other person will still see it.'
+              : 'Remove these messages from your copy of the chat? '
+                    'The other person will still see them.');
+    final sharedVaultPhotoCount = linkedByMessage.values
+        .map((link) => link.photo.id)
+        .toSet()
+        .difference(vaultPhotosToTrash)
+        .length;
+    final vaultContent = [
+      if (vaultPhotosToTrash.isNotEmpty)
+        '${vaultPhotosToTrash.length} linked vault '
+            '${vaultPhotosToTrash.length == 1 ? 'item' : 'items'} will also be moved to Bin.',
+      if (sharedVaultPhotoCount > 0)
+        '$sharedVaultPhotoCount vault '
+            '${sharedVaultPhotoCount == 1 ? 'item has' : 'items have'} other chat links and will stay in Vault.',
+      if (linkedByMessage.isEmpty)
+        'No selected messages have a linked vault item.',
+      'Other selected messages will only be deleted from chat.',
+    ].join(' ');
 
     final choice = await showDialog<String>(
-      context: this.context,
+      context: context,
       builder: (dialogContext) => AlertDialog(
         title: Text(titleText),
-        content: Text(
-          allMine
-              ? (count == 1
-                  ? 'Delete this message for yourself or for everyone in this chat?'
-                  : 'Delete these messages for yourself or for everyone in this chat?')
-              : (count == 1
-                  ? 'Remove this message from your copy of the chat? '
-                      'The other person will still see it.'
-                  : 'Remove these messages from your copy of the chat? '
-                      'The other person will still see them.'),
+        content: Text('$baseContent\n\n$vaultContent'),
+        actionsAlignment: MainAxisAlignment.end,
+        actionsOverflowButtonSpacing: AppSpacing.md,
+        actionsPadding: const EdgeInsets.fromLTRB(
+          AppSpacing.lg,
+          AppSpacing.xs,
+          AppSpacing.lg,
+          AppSpacing.lg,
         ),
         actions: [
-          TextButton(
+          OutlinedButton(
             onPressed: () => Navigator.pop(dialogContext, null),
             child: const Text('Cancel'),
           ),
-          FilledButton(
+          FilledButton.tonal(
             onPressed: () => Navigator.pop(dialogContext, 'forMe'),
             child: const Text('Delete for me'),
           ),
@@ -1878,20 +2085,231 @@ class _ThreadScreenState extends State<ThreadScreen>
     final messagesToDelete = List<ChatMessage>.from(selectedMsgs);
     _clearMessageSelection();
 
-    try {
-      for (final msg in messagesToDelete) {
-        await _stopOwnLiveLocationBeforeDelete(msg, cubit);
-        if (choice == 'forEveryone') {
-          await cubit.deleteMessageForEveryone(msg);
-        } else {
-          await cubit.deleteMessageForMe(msg);
+    var deletedCount = 0;
+    var trashedCount = 0;
+    final failures = <String>[];
+    final handledVaultPhotoIds = <String>{};
+    final expiry = DateTime.now()
+        .add(const Duration(days: 30))
+        .millisecondsSinceEpoch;
+
+    Future<void> deleteChatMessage(ChatMessage message) async {
+      await _stopOwnLiveLocationBeforeDelete(message, cubit);
+      if (choice == 'forEveryone') {
+        await cubit.deleteMessageForEveryone(message);
+      } else {
+        await cubit.deleteMessageForMe(message);
+      }
+    }
+
+    await _showBulkProgress(
+      title: 'Deleting selected messages',
+      total: messagesToDelete.length,
+      operation: (update) async {
+        var completed = 0;
+        for (final message in messagesToDelete) {
+          final link = linkedByMessage[message.messageId];
+          if (link != null &&
+              vaultPhotosToTrash.contains(link.photo.id) &&
+              !handledVaultPhotoIds.add(link.photo.id)) {
+            continue;
+          }
+
+          if (link != null && vaultPhotosToTrash.contains(link.photo.id)) {
+            final linkedMessages = messagesToDelete
+                .where(
+                  (candidate) =>
+                      linkedByMessage[candidate.messageId]?.photo.id ==
+                      link.photo.id,
+                )
+                .toList();
+            update(completed, 'Moving linked vault item to Bin');
+            try {
+              await widget.vaultBridge.moveAttachmentToTrash(
+                link.photo,
+                expiresAtMs: expiry,
+              );
+              trashedCount++;
+            } catch (error) {
+              failures.add(
+                'Could not move ${link.photo.originalFilename} to Bin: $error',
+              );
+              completed += linkedMessages.length;
+              update(
+                completed,
+                'Kept linked messages because the vault item could not be moved.',
+              );
+              continue;
+            }
+
+            final deletedSources = <String>{};
+            final failedSources = <String>{};
+            var groupDeleteFailed = false;
+            for (final linkedMessage in linkedMessages) {
+              final linkedSource =
+                  linkedByMessage[linkedMessage.messageId]!.sourceId;
+              update(
+                completed,
+                'Deleting ${linkedMessage.documentName ?? 'linked message'}',
+              );
+              try {
+                await deleteChatMessage(linkedMessage);
+                deletedCount++;
+                deletedSources.add(linkedSource);
+              } catch (error) {
+                groupDeleteFailed = true;
+                failedSources.add(linkedSource);
+                failures.add(
+                  'Could not delete ${linkedMessage.messageId}: $error',
+                );
+              }
+              completed++;
+              update(
+                completed,
+                'Processed $completed of ${messagesToDelete.length}',
+              );
+            }
+
+            if (groupDeleteFailed) {
+              try {
+                await widget.vaultBridge.restoreAttachmentFromTrash(
+                  link.photo.id,
+                );
+                trashedCount--;
+              } catch (error) {
+                failures.add(
+                  'Could not restore ${link.photo.originalFilename} after a chat delete failed: $error',
+                );
+              }
+            }
+            for (final sourceId in deletedSources.difference(failedSources)) {
+              try {
+                await widget.vaultBridge.unlinkAttachment(sourceId);
+              } catch (error) {
+                failures.add('Could not update a vault link: $error');
+              }
+            }
+            continue;
+          }
+
+          update(
+            completed,
+            'Deleting ${message.documentName ?? 'selected message'}',
+          );
+          try {
+            await deleteChatMessage(message);
+            deletedCount++;
+          } catch (error) {
+            failures.add('Could not delete ${message.messageId}: $error');
+            completed++;
+            update(
+              completed,
+              'Processed $completed of ${messagesToDelete.length}',
+            );
+            continue;
+          }
+          if (link != null) {
+            try {
+              await widget.vaultBridge.unlinkAttachment(link.sourceId);
+            } catch (error) {
+              failures.add('Could not update a vault link: $error');
+            }
+          }
+          completed++;
+          update(
+            completed,
+            'Processed $completed of ${messagesToDelete.length}',
+          );
         }
+      },
+    );
+
+    if (!mounted) return;
+    final summary =
+        '$deletedCount of ${messagesToDelete.length} messages deleted; '
+        '$trashedCount linked vault items moved to Bin.'
+        '${failures.isEmpty ? '' : ' ${failures.join(' ')}'}';
+    ScaffoldMessenger.of(
+      this.context,
+    ).showSnackBar(SnackBar(content: Text(summary)));
+  }
+
+  Future<({String sourceId, VaultPhoto photo})?> _findLinkedVaultSource(
+    ChatMessage message,
+    String uid,
+  ) async {
+    for (final sourceId in _vaultSourceIds(message, uid)) {
+      final photo = await widget.vaultBridge.linkedAttachment(sourceId);
+      if (photo != null) return (sourceId: sourceId, photo: photo);
+    }
+    return null;
+  }
+
+  Future<({String sourceId, VaultPhoto photo, bool moveToBin})?>
+  _linkedVaultDisposition(ChatMessage message, String uid) async {
+    final link = await _findLinkedVaultSource(message, uid);
+    if (link == null) return null;
+    final sources = await widget.vaultBridge.linkedAttachmentSources(
+      link.photo.id,
+    );
+    return (
+      sourceId: link.sourceId,
+      photo: link.photo,
+      moveToBin:
+          sources.isEmpty || sources.every((source) => source == link.sourceId),
+    );
+  }
+
+  Future<void> _deleteSingleMessage(
+    ChatMessage message,
+    ActiveThreadCubit cubit, {
+    required bool forEveryone,
+    ({String sourceId, VaultPhoto photo, bool moveToBin})? link,
+  }) async {
+    var movedToBin = false;
+    if (link?.moveToBin == true) {
+      await widget.vaultBridge.moveAttachmentToTrash(
+        link!.photo,
+        expiresAtMs: DateTime.now()
+            .add(const Duration(days: 30))
+            .millisecondsSinceEpoch,
+      );
+      movedToBin = true;
+    }
+
+    try {
+      await _stopOwnLiveLocationBeforeDelete(message, cubit);
+      if (forEveryone) {
+        await cubit.deleteMessageForEveryone(message);
+      } else {
+        await cubit.deleteMessageForMe(message);
       }
     } catch (error) {
-      if (mounted) {
-        ScaffoldMessenger.of(this.context).showSnackBar(
-          SnackBar(content: Text('Could not delete messages: $error')),
-        );
+      if (movedToBin && link != null) {
+        try {
+          await widget.vaultBridge.restoreAttachmentFromTrash(link.photo.id);
+        } catch (restoreError) {
+          throw StateError(
+            'Chat delete failed ($error), and the Vault item could not be restored ($restoreError).',
+          );
+        }
+      }
+      rethrow;
+    }
+
+    if (link != null) {
+      try {
+        await widget.vaultBridge.unlinkAttachment(link.sourceId);
+      } catch (error) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                'Message deleted, but its vault link could not be cleared: $error',
+              ),
+            ),
+          );
+        }
       }
     }
   }
@@ -1907,6 +2325,32 @@ class _ThreadScreenState extends State<ThreadScreen>
     final pending =
         state is ActiveThreadLoaded &&
         state.uploadProgress.containsKey(msg.messageId);
+    if (msg.mediaRef != null && !widget.vaultBridge.isUnlocked) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Unlock the vault to check for linked items before deleting media.',
+          ),
+        ),
+      );
+      return;
+    }
+    late final ({String sourceId, VaultPhoto photo, bool moveToBin})? link;
+    try {
+      link = await _linkedVaultDisposition(msg, cubit.myUid);
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not check the vault link: $error')),
+      );
+      return;
+    }
+    if (!mounted) return;
+    final vaultWarning = link == null
+        ? ''
+        : link.moveToBin
+        ? ' Its linked Vault item will also be moved to Bin.'
+        : ' Its Vault item is linked to other chat messages and will stay in Vault.';
     final ok = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
@@ -1915,10 +2359,18 @@ class _ThreadScreenState extends State<ThreadScreen>
           pending
               ? 'Cancel this upload and delete the pending message and its temporary files?'
               : 'Remove this message from your copy of the chat? '
-                    'The other person will still see it.',
+                    'The other person will still see it.$vaultWarning',
+        ),
+        actionsAlignment: MainAxisAlignment.end,
+        actionsOverflowButtonSpacing: AppSpacing.md,
+        actionsPadding: const EdgeInsets.fromLTRB(
+          AppSpacing.lg,
+          AppSpacing.xs,
+          AppSpacing.lg,
+          AppSpacing.lg,
         ),
         actions: [
-          TextButton(
+          OutlinedButton(
             onPressed: () => Navigator.pop(dialogContext, false),
             child: const Text('Cancel'),
           ),
@@ -1931,8 +2383,7 @@ class _ThreadScreenState extends State<ThreadScreen>
     );
     if (ok != true || !mounted) return;
     try {
-      await _stopOwnLiveLocationBeforeDelete(msg, cubit);
-      await cubit.deleteMessageForMe(msg);
+      await _deleteSingleMessage(msg, cubit, forEveryone: false, link: link);
     } catch (error) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -1947,16 +2398,50 @@ class _ThreadScreenState extends State<ThreadScreen>
   /// routed through the screen's stable [context].
   Future<void> _confirmDeleteForEveryone(ChatMessage msg) async {
     final cubit = context.read<ActiveThreadCubit>();
+    if (msg.mediaRef != null && !widget.vaultBridge.isUnlocked) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Unlock the vault to check for linked items before deleting media.',
+          ),
+        ),
+      );
+      return;
+    }
+    late final ({String sourceId, VaultPhoto photo, bool moveToBin})? link;
+    try {
+      link = await _linkedVaultDisposition(msg, cubit.myUid);
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not check the vault link: $error')),
+      );
+      return;
+    }
+    if (!mounted) return;
+    final vaultWarning = link == null
+        ? ''
+        : link.moveToBin
+        ? ' The linked Vault item will also be moved to Bin.'
+        : ' The Vault item is linked to other chat messages and will stay in Vault.';
     final ok = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
         title: const Text('Delete for everyone'),
-        content: const Text(
+        content: Text(
           'This message will be deleted for everyone in this chat. '
-          'This cannot be undone.',
+          'This cannot be undone.$vaultWarning',
+        ),
+        actionsAlignment: MainAxisAlignment.end,
+        actionsOverflowButtonSpacing: AppSpacing.md,
+        actionsPadding: const EdgeInsets.fromLTRB(
+          AppSpacing.lg,
+          AppSpacing.xs,
+          AppSpacing.lg,
+          AppSpacing.lg,
         ),
         actions: [
-          TextButton(
+          OutlinedButton(
             onPressed: () => Navigator.pop(dialogContext, false),
             child: const Text('Cancel'),
           ),
@@ -1973,8 +2458,7 @@ class _ThreadScreenState extends State<ThreadScreen>
     );
     if (ok != true || !mounted) return;
     try {
-      await _stopOwnLiveLocationBeforeDelete(msg, cubit);
-      await cubit.deleteMessageForEveryone(msg);
+      await _deleteSingleMessage(msg, cubit, forEveryone: true, link: link);
     } catch (error) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -2265,13 +2749,143 @@ class _ThreadScreenState extends State<ThreadScreen>
     );
   }
 
+  Future<void> _switchSmsMode(bool useSms) async {
+    final cubit = context.read<ActiveThreadCubit>();
+    if (useSms) {
+      if (cubit.dataSms == null) return;
+      try {
+        if (await cubit.smsPhone() == null) {
+          if (!mounted || !await _configureSmsNumber()) return;
+        }
+        await cubit.dataSms!.enable();
+        if (!mounted) return;
+        if (_showEmojiPicker) {
+          await _dismissEmojiSheet(focusComposer: false);
+        }
+        cubit.clearReplyTarget();
+        unawaited(cubit.setTyping(false));
+      } catch (error) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Data SMS setup failed: $error')),
+          );
+        }
+        return;
+      }
+    }
+    if (mounted) setState(() => _useDataSms = useSms);
+  }
+
+  Future<void> _showTransportMenu() async {
+    final cubit = context.read<ActiveThreadCubit>();
+    if (cubit.dataSms == null || _isEditing) return;
+    final selected = await showModalBottomSheet<bool>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) {
+        final cs = Theme.of(sheetContext).colorScheme;
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.only(bottom: AppSpacing.md),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: AppSpacing.lg,
+                  ),
+                  child: Text(
+                    'Sending method',
+                    style: Theme.of(sheetContext).textTheme.titleMedium
+                        ?.copyWith(fontWeight: FontWeight.w600),
+                  ),
+                ),
+                const SizedBox(height: AppSpacing.sm),
+                ListTile(
+                  leading: CircleAvatar(
+                    backgroundColor: !_useDataSms
+                        ? cs.primaryContainer
+                        : cs.surfaceContainerHighest,
+                    child: Icon(
+                      Icons.cloud_outlined,
+                      color: !_useDataSms
+                          ? cs.onPrimaryContainer
+                          : cs.onSurfaceVariant,
+                    ),
+                  ),
+                  title: const Text('Internet'),
+                  subtitle: const Text('Fast, free over Wi-Fi or mobile data'),
+                  trailing: !_useDataSms
+                      ? Icon(Icons.check_rounded, color: cs.primary)
+                      : null,
+                  onTap: () => Navigator.of(sheetContext).pop(false),
+                ),
+                ListTile(
+                  leading: CircleAvatar(
+                    backgroundColor: _useDataSms
+                        ? cs.tertiaryContainer
+                        : cs.surfaceContainerHighest,
+                    child: Icon(
+                      Icons.sim_card_outlined,
+                      color: _useDataSms
+                          ? cs.onTertiaryContainer
+                          : cs.onSurfaceVariant,
+                    ),
+                  ),
+                  title: const Text('Data SMS'),
+                  subtitle: const Text(
+                    'Encrypted offline SMS. Operator charges apply.',
+                  ),
+                  trailing: _useDataSms
+                      ? Icon(Icons.check_rounded, color: cs.tertiary)
+                      : null,
+                  onTap: () => Navigator.of(sheetContext).pop(true),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+    if (selected != null && mounted) {
+      await _switchSmsMode(selected);
+    }
+  }
+
+  Future<bool> _configureSmsNumber() async {
+    final service = context.read<ActiveThreadCubit>().dataSms;
+    if (service == null) return false;
+    final threadId = widget.thread.threadId;
+    try {
+      final current = await service.phone(threadId);
+      if (!mounted) return false;
+      final result = await showDataSmsNumberDialog(
+        context,
+        currentNumber: current,
+        saveNumber: (number) => service.setPhone(threadId, number),
+      );
+      if (mounted && result == false) setState(() => _useDataSms = false);
+      return result == true;
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not load Data SMS number: $error')),
+        );
+      }
+      return false;
+    }
+  }
+
   Widget _buildInputBar(
     BuildContext context, {
     bool applyBottomSafeArea = true,
     FocusNode? inputFocusNode,
   }) {
     final cs = Theme.of(context).colorScheme;
+    final cubit = context.read<ActiveThreadCubit>();
     final composerFocusNode = inputFocusNode ?? _inputFocus;
+    final canUseSms = cubit.dataSms != null && !_isEditing;
     return SafeArea(
       top: false,
       bottom: applyBottomSafeArea,
@@ -2292,7 +2906,7 @@ class _ThreadScreenState extends State<ThreadScreen>
               tooltip: _showEmojiPicker
                   ? 'Keyboard'
                   : 'Emoji, stickers, and GIFs',
-              onPressed: _toggleEmojiPicker,
+              onPressed: _useDataSms ? null : _toggleEmojiPicker,
             ),
             const SizedBox(width: AppSpacing.xs),
             Expanded(
@@ -2302,57 +2916,122 @@ class _ThreadScreenState extends State<ThreadScreen>
                   color: cs.surfaceContainerHigh,
                   borderRadius: BorderRadius.circular(18),
                   border: Border.all(
-                    color: cs.outlineVariant.withValues(alpha: 0.35),
-                    width: 1,
+                    color: _useDataSms
+                        ? cs.tertiary
+                        : cs.outlineVariant.withValues(alpha: 0.35),
+                    width: _useDataSms ? 2.0 : 1.0,
                   ),
                 ),
                 padding: const EdgeInsets.only(
                   left: AppSpacing.md,
                   right: AppSpacing.xxs,
                 ),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.end,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    Expanded(
-                      child: TextField(
-                        controller: _textCtrl,
-                        focusNode: composerFocusNode,
-                        maxLines: 5,
-                        minLines: 1,
-                        textCapitalization: TextCapitalization.sentences,
-                        style: Theme.of(context).textTheme.bodyLarge,
-                        onTap: () {
-                          if (_showEmojiPicker) {
-                            unawaited(_dismissEmojiSheet(focusComposer: true));
-                          }
-                        },
-                        decoration: InputDecoration(
-                          hintText: _isEditing ? 'Edit message' : 'Message…',
-                          filled: false,
-                          border: InputBorder.none,
-                          enabledBorder: InputBorder.none,
-                          focusedBorder: InputBorder.none,
-                          isDense: true,
-                          contentPadding: const EdgeInsets.symmetric(
-                            vertical: AppSpacing.md,
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: _textCtrl,
+                            focusNode: composerFocusNode,
+                            maxLines: 5,
+                            minLines: 1,
+                            textCapitalization: TextCapitalization.sentences,
+                            style: Theme.of(context).textTheme.bodyLarge,
+                            onTap: () {
+                              if (_showEmojiPicker) {
+                                unawaited(
+                                  _dismissEmojiSheet(focusComposer: true),
+                                );
+                              }
+                            },
+                            decoration: InputDecoration(
+                              hintText: _isEditing
+                                  ? 'Edit message'
+                                  : _useDataSms
+                                  ? 'Data SMS message…'
+                                  : 'Message…',
+                              filled: false,
+                              border: InputBorder.none,
+                              enabledBorder: InputBorder.none,
+                              focusedBorder: InputBorder.none,
+                              isDense: true,
+                              contentPadding: const EdgeInsets.symmetric(
+                                vertical: AppSpacing.md,
+                              ),
+                              hintStyle: Theme.of(context).textTheme.bodyLarge
+                                  ?.copyWith(color: cs.onSurfaceVariant),
+                            ),
+                            onChanged: (v) {
+                              if (_isEditing) {
+                                _hasText.value = v.trim().isNotEmpty;
+                                return;
+                              }
+                              if (!_useDataSms) {
+                                context.read<ActiveThreadCubit>().onTextChanged(
+                                  v,
+                                );
+                              }
+                            },
                           ),
-                          hintStyle: Theme.of(context).textTheme.bodyLarge
-                              ?.copyWith(color: cs.onSurfaceVariant),
                         ),
-                        onChanged: (v) {
-                          if (_isEditing) {
-                            _hasText.value = v.trim().isNotEmpty;
-                            return;
-                          }
-                          context.read<ActiveThreadCubit>().onTextChanged(v);
-                        },
+                        if (_useDataSms)
+                          _ComposerAction(
+                            icon: Icons.sim_card_outlined,
+                            tooltip: 'Data SMS recipient number',
+                            onPressed: () => _configureSmsNumber(),
+                          )
+                        else
+                          _ComposerAction(
+                            icon: Icons.add_rounded,
+                            tooltip: 'Attach',
+                            onPressed: () => _pickMedia(context),
+                          ),
+                      ],
+                    ),
+                    if (_useDataSms)
+                      Padding(
+                        padding: const EdgeInsets.only(
+                          bottom: AppSpacing.xs,
+                          left: AppSpacing.xxs,
+                          right: AppSpacing.xs,
+                        ),
+                        child: ValueListenableBuilder<TextEditingValue>(
+                          valueListenable: _textCtrl,
+                          builder: (_, value, _) {
+                            final estimate = cubit.estimateSms(value.text);
+                            final chars = estimate?.characters ?? 0;
+                            final segs = estimate?.segments ?? 0;
+                            final isOver = segs > 10;
+                            return Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  Icons.sim_card_outlined,
+                                  size: 13,
+                                  color: isOver ? cs.error : cs.tertiary,
+                                ),
+                                const SizedBox(width: 4),
+                                Flexible(
+                                  child: Text(
+                                    '$chars chars · $segs/10 SMS',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w600,
+                                      color: isOver ? cs.error : cs.tertiary,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            );
+                          },
+                        ),
                       ),
-                    ),
-                    _ComposerAction(
-                      icon: Icons.add_rounded,
-                      tooltip: 'Attach',
-                      onPressed: () => _pickMedia(context),
-                    ),
                   ],
                 ),
               ),
@@ -2361,6 +3040,8 @@ class _ThreadScreenState extends State<ThreadScreen>
             _SendButton(
               hasText: _hasText,
               onSend: _isEditing ? _commitEdit : _send,
+              onLongPress: canUseSms ? _showTransportMenu : null,
+              isDataSms: _useDataSms,
               icon: _isEditing ? Icons.check_rounded : Icons.send_rounded,
             ),
           ],
@@ -2634,9 +3315,23 @@ class _ThreadScreenState extends State<ThreadScreen>
   void _send() {
     final text = _textCtrl.text;
     if (text.trim().isEmpty || _sendingText) return;
-    if (_runLocationCommand(text.trim())) return;
+    if (_useDataSms) {
+      final estimate = context.read<ActiveThreadCubit>().estimateSms(text);
+      if (estimate == null || estimate.segments > 10) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Shorten the message to 10 SMS segments or choose Internet.',
+            ),
+          ),
+        );
+        return;
+      }
+    } else if (_runLocationCommand(text.trim())) {
+      return;
+    }
     _sendingText = true;
-    unawaited(_sendText(text));
+    unawaited(_sendText(text, dataSms: _useDataSms));
   }
 
   /// Handles `/arrive` and `/pin` typed in the composer. Returns true when
@@ -2770,7 +3465,7 @@ class _ThreadScreenState extends State<ThreadScreen>
     );
   }
 
-  Future<void> _sendText(String text) async {
+  Future<void> _sendText(String text, {bool dataSms = false}) async {
     if (!mounted) return;
     final scrollToLatest =
         !ChatMessage.isEmojiOnlyText(text) || _isNearLatest();
@@ -2789,11 +3484,14 @@ class _ThreadScreenState extends State<ThreadScreen>
         _suppressDraftChanges = false;
       }
 
-      final queued = await context.read<ActiveThreadCubit>().sendText(
-        text,
-        waitForDelivery: false,
-        scrollToLatest: scrollToLatest,
-      );
+      final cubit = context.read<ActiveThreadCubit>();
+      final queued = dataSms
+          ? await cubit.sendDataSms(text, scrollToLatest: scrollToLatest)
+          : await cubit.sendText(
+              text,
+              waitForDelivery: false,
+              scrollToLatest: scrollToLatest,
+            );
       if (queued) unawaited(HapticFeedback.lightImpact());
       if (queued && shouldClearComposer && _draftGeneration == generation) {
         await _writeDraft('', generation).catchError((Object _) {});
@@ -3951,7 +4649,7 @@ class _ThreadScreenState extends State<ThreadScreen>
     }
   }
 
-  /// Copy received media into the vault.
+  /// Save chat media as a linked Vault item shared by both views.
   Future<void> _saveToVault(ChatMessage message) async {
     final messenger = ScaffoldMessenger.of(context);
     final ref = message.mediaRef;
@@ -3964,72 +4662,193 @@ class _ThreadScreenState extends State<ThreadScreen>
       );
       return;
     }
-    final uid = context.read<ActiveThreadCubit>().myUid;
-    widget.mediaLoader.setAccount(uid);
-    final key = widget.mediaLoader.diskKey(ref);
-    final sourceId = '$uid:${message.threadId}:$ref';
-    widget.mediaLoader.diskCache.pin(key);
-    Uint8List? bytes;
-    void checkAccount() {
-      if (widget.mediaLoader.accountId != uid) {
-        throw StateError('Chat account changed during vault move.');
-      }
-    }
-
-    Future<void> mark() async {
-      checkAccount();
-      await widget.mediaLoader.diskCache.markMoved(key);
-    }
-
-    Future<void> cleanup() async {
-      checkAccount();
-      await widget.mediaLoader.removeAfterVaultMove(ref);
-    }
-
     try {
-      var result = await widget.vaultBridge.resumeMove(
-        sourceId: sourceId,
-        onMarkMoved: mark,
-        onSourceCleanup: cleanup,
+      late final ChatVaultMoveResult result;
+      await _showBulkProgress(
+        title: 'Saving to vault',
+        total: 1,
+        operation: (update) async {
+          update(0, 'Saving ${message.documentName ?? 'attachment'}');
+          result = await _copyMessageToVault(message);
+          update(1, 'Saved to vault');
+        },
       );
-      if (result == null) {
-        bytes = await widget.mediaLoader.fetchUncached(
-          threadId: message.threadId,
-          storagePath: ref,
-          senderId: message.senderId,
-        );
-        checkAccount();
-        final extension = switch (message.mediaType) {
-          MessageType.video => 'mp4',
-          MessageType.audio => 'wav',
-          _ => 'jpg',
-        };
-        result = await widget.vaultBridge.moveToVault(
-          bytes: bytes,
-          filename: message.documentName ?? '${message.messageId}.$extension',
-          sourceId: sourceId,
-          mediaType: message.mediaType?.name,
-          onMarkMoved: mark,
-          onSourceCleanup: cleanup,
-        );
-      }
       messenger.showSnackBar(
         SnackBar(
           content: Text(
             result.cleanupPending
-                ? 'Stored in vault; local cleanup pending. Tap Move to vault to retry.'
-                : 'Moved to vault.',
+                ? 'Stored in vault; local cleanup pending. Tap Save to vault to retry.'
+                : 'Saved to vault; available in chat and vault.',
           ),
         ),
       );
     } catch (e) {
       messenger.showSnackBar(
-        SnackBar(content: Text('Could not move to vault: $e')),
+        SnackBar(content: Text('Could not save to vault: $e')),
+      );
+    }
+  }
+
+  List<String> _vaultSourceIds(ChatMessage message, String uid) {
+    final ref = message.mediaRef;
+    if (ref == null) return const [];
+    return [
+      '$uid:${message.threadId}:${message.messageId}:$ref',
+      '$uid:${message.threadId}:$ref',
+    ];
+  }
+
+  Future<ChatVaultMoveResult> _copyMessageToVault(ChatMessage message) async {
+    final ref = message.mediaRef;
+    if (ref == null) throw StateError('This message has no media attachment.');
+    if (!widget.vaultBridge.isUnlocked) {
+      throw StateError('Unlock the vault before saving this attachment.');
+    }
+
+    final uid = context.read<ActiveThreadCubit>().myUid;
+    widget.mediaLoader.setAccount(uid);
+    final previewRef = message.previewRef;
+    final paths = {ref, ?previewRef};
+    final keys = paths.map(widget.mediaLoader.diskKey).toList();
+    for (final key in keys) {
+      widget.mediaLoader.diskCache.pin(key);
+    }
+    Uint8List? bytes;
+    void checkAccount() {
+      if (widget.mediaLoader.accountId != uid) {
+        throw StateError('Chat account changed during vault import.');
+      }
+    }
+
+    Future<void> mark() async {
+      checkAccount();
+      for (final key in keys) {
+        await widget.mediaLoader.diskCache.markMoved(key);
+      }
+    }
+
+    Future<void> cleanup() async {
+      checkAccount();
+      for (final path in paths) {
+        await widget.mediaLoader.removeAfterVaultMove(path);
+      }
+    }
+
+    try {
+      for (final sourceId in _vaultSourceIds(message, uid)) {
+        final resumed = await widget.vaultBridge.resumeMove(
+          sourceId: sourceId,
+          onMarkMoved: mark,
+          onSourceCleanup: cleanup,
+        );
+        if (resumed != null) return resumed;
+      }
+
+      bytes = await widget.mediaLoader.fetchUncached(
+        threadId: message.threadId,
+        storagePath: ref,
+        senderId: message.senderId,
+      );
+      checkAccount();
+      final extension = switch (message.mediaType) {
+        MessageType.video => 'mp4',
+        MessageType.gif => 'gif',
+        _ => 'jpg',
+      };
+      return await widget.vaultBridge.moveToVault(
+        bytes: bytes,
+        filename: message.documentName ?? '${message.messageId}.$extension',
+        sourceId: _vaultSourceIds(message, uid).first,
+        mediaType: message.mediaType?.name,
+        onMarkMoved: mark,
+        onSourceCleanup: cleanup,
       );
     } finally {
       bytes?.fillRange(0, bytes.length, 0);
-      widget.mediaLoader.diskCache.unpin(key);
+      for (final key in keys) {
+        widget.mediaLoader.diskCache.unpin(key);
+      }
     }
+  }
+
+  Future<void> _moveSelectedMediaToVault() async {
+    final state = context.read<ActiveThreadCubit>().state;
+    if (state is! ActiveThreadLoaded || !_isBulkVaultSelection(state)) return;
+    if (!widget.vaultBridge.isUnlocked) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Unlock the vault before saving media.')),
+      );
+      return;
+    }
+
+    final messages = _selectedMessages(state);
+    _clearMessageSelection();
+    var saved = 0;
+    final failures = <String>[];
+    await _showBulkProgress(
+      title: 'Saving media to vault',
+      total: messages.length,
+      operation: (update) async {
+        for (var index = 0; index < messages.length; index++) {
+          final message = messages[index];
+          update(
+            index,
+            'Saving ${index + 1} of ${messages.length}: '
+            '${message.documentName ?? message.mediaType?.name ?? 'media'}',
+          );
+          try {
+            final result = await _copyMessageToVault(message);
+            if (result.cleanupPending) {
+              failures.add(
+                '${message.documentName ?? 'Media'} stored; chat cleanup pending.',
+              );
+            } else {
+              saved++;
+            }
+          } catch (error) {
+            failures.add('${message.documentName ?? 'Media'}: $error');
+          }
+          update(index + 1, 'Processed ${index + 1} of ${messages.length}');
+        }
+      },
+    );
+    if (!mounted) return;
+    final message = failures.isEmpty
+        ? '$saved media items are available in chat and vault.'
+        : '$saved of ${messages.length} saved. ${failures.join(' ')}';
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  Future<Uint8List?> _loadLinkedVaultMedia(ChatMessage message) {
+    final ref = message.mediaRef;
+    if (ref == null) return Future<Uint8List?>.value();
+    final uid = context.read<ActiveThreadCubit>().myUid;
+    return _loadFirstLinkedMedia(_vaultSourceIds(message, uid));
+  }
+
+  Future<Uint8List?> _loadLinkedVaultThumbnail(ChatMessage message) {
+    final ref = message.mediaRef;
+    if (ref == null) return Future<Uint8List?>.value();
+    final uid = context.read<ActiveThreadCubit>().myUid;
+    return _loadFirstLinkedThumbnail(_vaultSourceIds(message, uid));
+  }
+
+  Future<Uint8List?> _loadFirstLinkedMedia(List<String> sourceIds) async {
+    for (final sourceId in sourceIds) {
+      final bytes = await widget.vaultBridge.loadLinkedAttachment(sourceId);
+      if (bytes != null) return bytes;
+    }
+    return null;
+  }
+
+  Future<Uint8List?> _loadFirstLinkedThumbnail(List<String> sourceIds) async {
+    for (final sourceId in sourceIds) {
+      final bytes = await widget.vaultBridge.loadLinkedThumbnail(sourceId);
+      if (bytes != null) return bytes;
+    }
+    return null;
   }
 }
 
@@ -4087,7 +4906,7 @@ class _ComposerAction extends StatelessWidget {
 
   final IconData icon;
   final String tooltip;
-  final VoidCallback onPressed;
+  final VoidCallback? onPressed;
 
   @override
   Widget build(BuildContext context) {
@@ -4107,16 +4926,22 @@ class _SendButton extends StatelessWidget {
   const _SendButton({
     required this.hasText,
     required this.onSend,
+    this.onLongPress,
     this.icon = Icons.send_rounded,
+    this.isDataSms = false,
   });
 
   final ValueListenable<bool> hasText;
   final VoidCallback onSend;
+  final VoidCallback? onLongPress;
   final IconData icon;
+  final bool isDataSms;
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final activeColor = isDataSms ? cs.tertiary : cs.primary;
+    final activeOnColor = isDataSms ? cs.onTertiary : cs.onPrimary;
     return ValueListenableBuilder<bool>(
       valueListenable: hasText,
       builder: (context, enabled, child) {
@@ -4126,21 +4951,26 @@ class _SendButton extends StatelessWidget {
           scale: enabled ? 1 : 0.85,
           child: AnimatedOpacity(
             duration: AppDuration.fast,
-            opacity: enabled ? 1 : 0.45,
+            opacity: enabled ? 1 : 0.65,
             child: Material(
-              color: enabled ? cs.primary : cs.surfaceContainerHighest,
+              color: enabled ? activeColor : cs.surfaceContainerHighest,
               shape: const CircleBorder(),
               elevation: enabled ? 2 : 0,
-              shadowColor: cs.primary.withValues(alpha: 0.4),
+              shadowColor: activeColor.withValues(alpha: 0.4),
               clipBehavior: Clip.antiAlias,
               child: InkWell(
-                onTap: enabled ? onSend : null,
+                onTap: enabled ? onSend : onLongPress,
+                onLongPress: onLongPress,
                 child: Padding(
                   padding: const EdgeInsets.all(AppSpacing.md),
                   child: Icon(
-                    icon,
+                    isDataSms && icon == Icons.send_rounded
+                        ? Icons.sms_rounded
+                        : icon,
                     size: 20,
-                    color: enabled ? cs.onPrimary : cs.onSurfaceVariant,
+                    color: enabled
+                        ? activeOnColor
+                        : (isDataSms ? cs.tertiary : cs.onSurfaceVariant),
                   ),
                 ),
               ),

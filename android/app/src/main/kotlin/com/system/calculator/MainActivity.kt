@@ -1,6 +1,7 @@
 package com.system.calculator
 
 import android.os.Bundle
+import android.os.Build
 import androidx.annotation.NonNull
 import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -38,17 +39,31 @@ class MainActivity : FlutterFragmentActivity() {
             ScreenshotProtectionState.setEnabled(window, enabled)
             result.success(null)
         }
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            HDR_PREVIEW_CHANNEL,
+        ).setMethodCallHandler { call, result ->
+            if (call.method != "isSupported") {
+                result.notImplemented()
+                return@setMethodCallHandler
+            }
+            val display = window.decorView.display
+            val supported = Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE &&
+                display?.hdrCapabilities?.supportedHdrTypes?.isNotEmpty() == true
+            result.success(supported)
+        }
         flutterEngine.plugins.add(ChatSecureMediaPlugin())
         flutterEngine.plugins.add(ChatUploadPlugin())
         flutterEngine.plugins.add(MapsDiagnosticsPlugin())
         flutterEngine.plugins.add(MockLocationPlugin())
-        flutterEngine.plugins.add(ArrivalGeofencePlugin())
         flutterEngine.plugins.add(BatteryPlugin())
         flutterEngine.plugins.add(CallLogPlugin())
+        flutterEngine.plugins.add(DataSmsPlugin())
     }
 
     private companion object {
         const val SCREENSHOT_PROTECTION_CHANNEL =
             "com.system.calculator/screenshot_protection"
+        const val HDR_PREVIEW_CHANNEL = "photo_vault/hdr_preview"
     }
 }

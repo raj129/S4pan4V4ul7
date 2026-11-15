@@ -6,6 +6,7 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 
 import '../media/animated_media.dart';
+import '../platform/hdr_preview_capability.dart';
 import 'animated_media_image.dart';
 
 const _inlineMediaViewType = 'photo_vault/inline_media';
@@ -30,22 +31,26 @@ class _InlineHdrImagePreviewState extends State<InlineHdrImagePreview>
     with WidgetsBindingObserver {
   final _preference = HdrPreviewPreference.instance;
   Uint8List? _platformBytes;
+  bool _preferenceLoaded = false;
   bool _useFallback = false;
   int _viewRevision = 0;
   MethodChannel? _channel;
 
   bool get _useNative =>
+      _preferenceLoaded &&
       _preference.enabled.value &&
-      !kIsWeb &&
-      defaultTargetPlatform == TargetPlatform.android;
+      HdrPreviewCapability.instance.available.value;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _preference.enabled.addListener(_onHdrPreferenceChanged);
-    if (_useNative) _copyPlatformBytes();
+    HdrPreviewCapability.instance.available.addListener(
+      _onHdrCapabilityChanged,
+    );
     unawaited(_loadHdrPreference());
+    unawaited(_loadHdrCapability());
   }
 
   Future<void> _loadHdrPreference() async {
@@ -53,6 +58,21 @@ class _InlineHdrImagePreviewState extends State<InlineHdrImagePreview>
       await _preference.load();
     } catch (error) {
       debugPrint('Could not load HDR preview preference: $error');
+      return;
+    }
+    if (!mounted) return;
+    setState(() {
+      _preferenceLoaded = true;
+      if (_useNative) _copyPlatformBytes();
+      _viewRevision++;
+    });
+  }
+
+  Future<void> _loadHdrCapability() async {
+    try {
+      await HdrPreviewCapability.instance.load();
+    } catch (error) {
+      debugPrint('Could not determine HDR preview support: $error');
     }
   }
 
@@ -81,12 +101,23 @@ class _InlineHdrImagePreviewState extends State<InlineHdrImagePreview>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _preference.enabled.removeListener(_onHdrPreferenceChanged);
+    HdrPreviewCapability.instance.available.removeListener(
+      _onHdrCapabilityChanged,
+    );
     _channel?.setMethodCallHandler(null);
     _releasePlatformBytes();
     super.dispose();
   }
 
   void _onHdrPreferenceChanged() {
+    _refreshNativePreview();
+  }
+
+  void _onHdrCapabilityChanged() {
+    _refreshNativePreview();
+  }
+
+  void _refreshNativePreview() {
     if (!mounted) return;
     setState(() {
       // A fresh native view per toggle re-applies (or restores) colour mode.

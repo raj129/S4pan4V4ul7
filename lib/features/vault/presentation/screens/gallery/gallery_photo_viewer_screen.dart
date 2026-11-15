@@ -20,6 +20,7 @@ import 'package:photo_vault/features/vault/domain/entities/vault_photo.dart';
 import 'package:photo_vault/features/vault/domain/repositories/photo_repository.dart';
 import 'package:photo_vault/core/presentation/theme/app_colors.dart';
 import 'package:photo_vault/core/presentation/theme/app_spacing.dart';
+import 'package:photo_vault/core/widgets/main_scaffold_scope.dart';
 import '../../widgets/confirm_dialog.dart';
 import '../../widgets/pin_reauth_dialog.dart';
 
@@ -167,7 +168,9 @@ class _GalleryPhotoViewerScreenState extends State<GalleryPhotoViewerScreen> {
             backgroundColor: scheme.scrim,
             appBar: AppBar(
               backgroundColor: scheme.scrim.withValues(alpha: 0.50),
-              foregroundColor: scheme.onInverseSurface,
+              foregroundColor: Colors.white,
+              iconTheme: const IconThemeData(color: Colors.white),
+              actionsIconTheme: const IconThemeData(color: Colors.white),
               elevation: 0,
               leading: IconButton(
                 icon: const Icon(Icons.arrow_back),
@@ -209,6 +212,7 @@ class _GalleryPhotoViewerScreenState extends State<GalleryPhotoViewerScreen> {
                     tooltip: 'Delete',
                   ),
                 ],
+                const QuickLockActionButton(color: Colors.white),
               ],
             ),
             extendBodyBehindAppBar: true,
@@ -232,8 +236,10 @@ class _GalleryPhotoViewerScreenState extends State<GalleryPhotoViewerScreen> {
       scaffoldBackgroundColor: scheme.scrim,
       appBarTheme: base.appBarTheme.copyWith(
         backgroundColor: scheme.scrim.withValues(alpha: 0.50),
-        foregroundColor: scheme.onInverseSurface,
+        foregroundColor: Colors.white,
         elevation: 0,
+        iconTheme: const IconThemeData(color: Colors.white),
+        actionsIconTheme: const IconThemeData(color: Colors.white),
       ),
     );
   }

@@ -6,6 +6,7 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:android_ring_alerts/android_ring_alerts.dart';
 
 import '../../domain/repositories/message_repository.dart';
 import 'package:photo_vault/firebase_options.dart';
@@ -14,6 +15,25 @@ import 'package:photo_vault/features/vault/data/repositories/storage_keys.dart';
 import 'package:photo_vault/features/vault/domain/repositories/settings_repository.dart';
 import 'chat_notification_service.dart';
 import 'chat_backup_scheduler.dart';
+
+String? _ringtoneUri(Object? raw) {
+  if (raw is! String || raw.isEmpty) return null;
+  return raw;
+}
+
+String _ringString(Object? raw, String fallback) =>
+    raw is String ? raw : fallback;
+
+bool _ringBool(Object? raw, bool fallback) => raw == 'true'
+    ? true
+    : raw == 'false'
+    ? false
+    : fallback;
+
+({bool ring, bool vibrate}) _legacyRingToggles(String mode) => (
+  ring: mode == 'ringAndVibrate' || mode == 'ringtone',
+  vibrate: mode == 'ringAndVibrate' || mode == 'vibrate',
+);
 
 @pragma('vm:entry-point')
 Future<void> handleChatPushInBackground(RemoteMessage message) async {
@@ -31,7 +51,51 @@ Future<void> handleChatPushInBackground(RemoteMessage message) async {
   final threadId = rawThreadId;
   final messageId = rawMessageId is String ? rawMessageId : null;
 
-  if (message.data['notify'] != 'false') {
+  if (message.data['eventType'] == 'ringRequest') {
+    final source = message.data['ringSource'] == 'custom' ? 'custom' : 'system';
+    final oldMode = _ringString(message.data['ringMode'], 'ringAndVibrate');
+    final oldToggles = _legacyRingToggles(oldMode);
+    final ringSoundEnabled = _ringBool(
+      message.data['ringSoundEnabled'],
+      oldToggles.ring,
+    );
+    final vibrationEnabled = _ringBool(
+      message.data['vibrationEnabled'],
+      oldToggles.vibrate,
+    );
+    final flashlightEnabled = message.data['ringFlashlightEnabled'] == 'true';
+    if (message.data['ringEnabled'] == 'true' &&
+        (source == 'system' ||
+            ringSoundEnabled ||
+            vibrationEnabled ||
+            flashlightEnabled)) {
+      try {
+        await AndroidRingAlerts.startAlert(
+          alertId: messageId ?? threadId,
+          source: source,
+          ringSoundEnabled: ringSoundEnabled,
+          vibrationEnabled: vibrationEnabled,
+          timeoutSeconds:
+              int.tryParse(message.data['ringTimeoutSeconds'] ?? '') ?? 5,
+          title: 'Ring request',
+          body: 'Someone is asking you to ring.',
+          ringtoneUri: _ringtoneUri(message.data['ringtoneUri']),
+          vibrationPattern: _ringString(
+            message.data['ringVibrationPattern'],
+            'standard',
+          ),
+          flashlightEnabled: flashlightEnabled,
+          flashPattern: _ringString(
+            message.data['ringFlashPattern'],
+            'slowBlink',
+          ),
+          allowFlashInBackground: false,
+        );
+      } catch (error) {
+        debugPrint('Could not start incoming ring request alert: $error');
+      }
+    }
+  } else if (message.data['notify'] != 'false') {
     final notifications = FlutterLocalNotificationsPlugin();
     var alertTitle = SettingsRepository.defaultIncomingChatAlertTitle;
     var alertBody = SettingsRepository.defaultIncomingChatAlertText;
@@ -84,8 +148,7 @@ Future<void> handleChatPushInBackground(RemoteMessage message) async {
 /// Cloud Function, and routes notification taps to the right conversation.
 ///
 /// Pushes are data-only so the background handler can acknowledge delivery.
-/// It displays the same generic local notification that the OS previously
-/// displayed for the notification payload.
+/// It displays a generic local notification without exposing message content.
 class PushNotificationService {
   PushNotificationService({
     required PushTokenRepository tokenRepository,
@@ -187,6 +250,53 @@ class PushNotificationService {
         rawMessageId is! String ||
         rawMessageId.isEmpty) {
       return;
+    }
+    if (message.data['eventType'] == 'ringRequest') {
+      final source = message.data['ringSource'] == 'custom'
+          ? 'custom'
+          : 'system';
+      final oldMode = _ringString(message.data['ringMode'], 'ringAndVibrate');
+      final oldToggles = _legacyRingToggles(oldMode);
+      final ringSoundEnabled = _ringBool(
+        message.data['ringSoundEnabled'],
+        oldToggles.ring,
+      );
+      final vibrationEnabled = _ringBool(
+        message.data['vibrationEnabled'],
+        oldToggles.vibrate,
+      );
+      final flashlightEnabled = message.data['ringFlashlightEnabled'] == 'true';
+      if (message.data['ringEnabled'] == 'true' &&
+          (source == 'system' ||
+              ringSoundEnabled ||
+              vibrationEnabled ||
+              flashlightEnabled)) {
+        unawaited(
+          AndroidRingAlerts.startAlert(
+            alertId: rawMessageId,
+            source: source,
+            ringSoundEnabled: ringSoundEnabled,
+            vibrationEnabled: vibrationEnabled,
+            timeoutSeconds:
+                int.tryParse(message.data['ringTimeoutSeconds'] ?? '') ?? 5,
+            title: 'Ring request',
+            body: 'Someone is asking you to ring.',
+            ringtoneUri: _ringtoneUri(message.data['ringtoneUri']),
+            vibrationPattern: _ringString(
+              message.data['ringVibrationPattern'],
+              'standard',
+            ),
+            flashlightEnabled: flashlightEnabled,
+            flashPattern: _ringString(
+              message.data['ringFlashPattern'],
+              'slowBlink',
+            ),
+            allowFlashInBackground: true,
+          ).catchError((Object error) {
+            debugPrint('Could not start ring request alert: $error');
+          }),
+        );
+      }
     }
     unawaited(
       scheduleChatReceive(

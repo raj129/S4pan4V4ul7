@@ -42,6 +42,7 @@ class FirestoreMessageRepository implements MessageRepository {
     MediaMeta? mediaMeta,
     MessageReply? replyTo,
     bool isForwarded = false,
+    ChatEventType? eventType,
   }) async {
     final msgId = messageId ?? _uuid.v4();
     final now = sentAt?.toUtc() ?? DateTime.now().toUtc();
@@ -59,6 +60,7 @@ class FirestoreMessageRepository implements MessageRepository {
       mediaMeta: mediaMeta,
       replyTo: replyTo,
       isForwarded: isForwarded,
+      eventType: eventType,
       status: MessageStatus.sent,
     );
     await _messages(threadId).doc(msgId).set(msg.toFirestore());

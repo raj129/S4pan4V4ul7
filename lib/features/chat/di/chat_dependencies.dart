@@ -1,4 +1,6 @@
 import '../application/services/chat_auth_service.dart';
+import '../application/services/data_sms_service.dart';
+import '../application/services/android_data_sms.dart';
 import '../application/media/android_chat_uploads.dart';
 import '../application/media/android_chat_downloads.dart';
 import '../application/media/android_chat_local_media.dart';
@@ -34,6 +36,7 @@ import '../data/repositories/drift_message_cache_repository.dart';
 import '../data/repositories/drift_outbox_repository.dart';
 import '../data/repositories/firebase_avatar_storage.dart';
 import '../data/repositories/firestore_push_token_repository.dart';
+import '../data/repositories/firestore_ring_alert_preferences_repository.dart';
 import '../data/repositories/google_drive_chat_backup_store.dart';
 import '../data/repositories/local_chat_backup_store.dart';
 import '../data/repositories/firestore_message_repository.dart';
@@ -51,6 +54,7 @@ import '../domain/repositories/message_repository.dart';
 import '../domain/repositories/live_location_repository.dart';
 import '../domain/repositories/presence_repository.dart';
 import '../domain/repositories/push_token_repository.dart';
+import '../domain/repositories/ring_alert_preferences_repository.dart';
 import '../domain/repositories/thread_repository.dart';
 import '../domain/repositories/typing_repository.dart';
 import '../domain/repositories/user_repository.dart';
@@ -77,6 +81,7 @@ class ChatDependencies {
     required VaultSession vaultSession,
     SettingsRepository? settingsRepository,
     VaultDatabase? database,
+    VaultDatabase? Function()? databaseProvider,
     UserRepository? userRepository,
     ThreadRepository? threadRepository,
     MessageRepository? messageRepository,
@@ -91,7 +96,9 @@ class ChatDependencies {
   }) : _authRepository = authRepository,
        _vaultSession = vaultSession,
        _settingsRepository = settingsRepository,
-       _database = database {
+       _databaseOverride = database,
+       _databaseProvider = databaseProvider,
+       _providedDraftRepository = draftRepository {
     if (pushTokenRepository != null) {
       this.pushTokenRepository = pushTokenRepository;
     }
@@ -130,18 +137,13 @@ class ChatDependencies {
     if (cryptoService != null) {
       this.cryptoService = cryptoService;
     }
-    this.draftRepository =
-        draftRepository ??
-        switch (database) {
-          final VaultDatabase db => DriftChatDraftRepository(db),
-          _ => const NoopChatDraftRepository(),
-        };
     _vaultSession.addListener(_onVaultSessionChanged);
   }
 
   /// Drop in-memory chat keys as soon as the vault locks.
   void _onVaultSessionChanged() {
     if (!_vaultSession.isUnlocked) {
+      dataSms?.stop();
       cryptoService.clearKeyCache();
       mediaLoader.lockPlaintext();
       if (Platform.isAndroid) {
@@ -152,6 +154,8 @@ class ChatDependencies {
           debugPrint('Secure chat viewer cleanup unavailable.');
         });
       }
+    } else {
+      dataSms?.start();
     }
   }
 
@@ -163,9 +167,16 @@ class ChatDependencies {
   final SettingsRepository? _settingsRepository;
 
   /// Shared local database, or null in the in-memory test configuration.
-  final VaultDatabase? _database;
+  final VaultDatabase? _databaseOverride;
+  final VaultDatabase? Function()? _databaseProvider;
+  final ChatDraftRepository? _providedDraftRepository;
+
+  VaultDatabase? get _database =>
+      _databaseOverride ?? _databaseProvider?.call();
 
   late UserRepository userRepository = FirestoreUserRepository();
+  late RingAlertPreferencesRepository ringAlertPreferencesRepository =
+      FirestoreRingAlertPreferencesRepository();
   late ThreadRepository threadRepository = FirestoreThreadRepository();
   late MessageRepository messageRepository = FirestoreMessageRepository();
   late MediaRepository mediaRepository = FirebaseMediaRepository();
@@ -288,8 +299,24 @@ class ChatDependencies {
     _ => const NoopMessageCacheRepository(),
   };
 
+  late final DataSmsService? dataSms = Platform.isAndroid && _database != null
+      ? DataSmsService(
+          native: const AndroidDataSms(),
+          crypto: cryptoService,
+          cache: messageCache,
+          currentUid: firebaseCurrentUid,
+          isUnlocked: () => _vaultSession.isUnlocked,
+          onIncoming: notificationService.notifyDataSms,
+        )
+      : null;
+
   /// Ciphertext-only composer drafts, stored alongside the local chat cache.
-  late final ChatDraftRepository draftRepository;
+  late final ChatDraftRepository draftRepository =
+      _providedDraftRepository ??
+      switch (_database) {
+        final VaultDatabase db => DriftChatDraftRepository(db),
+        _ => const NoopChatDraftRepository(),
+      };
 
   /// Keyed local search index over the message cache.
   late final ChatSearchIndexRepository searchIndex = switch (_database) {
@@ -413,6 +440,7 @@ class ChatDependencies {
   );
 
   void dispose() {
+    dataSms?.dispose();
     uploads?.dispose();
     downloads?.dispose();
     _vaultSession.removeListener(_onVaultSessionChanged);

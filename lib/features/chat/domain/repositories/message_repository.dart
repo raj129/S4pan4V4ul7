@@ -22,6 +22,7 @@ abstract class MessageRepository {
     MediaMeta? mediaMeta,
     MessageReply? replyTo,
     bool isForwarded = false,
+    ChatEventType? eventType,
   });
 
   /// Stream messages for a thread, newest first.

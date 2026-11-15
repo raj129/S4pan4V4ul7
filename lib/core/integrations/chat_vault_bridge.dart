@@ -12,10 +12,10 @@ import 'chat_attachment_vault_importer.dart';
 export 'chat_attachment_vault_importer.dart'
     show ChatVaultMoveResult, ChatMoveCallback;
 
-/// Moves media between the encrypted vault and the encrypted chat.
+/// Links chat attachments to encrypted Vault objects.
 ///
-/// Both stores already encrypt at rest, but with different keys, so every
-/// transfer is a decrypt-then-re-encrypt in memory, never a plaintext file.
+/// The chat message/cloud object remains intact. Its local encrypted cache is
+/// removed after import, and the chat views read the linked Vault object.
 class ChatVaultBridge {
   ChatVaultBridge({
     required PhotoRepository photoRepository,
@@ -55,6 +55,7 @@ class ChatVaultBridge {
   Future<Uint8List?> thumbnailOf(VaultPhoto photo) =>
       _importManager.loadThumbnailBytes(photo);
 
+  /// Save an attachment as a local Vault item linked to its chat source.
   Future<ChatVaultMoveResult> moveToVault({
     required Uint8List bytes,
     required String filename,
@@ -82,6 +83,38 @@ class ChatVaultBridge {
     onMarkMoved: onMarkMoved,
     onSourceCleanup: onSourceCleanup,
   );
+
+  Future<VaultPhoto?> linkedAttachment(String sourceId) {
+    if (!isUnlocked) return Future<VaultPhoto?>.value();
+    return _importManager.linkedChatAttachment(sourceId);
+  }
+
+  Future<Uint8List?> loadLinkedAttachment(String sourceId) async {
+    final photo = await linkedAttachment(sourceId);
+    if (photo == null) return null;
+    return _importManager.loadPhotoBytes(photo);
+  }
+
+  Future<Uint8List?> loadLinkedThumbnail(String sourceId) async {
+    final photo = await linkedAttachment(sourceId);
+    if (photo == null) return null;
+    final bytes = await _importManager.loadThumbnailBytes(photo);
+    return bytes == null ? null : Uint8List.fromList(bytes);
+  }
+
+  Future<List<String>> linkedAttachmentSources(String photoId) =>
+      _importManager.chatAttachmentLinkSources(photoId);
+
+  Future<void> moveAttachmentToTrash(
+    VaultPhoto photo, {
+    required int expiresAtMs,
+  }) => _photoRepository.movePhotoToTrash(photo.id, expiresAtMs: expiresAtMs);
+
+  Future<void> restoreAttachmentFromTrash(String photoId) =>
+      _photoRepository.restoreFromTrash(photoId);
+
+  Future<void> unlinkAttachment(String sourceId) =>
+      _importManager.removeChatAttachmentLink(sourceId);
 
   Future<List<VaultPhoto>> listSavedAttachments() =>
       _importManager.listChatVaultAttachments();

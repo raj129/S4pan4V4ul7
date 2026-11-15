@@ -8,8 +8,8 @@ import com.google.android.gms.location.GeofencingEvent
 
 /**
  * Receives OS geofence enter events while the app process may be dead, and
- * queues the triggering alert ids. Chat messages need Dart and encryption, so
- * they are sent when the app next runs.
+ * queues the triggering alert ids and schedules an encrypted send in a
+ * headless Dart worker, without opening or unlocking chat.
  */
 class ArrivalGeofenceReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {

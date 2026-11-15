@@ -4,6 +4,7 @@ import 'package:photo_vault/features/chat/application/crypto/chat_crypto_service
 import 'package:photo_vault/features/chat/application/media/chat_media_loader.dart';
 import 'package:photo_vault/features/chat/application/media/chat_media_manager_service.dart';
 import 'package:photo_vault/features/chat/application/services/profile_service.dart';
+import 'package:photo_vault/features/chat/application/services/data_sms_service.dart';
 import 'package:photo_vault/features/chat/data/repositories/firebase_avatar_storage.dart';
 import 'package:photo_vault/features/chat/domain/entities/chat_user.dart';
 import 'package:photo_vault/features/chat/domain/entities/chat_message.dart';
@@ -27,6 +28,30 @@ class _Store extends NoopMessageCacheRepository {
       values[key] = value;
     }
   }
+}
+
+class _Sms implements DataSmsService {
+  final numbers = <String, String>{};
+  bool failRead = false;
+
+  @override
+  Future<String?> phone(String threadId) async {
+    if (failRead) throw StateError('storage unavailable');
+    return numbers[threadId];
+  }
+
+  @override
+  Future<void> setPhone(String threadId, String? number) async {
+    if (number == null) {
+      numbers.remove(threadId);
+    } else {
+      numbers[threadId] = number;
+    }
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) =>
+      throw UnimplementedError('${invocation.memberName}');
 }
 
 class _Users implements UserRepository {
@@ -78,6 +103,8 @@ void main() {
     ChatMediaLoader? mediaLoader,
     ChatMediaManagerService? mediaManagerService,
     String? threadId,
+    DataSmsService? dataSms,
+    ValueChanged<String?>? onSmsNumberChanged,
   }) async {
     service = ProfileService(
       store: _Store(),
@@ -97,6 +124,8 @@ void main() {
                 mediaLoader: mediaLoader,
                 mediaManagerService: mediaManagerService,
                 threadId: threadId,
+                dataSms: dataSms,
+                onSmsNumberChanged: onSmsNumberChanged,
               ),
               child: const Text('open'),
             ),
@@ -110,6 +139,70 @@ void main() {
     await tester.tap(find.text('open'));
     await tester.pumpAndSettle();
   }
+
+  testWidgets('profile adds, updates and removes a conversation-bound number', (
+    tester,
+  ) async {
+    final sms = _Sms()..numbers['other-chat'] = '+441234567890';
+    final changes = <String?>[];
+    await pumpHost(
+      tester,
+      dataSms: sms,
+      threadId: 'this-chat',
+      onSmsNumberChanged: changes.add,
+    );
+    await open(tester);
+    expect(find.text('Data SMS number'), findsOneWidget);
+    expect(find.text('Add recipient mobile number'), findsOneWidget);
+    await tester.tap(find.text('Data SMS number'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), '+12025550123');
+    await tester.tap(find.text('Save'));
+    await tester.pumpAndSettle();
+    expect(sms.numbers['this-chat'], '+12025550123');
+    expect(find.textContaining('+12025550123'), findsOneWidget);
+    await tester.tap(find.text('Data SMS number'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), '+919876543210');
+    await tester.tap(find.text('Save'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('+919876543210'), findsOneWidget);
+    await tester.tap(find.text('Data SMS number'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Remove'));
+    await tester.pumpAndSettle();
+    expect(sms.numbers['this-chat'], isNull);
+    expect(sms.numbers['other-chat'], '+441234567890');
+    expect(changes, ['+12025550123', '+919876543210', null]);
+    expect(find.text('Add recipient mobile number'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('profile displays existing number and can retry a read error', (
+    tester,
+  ) async {
+    final sms = _Sms()
+      ..numbers['chat'] = '+12025550123'
+      ..failRead = true;
+    await pumpHost(tester, dataSms: sms, threadId: 'chat');
+    await open(tester);
+    expect(
+      find.textContaining('Could not load Data SMS number'),
+      findsOneWidget,
+    );
+    sms.failRead = false;
+    await tester.tap(find.text('Data SMS number'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('+12025550123'), findsOneWidget);
+  });
+
+  testWidgets('profile without SMS service does not offer unsupported setup', (
+    tester,
+  ) async {
+    await pumpHost(tester, threadId: 'chat');
+    await open(tester);
+    expect(find.text('Data SMS number'), findsNothing);
+  });
 
   testWidgets('nickname edit mode saves, cancels and clears the alias', (
     tester,
@@ -158,10 +251,17 @@ void main() {
 
     final card = tester.widget<Card>(find.byType(Card).first);
     expect(AppTheme.light.useMaterial3, isTrue);
-    expect(card.shape, isNull);
-    expect(find.byType(Card), findsAtLeastNWidgets(2));
+    expect(card.elevation, 0);
+    expect(find.byType(Card), findsOneWidget);
     expect(find.byType(TextField), findsNothing);
     expect(find.text('Edit nickname'), findsOneWidget);
+
+    // Profile picture can be tapped to view full avatar
+    await tester.tap(find.byTooltip('View profile picture'));
+    await tester.pumpAndSettle();
+    expect(find.text('Close'), findsOneWidget);
+    await tester.tap(find.text('Close'));
+    await tester.pumpAndSettle();
   });
 
   testWidgets('a blank nickname removes it', (tester) async {

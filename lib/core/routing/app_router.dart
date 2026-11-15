@@ -19,6 +19,7 @@ import '../../features/chat/presentation/screens/new_chat_screen.dart';
 import '../../features/chat/presentation/screens/my_locations_route.dart';
 import '../../features/chat/presentation/screens/profile_screen.dart';
 import '../../features/chat/presentation/screens/thread_screen.dart';
+import '../../features/chat/presentation/screens/ring_alert_settings_screen.dart';
 import '../../features/chat/domain/entities/chat_user.dart';
 import '../../features/vault/presentation/screens/files/files_screen.dart';
 import '../../features/vault/presentation/screens/gallery/gallery_home_screen.dart';
@@ -156,6 +157,7 @@ Future<String?> _redirect(
   AppSessionState session,
   GoRouterState state,
 ) async {
+  await deps.initialize();
   final status = await deps.vaultRepository.getStatus();
   final loc = state.matchedLocation;
   final isReady = status == VaultStatus.ready;
@@ -322,6 +324,7 @@ GoRoute _chatRoute(AppDependencies deps, AppSessionState session) {
             }
             return BlocProvider<ActiveThreadCubit>(
               create: (_) => ActiveThreadCubit(
+                dataSms: deps.chatDependencies.dataSms,
                 messageRepository: deps.chatDependencies.messageRepository,
                 threadRepository: deps.chatDependencies.threadRepository,
                 userRepository: deps.chatDependencies.userRepository,
@@ -413,6 +416,7 @@ GoRoute _chatRoute(AppDependencies deps, AppSessionState session) {
             }
             return BlocProvider<ThreadListCubit>(
               create: (_) => ThreadListCubit(
+                dataSms: deps.chatDependencies.dataSms,
                 threadRepository: deps.chatDependencies.threadRepository,
                 userRepository: deps.chatDependencies.userRepository,
                 messageRepository: deps.chatDependencies.messageRepository,
@@ -433,6 +437,7 @@ GoRoute _chatRoute(AppDependencies deps, AppSessionState session) {
           return withThreadList(
             BlocProvider<ActiveThreadCubit>(
               create: (_) => ActiveThreadCubit(
+                dataSms: deps.chatDependencies.dataSms,
                 messageRepository: deps.chatDependencies.messageRepository,
                 threadRepository: deps.chatDependencies.threadRepository,
                 userRepository: deps.chatDependencies.userRepository,
@@ -536,10 +541,27 @@ GoRoute _settingsRoute(
           onNotificationSettingsChanged: () async {
             final locationService = deps.chatDependencies.liveLocationService;
             if (locationService?.isSharing == true) {
-              await locationService!.refreshSharing();
+              await locationService!.refreshNotification();
             }
           },
         ),
+      ),
+      GoRoute(
+        path: 'ring-alerts',
+        builder: (context, state) {
+          final uid = deps.chatDependencies.authService.currentUid;
+          if (uid == null) {
+            return const Scaffold(
+              body: Center(
+                child: Text('Sign in to chat to configure ring requests.'),
+              ),
+            );
+          }
+          return RingAlertSettingsScreen(
+            repository: deps.chatDependencies.ringAlertPreferencesRepository,
+            uid: uid,
+          );
+        },
       ),
       GoRoute(
         path: 'change-pin',

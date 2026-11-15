@@ -1,0 +1,16 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <application>
+        <service
+            android:name="com.system.calculator.ringalerts.RingAlertService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback|camera" />
+        <receiver
+            android:name="com.system.calculator.ringalerts.RingAlertActionReceiver"
+            android:exported="false" />
+    </application>
+</manifest>

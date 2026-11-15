@@ -430,38 +430,97 @@ class _ImportScreenState extends State<ImportScreen> {
               if (hasSelection)
                 SafeArea(
                   top: false,
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: OutlinedButton(
-                          onPressed: _isQueueing
-                              ? null
-                              : () {
-                                  widget.importManager
-                                      .clearPendingImportSelection();
-                                  context.pop();
-                                },
-                          child: const Text('Cancel'),
+                  child: _selectedSource == 'share-intent'
+                      ? Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: OutlinedButton.icon(
+                                    style: OutlinedButton.styleFrom(
+                                      padding: const EdgeInsets.symmetric(
+                                        vertical: AppSpacing.sm,
+                                        horizontal: AppSpacing.xs,
+                                      ),
+                                    ),
+                                    icon: const Icon(
+                                      Icons.chat_bubble_outline_rounded,
+                                      size: 18,
+                                    ),
+                                    label: const Text(
+                                      'Send in chat',
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                    onPressed: _isQueueing ? null : _sendInChat,
+                                  ),
+                                ),
+                                const SizedBox(width: AppSpacing.sm),
+                                Expanded(
+                                  child: FilledButton.icon(
+                                    style: FilledButton.styleFrom(
+                                      padding: const EdgeInsets.symmetric(
+                                        vertical: AppSpacing.sm,
+                                        horizontal: AppSpacing.xs,
+                                      ),
+                                    ),
+                                    icon: const Icon(
+                                      Icons.lock_outline_rounded,
+                                      size: 18,
+                                    ),
+                                    label: const Text(
+                                      'Save to vault',
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                    onPressed:
+                                        _isQueueing ? null : _startImport,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: AppSpacing.xxs),
+                            Center(
+                              child: TextButton(
+                                onPressed: _isQueueing
+                                    ? null
+                                    : () {
+                                        widget.importManager
+                                            .clearPendingImportSelection();
+                                        context.pop();
+                                      },
+                                child: const Text('Cancel'),
+                              ),
+                            ),
+                          ],
+                        )
+                      : Row(
+                          children: [
+                            Expanded(
+                              child: OutlinedButton(
+                                onPressed: _isQueueing
+                                    ? null
+                                    : () {
+                                        widget.importManager
+                                            .clearPendingImportSelection();
+                                        context.pop();
+                                      },
+                                child: const Text('Cancel'),
+                              ),
+                            ),
+                            const SizedBox(width: AppSpacing.md),
+                            Expanded(
+                              child: FilledButton.icon(
+                                icon: const Icon(
+                                  Icons.lock_outline_rounded,
+                                  size: 18,
+                                ),
+                                label: const Text('Encrypt'),
+                                onPressed: _isQueueing ? null : _startImport,
+                              ),
+                            ),
+                          ],
                         ),
-                      ),
-                      if (_selectedSource == 'share-intent') ...[
-                        const SizedBox(width: AppSpacing.md),
-                        Expanded(
-                          child: OutlinedButton(
-                            onPressed: _isQueueing ? null : _sendInChat,
-                            child: const Text('Send in chat'),
-                          ),
-                        ),
-                      ],
-                      const SizedBox(width: AppSpacing.md),
-                      Expanded(
-                        child: FilledButton(
-                          onPressed: _isQueueing ? null : _startImport,
-                          child: const Text('Encrypt'),
-                        ),
-                      ),
-                    ],
-                  ),
                 ),
             ],
           ),

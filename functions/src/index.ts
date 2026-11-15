@@ -1,10 +1,9 @@
 /**
  * Cloud Functions for the end-to-end encrypted chat.
  *
- * Message bodies are ciphertext the server cannot read, so the push carries
- * only thread and message IDs. The client displays a generic alert and records
- * device delivery without exposing message content. GIPHY search stays in the
- * client, as required by GIPHY's API guidelines.
+ * Message bodies are ciphertext the server cannot read, so FCM omits message
+ * content. The client displays a generic alert and records device delivery.
+ * GIPHY search stays in the client, as required by GIPHY's API guidelines.
  */
 import { initializeApp } from "firebase-admin/app";
 import { FieldPath, getFirestore } from "firebase-admin/firestore";
@@ -108,7 +107,95 @@ export const onChatMessageCreated = onDocumentCreated(
       return;
     }
 
-    const notify = await acquireAlertSlot(threadId, recipientId);
+    const isRingRequest = message.eventType === "ringRequest";
+    const notify = isRingRequest
+      ? true
+      : await acquireAlertSlot(threadId, recipientId);
+    let ringSettings = {
+      enabled: true,
+      source: "system",
+      mode: "ringtone",
+      ringSoundEnabled: true,
+      vibrationEnabled: true,
+      ringtoneUri: "",
+      timeoutSeconds: 5,
+      vibrationPattern: "standard",
+      flashlightEnabled: false,
+      flashPattern: "slowBlink",
+    };
+    if (isRingRequest) {
+      try {
+        const settings = await db
+          .collection("users")
+          .doc(recipientId)
+          .collection("private")
+          .doc("ringAlertPreferences")
+          .get();
+        if (settings.exists) {
+          const value = settings.data() ?? {};
+          const legacyMode =
+            value.mode === "ringAndVibrate" ||
+            value.mode === "ringtone" ||
+            value.mode === "vibrate" ||
+            value.mode === "silent"
+              ? value.mode
+              : "ringAndVibrate";
+          const ringSoundEnabled =
+            typeof value.ringSoundEnabled === "boolean"
+              ? value.ringSoundEnabled
+              : legacyMode === "ringAndVibrate" || legacyMode === "ringtone";
+          const vibrationEnabled =
+            typeof value.vibrationEnabled === "boolean"
+              ? value.vibrationEnabled
+              : legacyMode === "ringAndVibrate" || legacyMode === "vibrate";
+          ringSettings = {
+            enabled: value.enabled !== false,
+            source:
+              value.source === "custom" ||
+              (value.source == null && typeof value.mode === "string")
+                ? "custom"
+                : "system",
+            mode: ringSoundEnabled
+              ? "ringtone"
+              : vibrationEnabled
+                ? "vibrate"
+                : "silent",
+            ringSoundEnabled,
+            vibrationEnabled,
+            ringtoneUri:
+              typeof value.ringtoneUri === "string" ? value.ringtoneUri : "",
+            timeoutSeconds:
+              typeof value.timeoutSeconds === "number" &&
+              [5, 10, 15, 30, 45, 60, 90, 120].includes(value.timeoutSeconds)
+                ? value.timeoutSeconds
+                : 5,
+            vibrationPattern: [
+              "standard",
+              "shortPulses",
+              "longPulses",
+            ].includes(value.vibrationPattern)
+              ? value.vibrationPattern
+              : "standard",
+            flashlightEnabled: value.flashlightEnabled === true,
+            flashPattern: [
+              "slowBlink",
+              "doubleBlink",
+              "fastBlink",
+            ].includes(value.flashPattern)
+              ? value.flashPattern
+              : "slowBlink",
+          };
+        }
+      } catch (error) {
+        logger.warn("Ring request preferences could not be read", {
+          threadId,
+          messageId,
+          recipientId,
+          error,
+        });
+        ringSettings.enabled = false;
+      }
+    }
     const tokensRef = db
       .collection("users")
       .doc(recipientId)
@@ -124,7 +211,33 @@ export const onChatMessageCreated = onDocumentCreated(
       const batch = tokens.slice(i, i + MAX_TOKENS_PER_SEND);
       const response = await getMessaging().sendEachForMulticast({
         tokens: batch,
-        data: { threadId, messageId, notify: notify ? "true" : "false" },
+        data: {
+          threadId,
+          messageId,
+          senderId,
+          notify: notify ? "true" : "false",
+          ...(isRingRequest
+            ? {
+                eventType: "ringRequest",
+                ringEnabled: ringSettings.enabled ? "true" : "false",
+                ringSource: ringSettings.source,
+                ringMode: ringSettings.mode,
+                ringSoundEnabled: ringSettings.ringSoundEnabled
+                  ? "true"
+                  : "false",
+                vibrationEnabled: ringSettings.vibrationEnabled
+                  ? "true"
+                  : "false",
+                ringtoneUri: ringSettings.ringtoneUri,
+                ringTimeoutSeconds: String(ringSettings.timeoutSeconds),
+                ringVibrationPattern: ringSettings.vibrationPattern,
+                ringFlashlightEnabled: ringSettings.flashlightEnabled
+                  ? "true"
+                  : "false",
+                ringFlashPattern: ringSettings.flashPattern,
+              }
+            : {}),
+        },
         android: {
           priority: "high",
         },

@@ -1,0 +1,28 @@
+plugins {
+    id 'com.android.library'
+}
+
+group = 'com.system.calculator.arrivalalerts'
+version = '0.0.1'
+
+android {
+    namespace = 'com.system.calculator.arrivalalerts'
+    compileSdk = 37
+    defaultConfig { minSdk = 24 }
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    implementation project(':workmanager_android')
+    implementation 'androidx.work:work-runtime-ktx:2.11.1'
+    implementation 'com.google.android.gms:play-services-location:21.3.0'
+}
+
+kotlin {
+    compilerOptions {
+        jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
+    }
+}

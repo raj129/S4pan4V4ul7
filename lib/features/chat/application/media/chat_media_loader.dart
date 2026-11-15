@@ -5,12 +5,16 @@ import 'package:cryptography/cryptography.dart';
 import 'package:flutter/foundation.dart';
 
 import '../crypto/chat_crypto_service.dart';
+import '../../domain/entities/chat_message.dart';
 import '../../domain/repositories/message_repository.dart';
 import 'chat_media_cache.dart';
 import 'android_chat_downloads.dart';
 import 'android_chat_local_media.dart';
 import 'chat_media_timings.dart';
 import './media_send_status.dart';
+
+typedef LinkedChatMediaBytesLoader =
+    Future<Uint8List?> Function(ChatMessage message);
 
 /// Shared, observable attachment decryption with bounded plaintext memory.
 class ChatMediaLoader extends ChangeNotifier {
@@ -71,6 +75,9 @@ class ChatMediaLoader extends ChangeNotifier {
 
   Future<int> cachedSize(String storagePath) =>
       diskCache.sizeOf(diskKey(storagePath));
+
+  Future<bool> wasMovedToVault(String storagePath) =>
+      diskCache.wasMoved(diskKey(storagePath));
 
   void setAccount(String uid) {
     if (_accountId == uid) return;
@@ -148,9 +155,9 @@ class ChatMediaLoader extends ChangeNotifier {
             },
             onError: (Object error, StackTrace stack) {
               _log(
-                  'ChatMedia fail path=$storagePath sent=$sent stage=${_stages[storagePath]} '
-                  'error=${error.runtimeType} $error ms=${started.elapsedMilliseconds}',
-                );
+                'ChatMedia fail path=$storagePath sent=$sent stage=${_stages[storagePath]} '
+                'error=${error.runtimeType} $error ms=${started.elapsedMilliseconds}',
+              );
               throw error;
             },
           );
@@ -243,7 +250,7 @@ class ChatMediaLoader extends ChangeNotifier {
     if (await diskCache.wasMoved(ticket.diskKey)) {
       throw const ChatLocalMediaException(
         'local_media_moved',
-        'This attachment was moved to the vault. Open it from the vault.',
+        'This attachment is linked to the vault. Unlock the vault to view it.',
       );
     }
     final encrypted =
@@ -347,7 +354,7 @@ class ChatMediaLoader extends ChangeNotifier {
             await diskCache.wasMoved(ticket.diskKey)) {
           throw const ChatLocalMediaException(
             'local_media_moved',
-            'This attachment was moved to the vault. Open it from the vault.',
+            'This attachment is linked to the vault. Unlock the vault to view it.',
           );
         }
         if (senderId == _accountId) {
@@ -413,7 +420,7 @@ class ChatMediaLoader extends ChangeNotifier {
         if (localMedia != null && await diskCache.wasMoved(ticket.diskKey)) {
           throw const ChatLocalMediaException(
             'local_media_moved',
-            'This attachment was moved to the vault. Open it from the vault.',
+            'This attachment is linked to the vault. Unlock the vault to view it.',
           );
         }
         if (encrypted.isEmpty) {
