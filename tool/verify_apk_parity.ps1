@@ -7,10 +7,10 @@ param(
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 
-function Get-CanonicalManifestNode {
+function Get-CanonicalManifestAttributes {
     param([System.Xml.XmlElement]$Node, [hashtable]$Resources)
 
-    $attributes = @()
+    $attributes = @{}
     foreach ($attribute in @($Node.Attributes | Sort-Object Name)) {
         if ($attribute.Name -eq 'xmlns:android') { continue }
         if ($Node.LocalName -eq 'application' -and
@@ -24,7 +24,132 @@ function Get-CanonicalManifestNode {
             }
             $value = '@' + $Resources[$id]
         }
-        $attributes += $attribute.Name + '=' + $value
+        $attributes[$attribute.Name] = $value
+    }
+    return $attributes
+}
+
+function Get-ManifestNodeMatchKey {
+    param([System.Xml.XmlElement]$Node)
+
+    $ns = 'http://schemas.android.com/apk/res/android'
+    $identity = @()
+    foreach ($name in @('name', 'scheme', 'host', 'port', 'mimeType', 'path', 'pathPrefix')) {
+        $value = $Node.GetAttribute($name, $ns)
+        if ($value) { $identity += "$name=$value" }
+    }
+    if ($Node.LocalName -eq 'intent-filter') {
+        $childKeys = @($Node.ChildNodes |
+            Where-Object { $_ -is [System.Xml.XmlElement] } |
+            ForEach-Object { Get-ManifestNodeMatchKey $_ } |
+            Sort-Object)
+        $identity += 'children=' + ($childKeys -join ',')
+    }
+    return $Node.LocalName + '|' + ($identity -join '|')
+}
+
+function Get-ManifestDifferenceDetails {
+    param(
+        [System.Xml.XmlElement]$DebugNode,
+        [hashtable]$DebugResources,
+        [System.Xml.XmlElement]$ReleaseNode,
+        [hashtable]$ReleaseResources,
+        [string]$Path = '/manifest'
+    )
+
+    $differences = New-Object 'System.Collections.Generic.List[string]'
+    if ($DebugNode.LocalName -ne $ReleaseNode.LocalName) {
+        $differences.Add("$Path element kind differs")
+        return $differences.ToArray()
+    }
+
+    $debugAttributes = Get-CanonicalManifestAttributes $DebugNode $DebugResources
+    $releaseAttributes = Get-CanonicalManifestAttributes $ReleaseNode $ReleaseResources
+    $attributeNames = @(@($debugAttributes.Keys) + @($releaseAttributes.Keys) |
+        Sort-Object -Unique)
+    foreach ($name in $attributeNames) {
+        $inDebug = $debugAttributes.ContainsKey($name)
+        $inRelease = $releaseAttributes.ContainsKey($name)
+        if (-not $inDebug) {
+            $differences.Add("$Path attribute $name exists only in release APK")
+        } elseif (-not $inRelease) {
+            $differences.Add("$Path attribute $name exists only in debug APK")
+        } elseif ($debugAttributes[$name] -ne $releaseAttributes[$name]) {
+            $differences.Add("$Path attribute $name differs")
+        }
+    }
+
+    $debugChildren = @($DebugNode.ChildNodes |
+        Where-Object { $_ -is [System.Xml.XmlElement] })
+    $releaseChildren = @($ReleaseNode.ChildNodes |
+        Where-Object { $_ -is [System.Xml.XmlElement] })
+    $releaseChildUsed = @()
+    for ($i = 0; $i -lt $releaseChildren.Count; $i++) {
+        $releaseChildUsed += $false
+    }
+    $debugOccurrences = @{}
+
+    for ($i = 0; $i -lt $debugChildren.Count; $i++) {
+        $debugChild = $debugChildren[$i]
+        $localName = $debugChild.LocalName
+        if (-not $debugOccurrences.ContainsKey($localName)) {
+            $debugOccurrences[$localName] = 0
+        }
+        $debugOccurrences[$localName]++
+        $childPath = "$Path/$localName[$($debugOccurrences[$localName])]"
+        $matchKey = Get-ManifestNodeMatchKey $debugChild
+        $matchIndex = -1
+
+        for ($j = 0; $j -lt $releaseChildren.Count; $j++) {
+            if (-not $releaseChildUsed[$j] -and
+                (Get-ManifestNodeMatchKey $releaseChildren[$j]) -ceq $matchKey) {
+                $matchIndex = $j
+                break
+            }
+        }
+        if ($matchIndex -lt 0) {
+            for ($j = 0; $j -lt $releaseChildren.Count; $j++) {
+                if (-not $releaseChildUsed[$j] -and
+                    $releaseChildren[$j].LocalName -eq $localName) {
+                    $matchIndex = $j
+                    break
+                }
+            }
+        }
+
+        if ($matchIndex -lt 0) {
+            $differences.Add("$childPath element exists only in debug APK")
+            continue
+        }
+        $releaseChildUsed[$matchIndex] = $true
+        $nested = @(Get-ManifestDifferenceDetails `
+            $debugChild $DebugResources `
+            $releaseChildren[$matchIndex] $ReleaseResources `
+            $childPath)
+        foreach ($difference in $nested) { $differences.Add($difference) }
+    }
+
+    $releaseOccurrences = @{}
+    for ($i = 0; $i -lt $releaseChildren.Count; $i++) {
+        if ($releaseChildUsed[$i]) { continue }
+        $localName = $releaseChildren[$i].LocalName
+        if (-not $releaseOccurrences.ContainsKey($localName)) {
+            $releaseOccurrences[$localName] = 0
+        }
+        $releaseOccurrences[$localName]++
+        $childPath = "$Path/$localName[$($releaseOccurrences[$localName])]"
+        $differences.Add("$childPath element exists only in release APK")
+    }
+    return $differences.ToArray()
+}
+
+function Get-CanonicalManifestNode {
+    param([System.Xml.XmlElement]$Node, [hashtable]$Resources)
+
+    $attributes = Get-CanonicalManifestAttributes $Node $Resources
+    $attributeValues = @()
+    foreach ($name in @($attributes.Keys | Sort-Object)) {
+        $attributeValues += $name + '=' + $attributes[$name]
     }
     $children = @()
     foreach ($child in $Node.ChildNodes) {
@@ -35,7 +160,7 @@ function Get-CanonicalManifestNode {
             'com.google.firebase.crashlytics.mapping_file_id') { continue }
         $children += Get-CanonicalManifestNode $child $Resources
     }
-    return (@($Node.LocalName, ($attributes -join "`n"), (@($children | Sort-Object) -join "`n")) |
+    return (@($Node.LocalName, ($attributeValues -join "`n"), (@($children | Sort-Object) -join "`n")) |
         ConvertTo-Json -Compress)
 }
 
@@ -193,8 +318,20 @@ Assert-FeatureManifest $debug.Xml $false
 Assert-FeatureManifest $release.Xml $true
 if ((Get-CanonicalManifestNode $debug.Xml.DocumentElement $debug.Resources) -ne
     (Get-CanonicalManifestNode $release.Xml.DocumentElement $release.Resources)) {
-    throw ('Manifest feature configuration differs. Compare decoded manifests privately ' +
-        '(they contain API keys); check permissions, components, SDKs, versions and metadata.')
+    $differences = @(Get-ManifestDifferenceDetails `
+        $debug.Xml.DocumentElement $debug.Resources `
+        $release.Xml.DocumentElement $release.Resources)
+    if ($differences.Count -eq 0) {
+        $differences = @('Canonical forms differ, but no structural difference was found.')
+    }
+    $limit = 12
+    $shown = @($differences | Select-Object -First $limit)
+    $message = "Manifest feature configuration differs (manifest values redacted):`n  " +
+        ($shown -join "`n  ")
+    if ($differences.Count -gt $limit) {
+        $message += "`n  ... $($differences.Count - $limit) more difference(s) not shown."
+    }
+    throw $message
 }
 Assert-AssetParity (Get-ApkAssets $DebugApk $false) (Get-ApkAssets $ReleaseApk $true)
 Write-Output ('APK packaging parity passed: manifests, required features, Flutter assets and ABIs. ' +

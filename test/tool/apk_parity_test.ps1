@@ -41,6 +41,7 @@ $manifest = @'
     </receiver>
     <meta-data android:name="com.google.firebase.crashlytics.mapping_file_id" android:value="one"/>
     <meta-data android:name="test-resource" android:resource="@ref/0x7f010001"/>
+    <meta-data android:name="test-api-key" android:value="secret-one"/>
   </application>
 </manifest>
 '@
@@ -56,6 +57,17 @@ $debugResources = @{ '0x7f020002' = 'xml/paths' }
 $canonical = Get-CanonicalManifestNode $release.DocumentElement $releaseResources
 if ($canonical -ne (Get-CanonicalManifestNode $debug.DocumentElement $debugResources)) {
     throw 'Expected build-mode normalization failed.'
+}
+[xml]$changedMetadata = $manifest.Replace('secret-one', 'secret-two')
+$manifestDifferences = @(Get-ManifestDifferenceDetails `
+    $release.DocumentElement $releaseResources `
+    $changedMetadata.DocumentElement $releaseResources)
+$manifestDifferenceText = $manifestDifferences -join "`n"
+if ($manifestDifferenceText -notmatch 'meta-data\[\d+\] attribute android:value differs') {
+    throw "Expected a redacted metadata difference, got '$manifestDifferenceText'."
+}
+if ($manifestDifferenceText -match 'secret-one|secret-two') {
+    throw 'Manifest difference diagnostics exposed a metadata value.'
 }
 [xml]$missing = $manifest.Replace('android.permission.SEND_SMS', 'other.permission')
 Assert-Fails { Assert-FeatureManifest $missing $true } 'SEND_SMS'
