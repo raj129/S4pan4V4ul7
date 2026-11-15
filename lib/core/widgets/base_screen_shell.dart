@@ -40,7 +40,7 @@ class BaseScreenShell extends StatelessWidget {
               )
             : null,
         actions: [
-          if (actions != null) ...actions!,
+          ...?actions,
           if (showQuickLock) const QuickLockActionButton(),
           const SizedBox(width: AppSpacing.xs),
         ],

@@ -342,32 +342,6 @@ class _GalleryBodyState extends State<_GalleryBody> {
     );
   }
 
-  Future<void> _delete(VaultPhoto photo) async {
-    final confirmed = await showConfirmDialog(
-      context,
-      title: 'Delete photo?',
-      content: 'This photo will be moved to Secure Trash.',
-      confirmLabel: 'Delete',
-    );
-    if (!confirmed) return;
-    final expiry = DateTime.now()
-        .add(const Duration(days: 30))
-        .millisecondsSinceEpoch;
-    await widget.photoRepository.movePhotoToTrash(
-      photo.id,
-      expiresAtMs: expiry,
-    );
-    widget.importManager.notifyGalleryChanged();
-    if (!mounted) return;
-    setState(() {
-      _photos = _photos.where((item) => item.id != photo.id).toList();
-    });
-    if (!mounted) return;
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(const SnackBar(content: Text('Moved to Secure Trash')));
-  }
-
   @override
   Widget build(BuildContext context) {
     if (_loading) {
