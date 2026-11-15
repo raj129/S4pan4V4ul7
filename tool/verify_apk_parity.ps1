@@ -48,6 +48,17 @@ function Get-ManifestNodeMatchKey {
     return $Node.LocalName + '|' + ($identity -join '|')
 }
 
+function Get-ManifestNodeLabel {
+    param([System.Xml.XmlElement]$Node, [int]$Index)
+
+    $name = $Node.GetAttribute(
+        'name',
+        'http://schemas.android.com/apk/res/android'
+    )
+    if ($name) { return "$($Node.LocalName)[name=$name]" }
+    return "$($Node.LocalName)[$Index]"
+}
+
 function Get-ManifestDifferenceDetails {
     param(
         [System.Xml.XmlElement]$DebugNode,
@@ -96,7 +107,8 @@ function Get-ManifestDifferenceDetails {
             $debugOccurrences[$localName] = 0
         }
         $debugOccurrences[$localName]++
-        $childPath = "$Path/$localName[$($debugOccurrences[$localName])]"
+        $childLabel = Get-ManifestNodeLabel $debugChild $debugOccurrences[$localName]
+        $childPath = "$Path/$childLabel"
         $matchKey = Get-ManifestNodeMatchKey $debugChild
         $matchIndex = -1
 
@@ -137,7 +149,8 @@ function Get-ManifestDifferenceDetails {
             $releaseOccurrences[$localName] = 0
         }
         $releaseOccurrences[$localName]++
-        $childPath = "$Path/$localName[$($releaseOccurrences[$localName])]"
+        $childLabel = Get-ManifestNodeLabel $releaseChildren[$i] $releaseOccurrences[$localName]
+        $childPath = "$Path/$childLabel"
         $differences.Add("$childPath element exists only in release APK")
     }
     return $differences.ToArray()

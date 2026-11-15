@@ -63,7 +63,7 @@ $manifestDifferences = @(Get-ManifestDifferenceDetails `
     $release.DocumentElement $releaseResources `
     $changedMetadata.DocumentElement $releaseResources)
 $manifestDifferenceText = $manifestDifferences -join "`n"
-if ($manifestDifferenceText -notmatch 'meta-data\[\d+\] attribute android:value differs') {
+if ($manifestDifferenceText -notmatch 'meta-data\[name=test-api-key\] attribute android:value differs') {
     throw "Expected a redacted metadata difference, got '$manifestDifferenceText'."
 }
 if ($manifestDifferenceText -match 'secret-one|secret-two') {
