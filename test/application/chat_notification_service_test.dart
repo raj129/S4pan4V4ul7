@@ -157,35 +157,38 @@ void main() {
     },
   );
 
-  test('emits an in-app alert outside the visible chat branch', () async {
-    final repository = _ThreadRepository();
-    final service = ChatNotificationService(
-      threadRepository: repository,
-      isAppForeground: () => true,
-      presentNotification:
-          ({required threadId, required title, required body}) async {},
-    );
+  test(
+    'suppresses alerts while foregrounded outside the visible chat branch',
+    () async {
+      final repository = _ThreadRepository();
+      final notifications = <String>[];
+      final service = ChatNotificationService(
+        threadRepository: repository,
+        isAppForeground: () => true,
+        presentNotification:
+            ({required threadId, required title, required body}) async {
+              notifications.add(threadId);
+            },
+      );
 
-    await service.start('alice');
-    repository.updates.add([_thread('alice_bob', 0)]);
-    await service.setActiveThread('alice_bob');
-    repository.updates.add([_thread('alice_bob', 1)]);
-    await Future<void>.delayed(Duration.zero);
-    expect(service.foregroundNotification.value, isNull);
+      await service.start('alice');
+      repository.updates.add([_thread('alice_bob', 0)]);
+      await service.setActiveThread('alice_bob');
+      repository.updates.add([_thread('alice_bob', 1)]);
+      await Future<void>.delayed(Duration.zero);
 
-    service.setChatSectionVisible(false);
-    repository.updates.add([_thread('alice_bob', 2)]);
-    await Future<void>.delayed(Duration.zero);
+      service.setChatSectionVisible(false);
+      repository.updates.add([_thread('alice_bob', 2)]);
+      await Future<void>.delayed(Duration.zero);
 
-    expect(service.foregroundNotification.value, isNotNull);
-    expect(service.foregroundNotification.value!.threadId, 'alice_bob');
-    expect(service.foregroundNotification.value!.title, isEmpty);
-    expect(service.isActiveThread('alice_bob'), isFalse);
+      expect(notifications, isEmpty);
+      expect(service.isActiveThread('alice_bob'), isFalse);
 
-    service.setChatSectionVisible(true);
-    expect(service.isActiveThread('alice_bob'), isTrue);
+      service.setChatSectionVisible(true);
+      expect(service.isActiveThread('alice_bob'), isTrue);
 
-    await service.dispose();
-    await repository.updates.close();
-  });
+      await service.dispose();
+      await repository.updates.close();
+    },
+  );
 }

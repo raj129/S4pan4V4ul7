@@ -14,21 +14,8 @@ typedef ChatNotificationPresenter =
       required String body,
     });
 
-@immutable
-class ForegroundChatNotification {
-  const ForegroundChatNotification({
-    required this.threadId,
-    required this.title,
-    required this.body,
-  });
-
-  final String threadId;
-  final String title;
-  final String body;
-}
-
-/// Emits an in-app alert while the app is visible and a local notification
-/// while it is backgrounded, and remembers the tapped conversation.
+/// Emits local notifications while the app is backgrounded and remembers the
+/// tapped conversation. Incoming chat alerts are suppressed while foregrounded.
 ///
 /// The background FCM handler also posts through the local-notification plugin.
 /// Both local notifications use the Android tag = threadId and id = 0, so they
@@ -53,10 +40,6 @@ class ChatNotificationService {
   final bool Function()? _isAppForeground;
   final DateTime Function() _clock;
   final _plugin = FlutterLocalNotificationsPlugin();
-
-  /// New-message events for the app shell to display as in-app banners.
-  final ValueNotifier<ForegroundChatNotification?> foregroundNotification =
-      ValueNotifier(null);
 
   /// Must match `android.notification.channelId` in the Cloud Function and the
   /// default channel declared in AndroidManifest.xml.
@@ -166,17 +149,10 @@ class ChatNotificationService {
   }
 
   Future<void> _notify(ChatThread thread) async {
+    if (_isForeground) return;
+
     final title = await _incomingChatAlertTitle();
     final body = await _incomingChatAlertText();
-
-    if (_isForeground) {
-      foregroundNotification.value = ForegroundChatNotification(
-        threadId: thread.threadId,
-        title: title,
-        body: body,
-      );
-      return;
-    }
 
     final presentNotification = _presentNotification;
     if (presentNotification != null) {
@@ -298,6 +274,5 @@ class ChatNotificationService {
   Future<void> dispose() async {
     await stop();
     pendingThreadId.dispose();
-    foregroundNotification.dispose();
   }
 }
