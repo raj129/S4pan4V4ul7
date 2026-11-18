@@ -13,7 +13,6 @@ import 'package:photo_vault/core/testing/repositories/in_memory_settings_reposit
 import 'package:photo_vault/core/widgets/base_screen_shell.dart';
 import 'package:photo_vault/features/vault/application/services/pin_validator.dart';
 import 'package:photo_vault/features/vault/application/usecases/unlock_vault_usecase.dart';
-import 'package:photo_vault/features/vault/domain/entities/user_mode.dart';
 import 'package:photo_vault/features/vault/domain/entities/incoming_chat_alert_preferences.dart';
 import 'package:photo_vault/features/chat/domain/entities/ring_alert_preferences.dart';
 import 'package:photo_vault/features/chat/domain/repositories/ring_alert_preferences_repository.dart';
@@ -95,7 +94,6 @@ void main() {
         GoRoute(
           path: '/settings',
           builder: (context, state) => SettingsScreen(
-            mode: UserMode.localOnly,
             settingsRepository: settings,
             unlockVaultUseCase: _FakeUnlock(),
             pinValidator: PinValidator(),
@@ -166,6 +164,26 @@ void main() {
     expect(
       find.text('Screenshots and screen recordings are allowed.'),
       findsOneWidget,
+    );
+  });
+
+  testWidgets('backup and vault recovery share one settings entry', (
+    tester,
+  ) async {
+    await pump(tester, _FakeBattery(exempt: true));
+
+    expect(find.text('Google mode & restore'), findsNothing);
+    await tester.scrollUntilVisible(
+      find.byKey(const Key('settings-backup-tile')),
+      240,
+      scrollable: find.byType(Scrollable).first,
+    );
+    expect(find.byKey(const Key('settings-backup-tile')), findsOneWidget);
+    expect(
+      tester
+          .widget<ListTile>(find.byKey(const Key('settings-backup-tile')))
+          .title,
+      isA<Text>().having((text) => text.data, 'label', 'Backup & restore'),
     );
   });
 

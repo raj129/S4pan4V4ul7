@@ -19,6 +19,9 @@ class GoogleDriveChatBackupStore implements ChatBackupStore {
   @override
   bool get requiresNetwork => true;
 
+  @override
+  bool get isCloud => true;
+
   static String _fileName(String accountId) => 'chat_backup_$accountId.enc';
 
   Future<drive.DriveApi> _api(bool interactive) async {
@@ -60,6 +63,14 @@ class GoogleDriveChatBackupStore implements ChatBackupStore {
         uploadMedia: media,
       );
     }
+  }
+
+  @override
+  Future<void> delete(String accountId, {bool interactive = false}) async {
+    final api = await _api(interactive);
+    final existing = await _find(api, accountId);
+    if (existing == null) return;
+    await api.files.delete(existing.id!);
   }
 
   @override

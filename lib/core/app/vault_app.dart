@@ -51,7 +51,6 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
     authRepository: _deps.authRepository,
     createVaultUseCase: _deps.createVaultUseCase,
     pinValidator: _deps.pinValidator,
-    restoreFlowService: _deps.restoreFlowService,
   );
   late final GoRouter _router = buildAppRouter(
     deps: _deps,
@@ -94,6 +93,10 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
       }),
     );
     unawaited(_hydrateSessionSettings());
+    // Desktop has no nightly job; back up vault photos when due on open.
+    unawaited(
+      _deps.vaultPhotoBackup.backupIfDue().catchError((Object _) => null),
+    );
   }
 
   void _updateChatVisibility() {

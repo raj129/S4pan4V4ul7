@@ -38,4 +38,30 @@ class VaultPhoto {
   final bool isTrashed;
   final String? albumId;
   final int? trashExpiresAtMs;
+
+  VaultPhoto copyWithPaths({
+    required String encryptedFilePath,
+    required String thumbnailPath,
+  }) {
+    return VaultPhoto(
+      id: id,
+      originalFilename: originalFilename,
+      encryptedFilePath: encryptedFilePath,
+      thumbnailPath: thumbnailPath,
+      wrappedDek: wrappedDek,
+      photoNonce: photoNonce,
+      thumbnailNonce: thumbnailNonce,
+      encryptionVersion: encryptionVersion,
+      checksumSha256: checksumSha256,
+      fileSize: fileSize,
+      mimeType: mimeType,
+      createdTimeMs: createdTimeMs,
+      importedTimeMs: importedTimeMs,
+      modifiedTimeMs: modifiedTimeMs,
+      favorite: favorite,
+      isTrashed: isTrashed,
+      albumId: albumId,
+      trashExpiresAtMs: trashExpiresAtMs,
+    );
+  }
 }

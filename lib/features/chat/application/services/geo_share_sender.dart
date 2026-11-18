@@ -34,8 +34,5 @@ Future<void> sendGeoShareMessage({
     preview: share.preview,
     sentAt: sent.sentAt,
   );
-  await threads.incrementUnread(
-    threadId: threadId,
-    recipientUid: recipientUid,
-  );
+  await threads.incrementUnread(threadId: threadId, recipientUid: recipientUid);
 }

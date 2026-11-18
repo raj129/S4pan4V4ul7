@@ -76,6 +76,78 @@ class PersistentSettingsRepository implements SettingsRepository {
     );
   }
 
+  Future<bool> _readDefaultTrue(String key) async {
+    final raw = await _kv.read(key);
+    return raw == null ? true : raw == 'true';
+  }
+
+  @override
+  Future<bool> isBackupChatsEnabled() =>
+      _readDefaultTrue(StorageKeys.backupChatsEnabled);
+
+  @override
+  Future<void> setBackupChatsEnabled(bool enabled) =>
+      _kv.write(StorageKeys.backupChatsEnabled, enabled.toString());
+
+  @override
+  Future<bool> isBackupVaultPhotosEnabled() =>
+      _readDefaultTrue(StorageKeys.backupVaultPhotosEnabled);
+
+  @override
+  Future<void> setBackupVaultPhotosEnabled(bool enabled) =>
+      _kv.write(StorageKeys.backupVaultPhotosEnabled, enabled.toString());
+
+  @override
+  Future<bool> isBackupCloudEnabled() async {
+    final raw = await _kv.read(StorageKeys.backupCloudEnabled);
+    return raw == 'true';
+  }
+
+  @override
+  Future<void> setBackupCloudEnabled(bool enabled) =>
+      _kv.write(StorageKeys.backupCloudEnabled, enabled.toString());
+
+  @override
+  Future<bool> isBackupWifiOnly() =>
+      _readDefaultTrue(StorageKeys.backupWifiOnly);
+
+  @override
+  Future<void> setBackupWifiOnly(bool enabled) =>
+      _kv.write(StorageKeys.backupWifiOnly, enabled.toString());
+
+  @override
+  Future<DateTime?> getLastVaultPhotoBackupAt() async {
+    final ms = int.tryParse(
+      await _kv.read(StorageKeys.lastVaultPhotoBackupAt) ?? '',
+    );
+    return ms == null ? null : DateTime.fromMillisecondsSinceEpoch(ms);
+  }
+
+  @override
+  Future<void> setLastVaultPhotoBackupAt(DateTime? at) async {
+    if (at == null) {
+      await _kv.delete(StorageKeys.lastVaultPhotoBackupAt);
+      return;
+    }
+    await _kv.write(
+      StorageKeys.lastVaultPhotoBackupAt,
+      at.millisecondsSinceEpoch.toString(),
+    );
+  }
+
+  @override
+  Future<String?> getLastVaultPhotoBackupVaultId() =>
+      _kv.read(StorageKeys.lastVaultPhotoBackupVaultId);
+
+  @override
+  Future<void> setLastVaultPhotoBackupVaultId(String? vaultId) async {
+    if (vaultId == null) {
+      await _kv.delete(StorageKeys.lastVaultPhotoBackupVaultId);
+      return;
+    }
+    await _kv.write(StorageKeys.lastVaultPhotoBackupVaultId, vaultId);
+  }
+
   @override
   Future<String?> getChatImageQuality() =>
       _kv.read(StorageKeys.chatImageQuality);

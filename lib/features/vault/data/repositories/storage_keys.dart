@@ -32,6 +32,15 @@ class StorageKeys {
       'settings.external_storage_mirror_enabled';
   static const String driveEncryptedBackupEnabled =
       'settings.drive_encrypted_backup_enabled';
+  static const String backupChatsEnabled = 'settings.backup_chats_enabled';
+  static const String backupVaultPhotosEnabled =
+      'settings.backup_vault_photos_enabled';
+  static const String backupCloudEnabled = 'settings.backup_cloud_enabled';
+  static const String backupWifiOnly = 'settings.backup_wifi_only';
+  static const String lastVaultPhotoBackupAt =
+      'settings.last_vault_photo_backup_at';
+  static const String lastVaultPhotoBackupVaultId =
+      'settings.last_vault_photo_backup_vault_id';
   static const String chatImageQuality = 'settings.chat_image_quality';
   static const String themePalette = 'settings.theme_palette';
   static const String themeMode = 'settings.theme_mode';

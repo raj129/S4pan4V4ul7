@@ -62,10 +62,10 @@ class ChannelArrivalGeofences implements ArrivalGeofences {
   final MethodChannel _channel;
 
   @override
-  Future<void> sync(List<ArrivalFence> fences) => _channel.invokeMethod<void>(
-    'sync',
-    {'fences': [for (final f in fences) f.toMap()]},
-  );
+  Future<void> sync(List<ArrivalFence> fences) =>
+      _channel.invokeMethod<void>('sync', {
+        'fences': [for (final f in fences) f.toMap()],
+      });
 
   @override
   Future<List<ArrivalGeofenceEvent>> peekPending() async {

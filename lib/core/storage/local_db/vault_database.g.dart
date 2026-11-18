@@ -8,6 +8,17 @@ class $PhotosTable extends Photos with TableInfo<$PhotosTable, VaultPhoto> {
   final GeneratedDatabase attachedDatabase;
   final String? _alias;
   $PhotosTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _vaultIdMeta = const VerificationMeta(
+    'vaultId',
+  );
+  @override
+  late final GeneratedColumn<String> vaultId = GeneratedColumn<String>(
+    'vault_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
   static const VerificationMeta _idMeta = const VerificationMeta('id');
   @override
   late final GeneratedColumn<String> id = GeneratedColumn<String>(
@@ -250,6 +261,7 @@ class $PhotosTable extends Photos with TableInfo<$PhotosTable, VaultPhoto> {
   );
   @override
   List<GeneratedColumn> get $columns => [
+    vaultId,
     id,
     originalFilename,
     createdTimeMs,
@@ -285,6 +297,14 @@ class $PhotosTable extends Photos with TableInfo<$PhotosTable, VaultPhoto> {
   }) {
     final context = VerificationContext();
     final data = instance.toColumns(true);
+    if (data.containsKey('vault_id')) {
+      context.handle(
+        _vaultIdMeta,
+        vaultId.isAcceptableOrUnknown(data['vault_id']!, _vaultIdMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_vaultIdMeta);
+    }
     if (data.containsKey('id')) {
       context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
     } else if (isInserting) {
@@ -488,11 +508,15 @@ class $PhotosTable extends Photos with TableInfo<$PhotosTable, VaultPhoto> {
   }
 
   @override
-  Set<GeneratedColumn> get $primaryKey => {id};
+  Set<GeneratedColumn> get $primaryKey => {vaultId, id};
   @override
   VaultPhoto map(Map<String, dynamic> data, {String? tablePrefix}) {
     final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
     return VaultPhoto(
+      vaultId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}vault_id'],
+      )!,
       id: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}id'],
@@ -591,6 +615,7 @@ class $PhotosTable extends Photos with TableInfo<$PhotosTable, VaultPhoto> {
 }
 
 class VaultPhoto extends DataClass implements Insertable<VaultPhoto> {
+  final String vaultId;
   final String id;
   final String originalFilename;
   final int createdTimeMs;
@@ -614,6 +639,7 @@ class VaultPhoto extends DataClass implements Insertable<VaultPhoto> {
   final int? trashExpiresAtMs;
   final int? deletedTombstoneAtMs;
   const VaultPhoto({
+    required this.vaultId,
     required this.id,
     required this.originalFilename,
     required this.createdTimeMs,
@@ -640,6 +666,7 @@ class VaultPhoto extends DataClass implements Insertable<VaultPhoto> {
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
     final map = <String, Expression>{};
+    map['vault_id'] = Variable<String>(vaultId);
     map['id'] = Variable<String>(id);
     map['original_filename'] = Variable<String>(originalFilename);
     map['created_time_ms'] = Variable<int>(createdTimeMs);
@@ -673,6 +700,7 @@ class VaultPhoto extends DataClass implements Insertable<VaultPhoto> {
 
   PhotosCompanion toCompanion(bool nullToAbsent) {
     return PhotosCompanion(
+      vaultId: Value(vaultId),
       id: Value(id),
       originalFilename: Value(originalFilename),
       createdTimeMs: Value(createdTimeMs),
@@ -710,6 +738,7 @@ class VaultPhoto extends DataClass implements Insertable<VaultPhoto> {
   }) {
     serializer ??= driftRuntimeOptions.defaultSerializer;
     return VaultPhoto(
+      vaultId: serializer.fromJson<String>(json['vaultId']),
       id: serializer.fromJson<String>(json['id']),
       originalFilename: serializer.fromJson<String>(json['originalFilename']),
       createdTimeMs: serializer.fromJson<int>(json['createdTimeMs']),
@@ -740,6 +769,7 @@ class VaultPhoto extends DataClass implements Insertable<VaultPhoto> {
   Map<String, dynamic> toJson({ValueSerializer? serializer}) {
     serializer ??= driftRuntimeOptions.defaultSerializer;
     return <String, dynamic>{
+      'vaultId': serializer.toJson<String>(vaultId),
       'id': serializer.toJson<String>(id),
       'originalFilename': serializer.toJson<String>(originalFilename),
       'createdTimeMs': serializer.toJson<int>(createdTimeMs),
@@ -766,6 +796,7 @@ class VaultPhoto extends DataClass implements Insertable<VaultPhoto> {
   }
 
   VaultPhoto copyWith({
+    String? vaultId,
     String? id,
     String? originalFilename,
     int? createdTimeMs,
@@ -789,6 +820,7 @@ class VaultPhoto extends DataClass implements Insertable<VaultPhoto> {
     Value<int?> trashExpiresAtMs = const Value.absent(),
     Value<int?> deletedTombstoneAtMs = const Value.absent(),
   }) => VaultPhoto(
+    vaultId: vaultId ?? this.vaultId,
     id: id ?? this.id,
     originalFilename: originalFilename ?? this.originalFilename,
     createdTimeMs: createdTimeMs ?? this.createdTimeMs,
@@ -818,6 +850,7 @@ class VaultPhoto extends DataClass implements Insertable<VaultPhoto> {
   );
   VaultPhoto copyWithCompanion(PhotosCompanion data) {
     return VaultPhoto(
+      vaultId: data.vaultId.present ? data.vaultId.value : this.vaultId,
       id: data.id.present ? data.id.value : this.id,
       originalFilename: data.originalFilename.present
           ? data.originalFilename.value
@@ -876,6 +909,7 @@ class VaultPhoto extends DataClass implements Insertable<VaultPhoto> {
   @override
   String toString() {
     return (StringBuffer('VaultPhoto(')
+          ..write('vaultId: $vaultId, ')
           ..write('id: $id, ')
           ..write('originalFilename: $originalFilename, ')
           ..write('createdTimeMs: $createdTimeMs, ')
@@ -904,6 +938,7 @@ class VaultPhoto extends DataClass implements Insertable<VaultPhoto> {
 
   @override
   int get hashCode => Object.hashAll([
+    vaultId,
     id,
     originalFilename,
     createdTimeMs,
@@ -931,6 +966,7 @@ class VaultPhoto extends DataClass implements Insertable<VaultPhoto> {
   bool operator ==(Object other) =>
       identical(this, other) ||
       (other is VaultPhoto &&
+          other.vaultId == this.vaultId &&
           other.id == this.id &&
           other.originalFilename == this.originalFilename &&
           other.createdTimeMs == this.createdTimeMs &&
@@ -956,6 +992,7 @@ class VaultPhoto extends DataClass implements Insertable<VaultPhoto> {
 }
 
 class PhotosCompanion extends UpdateCompanion<VaultPhoto> {
+  final Value<String> vaultId;
   final Value<String> id;
   final Value<String> originalFilename;
   final Value<int> createdTimeMs;
@@ -980,6 +1017,7 @@ class PhotosCompanion extends UpdateCompanion<VaultPhoto> {
   final Value<int?> deletedTombstoneAtMs;
   final Value<int> rowid;
   const PhotosCompanion({
+    this.vaultId = const Value.absent(),
     this.id = const Value.absent(),
     this.originalFilename = const Value.absent(),
     this.createdTimeMs = const Value.absent(),
@@ -1005,6 +1043,7 @@ class PhotosCompanion extends UpdateCompanion<VaultPhoto> {
     this.rowid = const Value.absent(),
   });
   PhotosCompanion.insert({
+    required String vaultId,
     required String id,
     required String originalFilename,
     required int createdTimeMs,
@@ -1028,7 +1067,8 @@ class PhotosCompanion extends UpdateCompanion<VaultPhoto> {
     this.trashExpiresAtMs = const Value.absent(),
     this.deletedTombstoneAtMs = const Value.absent(),
     this.rowid = const Value.absent(),
-  }) : id = Value(id),
+  }) : vaultId = Value(vaultId),
+       id = Value(id),
        originalFilename = Value(originalFilename),
        createdTimeMs = Value(createdTimeMs),
        importedTimeMs = Value(importedTimeMs),
@@ -1046,6 +1086,7 @@ class PhotosCompanion extends UpdateCompanion<VaultPhoto> {
        fileSize = Value(fileSize),
        mimeType = Value(mimeType);
   static Insertable<VaultPhoto> custom({
+    Expression<String>? vaultId,
     Expression<String>? id,
     Expression<String>? originalFilename,
     Expression<int>? createdTimeMs,
@@ -1071,6 +1112,7 @@ class PhotosCompanion extends UpdateCompanion<VaultPhoto> {
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
+      if (vaultId != null) 'vault_id': vaultId,
       if (id != null) 'id': id,
       if (originalFilename != null) 'original_filename': originalFilename,
       if (createdTimeMs != null) 'created_time_ms': createdTimeMs,
@@ -1099,6 +1141,7 @@ class PhotosCompanion extends UpdateCompanion<VaultPhoto> {
   }
 
   PhotosCompanion copyWith({
+    Value<String>? vaultId,
     Value<String>? id,
     Value<String>? originalFilename,
     Value<int>? createdTimeMs,
@@ -1124,6 +1167,7 @@ class PhotosCompanion extends UpdateCompanion<VaultPhoto> {
     Value<int>? rowid,
   }) {
     return PhotosCompanion(
+      vaultId: vaultId ?? this.vaultId,
       id: id ?? this.id,
       originalFilename: originalFilename ?? this.originalFilename,
       createdTimeMs: createdTimeMs ?? this.createdTimeMs,
@@ -1153,6 +1197,9 @@ class PhotosCompanion extends UpdateCompanion<VaultPhoto> {
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
     final map = <String, Expression>{};
+    if (vaultId.present) {
+      map['vault_id'] = Variable<String>(vaultId.value);
+    }
     if (id.present) {
       map['id'] = Variable<String>(id.value);
     }
@@ -1230,6 +1277,7 @@ class PhotosCompanion extends UpdateCompanion<VaultPhoto> {
   @override
   String toString() {
     return (StringBuffer('PhotosCompanion(')
+          ..write('vaultId: $vaultId, ')
           ..write('id: $id, ')
           ..write('originalFilename: $originalFilename, ')
           ..write('createdTimeMs: $createdTimeMs, ')
@@ -7556,6 +7604,7 @@ abstract class _$VaultDatabase extends GeneratedDatabase {
 
 typedef $$PhotosTableCreateCompanionBuilder =
     PhotosCompanion Function({
+      required String vaultId,
       required String id,
       required String originalFilename,
       required int createdTimeMs,
@@ -7582,6 +7631,7 @@ typedef $$PhotosTableCreateCompanionBuilder =
     });
 typedef $$PhotosTableUpdateCompanionBuilder =
     PhotosCompanion Function({
+      Value<String> vaultId,
       Value<String> id,
       Value<String> originalFilename,
       Value<int> createdTimeMs,
@@ -7616,6 +7666,11 @@ class $$PhotosTableFilterComposer
     super.$addJoinBuilderToRootComposer,
     super.$removeJoinBuilderFromRootComposer,
   });
+  ColumnFilters<String> get vaultId => $composableBuilder(
+    column: $table.vaultId,
+    builder: (column) => ColumnFilters(column),
+  );
+
   ColumnFilters<String> get id => $composableBuilder(
     column: $table.id,
     builder: (column) => ColumnFilters(column),
@@ -7736,6 +7791,11 @@ class $$PhotosTableOrderingComposer
     super.$addJoinBuilderToRootComposer,
     super.$removeJoinBuilderFromRootComposer,
   });
+  ColumnOrderings<String> get vaultId => $composableBuilder(
+    column: $table.vaultId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<String> get id => $composableBuilder(
     column: $table.id,
     builder: (column) => ColumnOrderings(column),
@@ -7856,6 +7916,9 @@ class $$PhotosTableAnnotationComposer
     super.$addJoinBuilderToRootComposer,
     super.$removeJoinBuilderFromRootComposer,
   });
+  GeneratedColumn<String> get vaultId =>
+      $composableBuilder(column: $table.vaultId, builder: (column) => column);
+
   GeneratedColumn<String> get id =>
       $composableBuilder(column: $table.id, builder: (column) => column);
 
@@ -7984,6 +8047,7 @@ class $$PhotosTableTableManager
               $$PhotosTableAnnotationComposer($db: db, $table: table),
           updateCompanionCallback:
               ({
+                Value<String> vaultId = const Value.absent(),
                 Value<String> id = const Value.absent(),
                 Value<String> originalFilename = const Value.absent(),
                 Value<int> createdTimeMs = const Value.absent(),
@@ -8008,6 +8072,7 @@ class $$PhotosTableTableManager
                 Value<int?> deletedTombstoneAtMs = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => PhotosCompanion(
+                vaultId: vaultId,
                 id: id,
                 originalFilename: originalFilename,
                 createdTimeMs: createdTimeMs,
@@ -8034,6 +8099,7 @@ class $$PhotosTableTableManager
               ),
           createCompanionCallback:
               ({
+                required String vaultId,
                 required String id,
                 required String originalFilename,
                 required int createdTimeMs,
@@ -8058,6 +8124,7 @@ class $$PhotosTableTableManager
                 Value<int?> deletedTombstoneAtMs = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => PhotosCompanion.insert(
+                vaultId: vaultId,
                 id: id,
                 originalFilename: originalFilename,
                 createdTimeMs: createdTimeMs,

@@ -163,7 +163,8 @@ class AppNote extends Equatable {
     ),
     title: json['title'] as String? ?? '',
     content: json['content'] as String? ?? '',
-    items: (json['items'] as List?)
+    items:
+        (json['items'] as List?)
             ?.map((i) => ChecklistItem.fromJson(i as Map<String, dynamic>))
             .toList() ??
         const [],

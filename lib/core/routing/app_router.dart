@@ -36,6 +36,7 @@ import '../../features/vault/presentation/screens/settings/change_pin_screen.dar
 import '../../features/vault/presentation/screens/settings/notification_settings_screen.dart';
 import '../../features/vault/presentation/screens/settings/notification_type_settings_screen.dart';
 import '../../features/vault/presentation/screens/settings/settings_screen.dart';
+import '../../features/backup/presentation/backup_screen.dart';
 import '../../features/vault/presentation/screens/trash/trash_screen.dart';
 import '../../features/chat/presentation/screens/notes_screen.dart';
 import '../../features/calls/data/phone_contact_source.dart';
@@ -518,12 +519,10 @@ GoRoute _settingsRoute(
   return GoRoute(
     path: '/settings',
     builder: (context, state) => SettingsScreen(
-      mode: session.mode,
       settingsRepository: deps.settingsRepository,
       unlockVaultUseCase: deps.unlockVaultUseCase,
       pinValidator: deps.pinValidator,
       onSettingsChanged: onSettingsChanged,
-      chatBackupService: () => deps.chatDependencies.backupService,
       onShowLastSeenChanged: (show) async {
         try {
           await deps.chatDependencies.presenceService.setShareLastSeen(show);
@@ -534,6 +533,22 @@ GoRoute _settingsRoute(
       },
     ),
     routes: [
+      GoRoute(
+        path: 'backup',
+        builder: (context, state) => BackupScreen(
+          settingsRepository: deps.settingsRepository,
+          chatBackup: () {
+            try {
+              return deps.chatDependencies.backupService;
+            } catch (_) {
+              return null;
+            }
+          },
+          vaultPhotoBackup: () => deps.vaultPhotoBackup,
+          unlockVaultUseCase: deps.unlockVaultUseCase,
+          pinValidator: deps.pinValidator,
+        ),
+      ),
       GoRoute(
         path: 'notifications',
         builder: (context, state) => const NotificationSettingsScreen(),
@@ -653,15 +668,14 @@ GoRoute _restoreRoute(AppDependencies deps, AppSessionState session) {
     builder: (context, state) => RestoreFlowScreen(
       authRepository: deps.authRepository,
       restoreFlowService: deps.restoreFlowService,
-      onRestoreCompleted: (pin, includePhotos) async {
-        await deps.createVaultUseCase.execute(
-          pin: pin,
-          mode: UserMode.googleEnabled,
-        );
+      onRestoreCompleted: (vaultId) async {
+        if (await deps.vaultRepository.getActiveVaultId() != vaultId) {
+          throw StateError('The restored vault is not active.');
+        }
         session.mode = UserMode.googleEnabled;
         await deps.settingsRepository.saveUserMode(UserMode.googleEnabled);
-        await deps.settingsRepository.setPhotoSyncEnabled(includePhotos);
-        session.photoSyncEnabled = includePhotos;
+        session.photoSyncEnabled = await deps.settingsRepository
+            .isPhotoSyncEnabled();
         session.unlock();
         if (!context.mounted) return;
         context.go('/gallery', extra: UserMode.googleEnabled);

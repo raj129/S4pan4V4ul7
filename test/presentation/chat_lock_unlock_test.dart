@@ -109,7 +109,6 @@ void main() {
         authRepository: deps.authRepository,
         createVaultUseCase: deps.createVaultUseCase,
         pinValidator: deps.pinValidator,
-        restoreFlowService: deps.restoreFlowService,
       );
       final router = buildAppRouter(
         deps: deps,
@@ -184,7 +183,6 @@ void main() {
         authRepository: deps.authRepository,
         createVaultUseCase: deps.createVaultUseCase,
         pinValidator: deps.pinValidator,
-        restoreFlowService: deps.restoreFlowService,
       );
 
       final router = buildAppRouter(

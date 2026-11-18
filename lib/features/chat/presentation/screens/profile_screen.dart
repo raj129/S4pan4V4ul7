@@ -573,8 +573,7 @@ class _AvatarPickerSheet extends StatelessWidget {
                         color: cs.secondary,
                         title: 'Take a photo',
                         subtitle: 'Use your camera to take a new picture',
-                        onTap: () =>
-                            Navigator.pop(context, ImageSource.camera),
+                        onTap: () => Navigator.pop(context, ImageSource.camera),
                       ),
                     ],
                   ),

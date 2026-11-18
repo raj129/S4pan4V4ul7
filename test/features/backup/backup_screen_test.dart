@@ -1,0 +1,431 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:go_router/go_router.dart';
+
+import 'package:photo_vault/core/testing/repositories/in_memory_photo_repository.dart';
+import 'package:photo_vault/core/testing/repositories/in_memory_settings_repository.dart';
+import 'package:photo_vault/features/backup/application/vault_photo_backup_service.dart';
+import 'package:photo_vault/features/backup/presentation/backup_screen.dart';
+import 'package:photo_vault/features/chat/application/crypto/chat_crypto_service.dart';
+import 'package:photo_vault/features/chat/application/services/chat_backup_service.dart';
+import 'package:photo_vault/features/chat/domain/repositories/message_cache_repository.dart';
+import 'package:photo_vault/features/vault/application/services/pin_validator.dart';
+import 'package:photo_vault/features/vault/application/usecases/unlock_vault_usecase.dart';
+import 'package:photo_vault/features/vault/domain/entities/vault_photo.dart';
+
+import '../../helpers/memory_message_cache.dart';
+
+class _NoCrypto implements ChatCryptoService {
+  @override
+  dynamic noSuchMethod(Invocation invocation) =>
+      throw UnimplementedError('${invocation.memberName}');
+}
+
+class _FakeUnlock implements UnlockVaultUseCase {
+  @override
+  dynamic noSuchMethod(Invocation invocation) =>
+      throw UnimplementedError('${invocation.memberName}');
+}
+
+class _StubChatBackupService extends ChatBackupService {
+  _StubChatBackupService({
+    this.backupResult,
+    this.snapshot,
+    this.findFailure,
+    this.restoreCount = 0,
+  }) : super(
+         cache: MemoryMessageCache(),
+         crypto: _NoCrypto(),
+         stores: const [],
+         currentUid: _noUid,
+       );
+
+  static String? _noUid() => null;
+
+  final ChatBackupResult? backupResult;
+  final ChatBackupSnapshot? snapshot;
+  final Object? findFailure;
+  final int restoreCount;
+
+  @override
+  Future<void> migrateLegacyWifiSetting() async {}
+
+  @override
+  Future<DateTime?> lastBackupAt() async => null;
+
+  @override
+  Future<ChatBackupResult> backupNow({bool interactive = false}) async {
+    final result = backupResult;
+    if (result == null) throw StateError('No backup result configured');
+    return result;
+  }
+
+  @override
+  Future<ChatBackupSnapshot?> findLatestBackup({
+    bool interactive = false,
+  }) async {
+    final failure = findFailure;
+    if (failure != null) throw failure;
+    return snapshot;
+  }
+
+  @override
+  Future<int> restore(ChatBackupSnapshot snapshot) async => restoreCount;
+}
+
+class _StubPhotoBackupService extends VaultPhotoBackupService {
+  _StubPhotoBackupService({this.backupResult, this.restoreResult})
+    : super(
+        stores: const [],
+        photoRepository: InMemoryPhotoRepository(),
+        listPhotos: () async => const [],
+        crypto: _NoCrypto(),
+        settings: InMemorySettingsRepository(),
+        currentUid: _noUid,
+        networkAllowed: _networkAllowed,
+        currentVaultId: _vaultId,
+      );
+
+  static String? _noUid() => null;
+  static Future<bool> _networkAllowed() async => true;
+  static Future<String?> _vaultId() async => 'vault-1';
+
+  final VaultPhotoBackupResult? backupResult;
+  final VaultPhotoRestoreResult? restoreResult;
+
+  @override
+  Future<VaultPhotoBackupResult> backup({
+    bool interactive = false,
+    DateTime? deadline,
+  }) async {
+    final result = backupResult;
+    if (result == null) throw StateError('No backup result configured');
+    return result;
+  }
+
+  @override
+  Future<VaultPhotoRestoreResult> restore({bool interactive = false}) async {
+    return restoreResult ??
+        const VaultPhotoRestoreResult(
+          restored: 0,
+          alreadyPresent: 0,
+          unavailable: 0,
+        );
+  }
+}
+
+void main() {
+  late InMemorySettingsRepository settings;
+
+  Future<void> pump(
+    WidgetTester tester, {
+    Future<List<VaultPhoto>> Function()? listPhotos,
+    ChatBackupService? Function()? chatBackup,
+    VaultPhotoBackupService? vaultPhotoBackup,
+  }) async {
+    tester.view.physicalSize = const Size(1080, 4000);
+    tester.view.devicePixelRatio = 2.75;
+    addTearDown(tester.view.reset);
+    settings = InMemorySettingsRepository();
+    final photoBackup = VaultPhotoBackupService(
+      stores: const [],
+      photoRepository: InMemoryPhotoRepository(),
+      listPhotos: listPhotos ?? () async => const [],
+      crypto: _NoCrypto(),
+      settings: settings,
+      currentUid: () => null,
+      networkAllowed: () async => true,
+      currentVaultId: () async => 'vault-1',
+    );
+    final router = GoRouter(
+      initialLocation: '/',
+      routes: [
+        GoRoute(
+          path: '/',
+          builder: (context, state) => Scaffold(
+            body: Center(
+              child: TextButton(
+                onPressed: () => context.push('/settings/backup'),
+                child: const Text('Open backup'),
+              ),
+            ),
+          ),
+          routes: [
+            GoRoute(
+              path: 'settings/backup',
+              builder: (context, state) => BackupScreen(
+                settingsRepository: settings,
+                chatBackup: chatBackup ?? () => null,
+                vaultPhotoBackup: () => vaultPhotoBackup ?? photoBackup,
+                unlockVaultUseCase: _FakeUnlock(),
+                pinValidator: PinValidator(),
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+    addTearDown(router.dispose);
+    await tester.pumpWidget(MaterialApp.router(routerConfig: router));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Open backup'));
+    await tester.pumpAndSettle();
+  }
+
+  testWidgets(
+    'a very long error stays bounded and leaving the screen is safe',
+    (tester) async {
+      final huge = 'x' * 20000;
+      await pump(tester, listPhotos: () async => throw Exception(huge));
+
+      await tester.tap(find.text('Back up now'));
+      await tester.pumpAndSettle();
+
+      expect(tester.takeException(), isNull);
+      final message = tester.widget<Text>(find.textContaining('Failed:')).data!;
+      expect(message.length, lessThan(300));
+
+      tester.state<NavigatorState>(find.byType(Navigator)).pop();
+      await tester.pumpAndSettle();
+
+      expect(tester.takeException(), isNull);
+      expect(find.text('Open backup'), findsOneWidget);
+    },
+  );
+
+  Finder switchTile(String title) => find.ancestor(
+    of: find.text(title),
+    matching: find.byType(SwitchListTile),
+  );
+
+  testWidgets('shows every backup choice in one place', (tester) async {
+    await pump(tester);
+
+    expect(find.text('WHAT TO BACK UP'), findsOneWidget);
+    expect(find.text('WHERE TO BACK UP'), findsOneWidget);
+    expect(find.text('Chats'), findsOneWidget);
+    expect(find.text('Vault photos'), findsOneWidget);
+    expect(find.text('Google Drive'), findsOneWidget);
+    expect(find.text('Restore from backup'), findsOneWidget);
+    expect(find.text('Recover a Google vault'), findsOneWidget);
+    expect(find.text('Delete backup'), findsOneWidget);
+  });
+
+  testWidgets('turning off Google Drive persists and disables Wi-Fi only', (
+    tester,
+  ) async {
+    await pump(tester);
+    expect(
+      tester.widget<SwitchListTile>(switchTile('Wi-Fi only')).onChanged,
+      isNull,
+    );
+
+    await tester.tap(switchTile('Google Drive'));
+    await tester.pumpAndSettle();
+    expect(await settings.isBackupCloudEnabled(), isTrue);
+    expect(
+      tester.widget<SwitchListTile>(switchTile('Wi-Fi only')).onChanged,
+      isNotNull,
+    );
+
+    await tester.tap(switchTile('Google Drive'));
+    await tester.pumpAndSettle();
+
+    expect(await settings.isBackupCloudEnabled(), isFalse);
+    expect(
+      tester.widget<SwitchListTile>(switchTile('Wi-Fi only')).onChanged,
+      isNull,
+    );
+  });
+
+  testWidgets('turning off chats persists the choice', (tester) async {
+    await pump(tester);
+
+    await tester.tap(switchTile('Chats'));
+    await tester.pumpAndSettle();
+
+    expect(await settings.isBackupChatsEnabled(), isFalse);
+  });
+
+  testWidgets('a failing chat part is reported without skipping vault photos', (
+    tester,
+  ) async {
+    await pump(tester);
+
+    await tester.tap(find.text('Back up now'));
+    await tester.pumpAndSettle();
+
+    final message = tester.widget<Text>(find.textContaining('Failed:')).data!;
+    expect(message, contains('chats unavailable'));
+    expect(message, contains('vault photos:'));
+  });
+
+  testWidgets('backup summary identifies the successful destination', (
+    tester,
+  ) async {
+    final longError = List.filled(500, 'x').join();
+    final chat = _StubChatBackupService(
+      backupResult: ChatBackupResult(
+        backupAt: DateTime.utc(2024),
+        messageCount: 3,
+        savedTo: const ['This device'],
+        skipped: {
+          'Google Drive':
+              'DetailedApiRequestError(status: 403, message: '
+              'Google Drive API has not been used in project $longError)',
+        },
+      ),
+    );
+    final photos = _StubPhotoBackupService(
+      backupResult: const VaultPhotoBackupResult(
+        photoCount: 0,
+        missingCount: 0,
+        savedTo: [],
+        skipped: {},
+      ),
+    );
+    await pump(tester, chatBackup: () => chat, vaultPhotoBackup: photos);
+
+    await tester.tap(find.text('Back up now'));
+    await tester.pumpAndSettle();
+
+    final message = tester.widget<Text>(find.textContaining('Backed up')).data!;
+    expect(message, contains('3 chat messages to This device'));
+    expect(message, contains('Google Drive API is disabled'));
+    expect(message, contains('Enable drive.googleapis.com'));
+    expect(message.length, lessThan(350));
+    expect(message, contains('No vault photos were available to back up'));
+  });
+
+  testWidgets(
+    'photo restore runs and reports partial results after chat fails',
+    (tester) async {
+      final chat = _StubChatBackupService(
+        findFailure: StateError('device copy is unreadable'),
+      );
+      final photos = _StubPhotoBackupService(
+        restoreResult: const VaultPhotoRestoreResult(
+          restored: 1,
+          alreadyPresent: 2,
+          unavailable: 1,
+          foundBackup: true,
+          failures: ['This device: read failed'],
+        ),
+      );
+      await pump(tester, chatBackup: () => chat, vaultPhotoBackup: photos);
+
+      await tester.tap(find.text('Restore from backup'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Restore'));
+      await tester.pumpAndSettle();
+
+      final message = tester
+          .widget<Text>(find.textContaining('Restored'))
+          .data!;
+      expect(message, contains('1 vault photo'));
+      expect(message, contains('chats:'));
+      expect(message, contains('2 vault photos were already on this device'));
+      expect(message, contains('1 vault photo could not be recovered'));
+      expect(message, contains('This device: read failed'));
+    },
+  );
+
+  testWidgets('restore message uses the imported count and backup source', (
+    tester,
+  ) async {
+    final record = CachedMessageRecord(
+      messageId: 'message-1',
+      threadId: 'thread-1',
+      senderId: 'user-1',
+      encryptedText: 'ciphertext',
+      sentAtMs: 1,
+      payloadJson: '{}',
+    );
+    final chat = _StubChatBackupService(
+      snapshot: ChatBackupSnapshot(
+        backupAt: DateTime.utc(2024),
+        source: 'This device',
+        messages: [record, record],
+        clearedBefore: const {},
+      ),
+      restoreCount: 1,
+    );
+    await pump(
+      tester,
+      chatBackup: () => chat,
+      vaultPhotoBackup: _StubPhotoBackupService(),
+    );
+
+    await tester.tap(find.text('Restore from backup'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Restore'));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.textContaining('Restored 1 chat message from This device'),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('restore distinguishes unreadable backup from no backup', (
+    tester,
+  ) async {
+    final chat = _StubChatBackupService(
+      findFailure: StateError('Google Drive returned 403'),
+    );
+    await pump(
+      tester,
+      chatBackup: () => chat,
+      vaultPhotoBackup: _StubPhotoBackupService(),
+    );
+
+    await tester.tap(find.text('Restore from backup'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Restore'));
+    await tester.pumpAndSettle();
+
+    final message = tester
+        .widget<Text>(find.textContaining('Could not restore'))
+        .data!;
+    expect(message, contains('Google Drive returned 403'));
+    expect(message, isNot(contains('No backup found')));
+  });
+
+  testWidgets('back up now is refused when nothing is selected', (
+    tester,
+  ) async {
+    await pump(tester);
+    await tester.tap(switchTile('Chats'));
+    await tester.tap(switchTile('Vault photos'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Back up now'));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text('Turn on chats or vault photos to back up.'),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('delete asks which copy to remove and warns it is permanent', (
+    tester,
+  ) async {
+    await pump(tester);
+
+    await tester.ensureVisible(find.text('Delete backup'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Delete backup'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Delete backup?'), findsOneWidget);
+    expect(find.textContaining('cannot be undone'), findsOneWidget);
+    expect(find.text('This phone'), findsOneWidget);
+    expect(find.text('Google Drive'), findsWidgets);
+    expect(find.text('Both'), findsOneWidget);
+
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+    expect(find.text('Delete backup?'), findsNothing);
+  });
+}

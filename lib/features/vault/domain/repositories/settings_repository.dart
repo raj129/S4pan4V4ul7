@@ -29,6 +29,36 @@ abstract class SettingsRepository {
 
   Future<void> setDriveEncryptedBackupEnabled(bool enabled);
 
+  /// What the Backup screen controls. Defaults are on so a fresh install
+  /// behaves like WhatsApp: nightly backup of everything to the device and
+  /// Google Drive, Wi-Fi only.
+  Future<bool> isBackupChatsEnabled() async => true;
+
+  Future<void> setBackupChatsEnabled(bool enabled) async {}
+
+  Future<bool> isBackupVaultPhotosEnabled() async => true;
+
+  Future<void> setBackupVaultPhotosEnabled(bool enabled) async {}
+
+  Future<bool> isBackupCloudEnabled() async => false;
+
+  Future<void> setBackupCloudEnabled(bool enabled) async {}
+
+  Future<bool> isBackupWifiOnly() async => true;
+
+  Future<void> setBackupWifiOnly(bool enabled) async {}
+
+  /// When vault photos were last backed up (for the Backup screen).
+  Future<DateTime?> getLastVaultPhotoBackupAt() async => null;
+
+  /// When vault photos were last backed up; null clears it (e.g. after the
+  /// device copy is deleted).
+  Future<void> setLastVaultPhotoBackupAt(DateTime? at) async {}
+
+  Future<String?> getLastVaultPhotoBackupVaultId() async => null;
+
+  Future<void> setLastVaultPhotoBackupVaultId(String? vaultId) async {}
+
   /// Last attachment quality the user picked, preselected next time.
   Future<String?> getChatImageQuality();
 

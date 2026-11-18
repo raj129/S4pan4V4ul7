@@ -10,11 +10,13 @@ class GoogleDriveVmkRepository implements VmkBackupRepository {
   final AuthRepository _authRepository;
   static const String _fileName = 'vmk_backup.json';
 
-  Future<drive.DriveApi?> _getDriveApi({required bool interactive}) async {
+  Future<drive.DriveApi> _getDriveApi({required bool interactive}) async {
     final client = await _authRepository.getAuthenticatedClient(
       interactive: interactive,
     );
-    if (client == null) return null;
+    if (client == null) {
+      throw StateError('Google Drive is not authorized.');
+    }
     return drive.DriveApi(client);
   }
 
@@ -36,7 +38,6 @@ class GoogleDriveVmkRepository implements VmkBackupRepository {
     bool interactive = false,
   }) async {
     final api = await _getDriveApi(interactive: interactive);
-    if (api == null) throw Exception('Not authenticated with Google');
 
     final existingFile = await _findBackupFile(api);
 
@@ -77,7 +78,6 @@ class GoogleDriveVmkRepository implements VmkBackupRepository {
     bool interactive = false,
   }) async {
     final api = await _getDriveApi(interactive: interactive);
-    if (api == null) return null;
 
     final existingFile = await _findBackupFile(api);
     if (existingFile == null) return null;
@@ -101,7 +101,6 @@ class GoogleDriveVmkRepository implements VmkBackupRepository {
   @override
   Future<bool> hasBackup(String vaultId, {bool interactive = false}) async {
     final api = await _getDriveApi(interactive: interactive);
-    if (api == null) return false;
 
     final existingFile = await _findBackupFile(api);
     if (existingFile == null) return false;
@@ -123,7 +122,6 @@ class GoogleDriveVmkRepository implements VmkBackupRepository {
   @override
   Future<List<String>> listVaultIds({bool interactive = false}) async {
     final api = await _getDriveApi(interactive: interactive);
-    if (api == null) return [];
 
     final existingFile = await _findBackupFile(api);
     if (existingFile == null) return [];

@@ -394,7 +394,8 @@ class _GalleryBodyState extends State<_GalleryBody> {
           listenable: widget.importManager,
           builder: (context, _) {
             final progress = widget.importManager.progress;
-            if (progress.status != ImportJobStatus.running || _isSelectionMode) {
+            if (progress.status != ImportJobStatus.running ||
+                _isSelectionMode) {
               return const SizedBox.shrink();
             }
             return Column(

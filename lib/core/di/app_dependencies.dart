@@ -10,6 +10,7 @@ import '../session/vault_session.dart';
 import '../../features/vault/application/usecases/change_pin_usecase.dart';
 import '../../features/vault/application/usecases/create_vault_usecase.dart';
 import '../../features/vault/application/usecases/export_photo_usecase.dart';
+import '../../features/vault/application/usecases/restore_vault_usecase.dart';
 import '../../features/vault/application/usecases/unlock_vault_usecase.dart';
 import '../crypto/services/aes_gcm_crypto_service.dart';
 import '../crypto/services/crypto_service.dart';
@@ -36,6 +37,13 @@ import '../../features/vault/domain/repositories/settings_repository.dart';
 import '../../features/vault/domain/repositories/vault_repository.dart';
 import '../../features/vault/domain/repositories/vmk_backup_repository.dart';
 import '../../features/chat/di/chat_dependencies.dart';
+import '../../features/backup/application/backup_coordinator.dart';
+import '../../features/backup/application/backup_network.dart';
+import '../../features/backup/application/photo_hash_cache.dart';
+import '../../features/backup/application/vault_photo_backup_service.dart';
+import '../../features/backup/data/drive_backup_blob_store.dart';
+import '../../features/backup/data/local_backup_blob_store.dart';
+
 import '../location/app_location.dart';
 import '../location/mock/traffic_route_service.dart';
 
@@ -65,7 +73,9 @@ class AppDependencies {
           )
         : InMemorySettingsRepository();
     final PhotoRepository photoRepository = persistentState
-        ? PersistentPhotoRepositoryImpl()
+        ? PersistentPhotoRepositoryImpl(
+            currentVaultId: vaultRepository.getActiveVaultId,
+          )
         : InMemoryPhotoRepository();
     final authRepository = persistentState
         ? FirebaseAuthRepository()
@@ -81,12 +91,15 @@ class AppDependencies {
       GoogleDriveVmkRepository(authRepository: authRepository),
     ];
 
-    final restoreFlowService = BackupRestoreFlowService(
+    final createVaultUseCase = CreateVaultUseCase(
+      cryptoService: cryptoService,
+      kdfService: kdfService,
+      vaultRepository: vaultRepository,
       secureStorageRepository: secureStorageRepository,
+      vaultSession: vaultSession,
       backupRepositories: backupRepositories,
     );
-
-    final createVaultUseCase = CreateVaultUseCase(
+    final restoreVaultUseCase = RestoreVaultUseCase(
       cryptoService: cryptoService,
       kdfService: kdfService,
       vaultRepository: vaultRepository,
@@ -133,8 +146,8 @@ class AppDependencies {
       vaultSession: vaultSession,
       pinValidator: pinValidator,
       backupRepositories: backupRepositories,
-      restoreFlowService: restoreFlowService,
       createVaultUseCase: createVaultUseCase,
+      restoreVaultUseCase: restoreVaultUseCase,
       unlockVaultUseCase: unlockVaultUseCase,
       changePinUseCase: changePinUseCase,
       exportPhotoUseCase: exportPhotoUseCase,
@@ -152,8 +165,8 @@ class AppDependencies {
     required this.vaultSession,
     required this.pinValidator,
     required this.backupRepositories,
-    required this.restoreFlowService,
     required this.createVaultUseCase,
+    required this.restoreVaultUseCase,
     required this.unlockVaultUseCase,
     required this.changePinUseCase,
     required this.exportPhotoUseCase,
@@ -169,8 +182,8 @@ class AppDependencies {
   final VaultSession vaultSession;
   final PinValidator pinValidator;
   final List<VmkBackupRepository> backupRepositories;
-  final RestoreFlowService restoreFlowService;
   final CreateVaultUseCase createVaultUseCase;
+  final RestoreVaultUseCase restoreVaultUseCase;
   final UnlockVaultUseCase unlockVaultUseCase;
   final ChangePinUseCase changePinUseCase;
   final ExportPhotoUseCase exportPhotoUseCase;
@@ -178,6 +191,45 @@ class AppDependencies {
 
   /// Process-wide location provider (real GPS or mock).
   AppLocation get location => AppLocation.instance;
+
+  /// Vault photo backup to this device and Google Drive (shares the chat
+  /// backup account key and network gating).
+  late final VaultPhotoBackupService vaultPhotoBackup = VaultPhotoBackupService(
+    stores: [
+      LocalBackupBlobStore(),
+      DriveBackupBlobStore(authRepository: authRepository),
+    ],
+    photoRepository: photoRepository,
+    listPhotos: () => switch (photoRepository) {
+      final VaultAttachmentRepository repository =>
+        repository.listAttachments(),
+      _ => throw StateError('Vault photos are unavailable in this mode.'),
+    },
+    crypto: chat.cryptoService,
+    settings: settingsRepository,
+    currentUid: () => chat.authService.currentUid,
+    networkAllowed: () => backupNetworkAllowed(settingsRepository),
+    currentVaultId: () async =>
+        vaultSession.vaultId ?? await vaultRepository.getActiveVaultId(),
+    hashCache: PhotoHashCache.defaults(),
+    coordinator: BackupCoordinator.shared,
+  );
+
+  /// Google vault recovery uses the same ID/key and optionally restores photos.
+  late final RestoreFlowService restoreFlowService = BackupRestoreFlowService(
+    restoreVaultUseCase: restoreVaultUseCase,
+    vaultRepository: vaultRepository,
+    restorePhotos: () async {
+      final result = await vaultPhotoBackup.restore(interactive: true);
+      return RestorePhotosSummary(
+        foundBackup: result.foundBackup,
+        restored: result.restored,
+        alreadyPresent: result.alreadyPresent,
+        unavailable: result.unavailable,
+        failures: result.failures,
+      );
+    },
+  );
 
   /// Traffic-aware routes for the mock route simulator.
   late final TrafficRouteService trafficRouteService = TrafficRouteService();

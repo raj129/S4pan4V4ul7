@@ -4,14 +4,12 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
-import 'package:photo_vault/features/chat/application/services/chat_backup_service.dart';
 import 'package:photo_vault/core/media/animated_media.dart';
 import 'package:photo_vault/core/platform/hdr_preview_capability.dart';
 import 'package:photo_vault/features/vault/application/services/pin_validator.dart';
 import 'package:photo_vault/features/vault/application/usecases/unlock_vault_usecase.dart';
 import 'package:photo_vault/core/widgets/app_surfaces.dart';
 import 'package:photo_vault/core/widgets/base_screen_shell.dart';
-import 'package:photo_vault/features/vault/domain/entities/user_mode.dart';
 import 'package:photo_vault/features/vault/domain/repositories/settings_repository.dart';
 import 'package:photo_vault/core/platform/screenshot_protection.dart';
 import 'package:photo_vault/core/presentation/theme/app_colors.dart';
@@ -21,19 +19,16 @@ import 'package:photo_vault/core/platform/battery_optimization.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({
-    required this.mode,
     required this.settingsRepository,
     required this.unlockVaultUseCase,
     required this.pinValidator,
     required this.onSettingsChanged,
     this.screenshotProtection = const AndroidScreenshotProtection(),
-    this.chatBackupService,
     this.onShowLastSeenChanged,
     this.batteryOptimization = const AndroidBatteryOptimization(),
     super.key,
   });
 
-  final UserMode mode;
   final SettingsRepository settingsRepository;
   final UnlockVaultUseCase unlockVaultUseCase;
   final PinValidator pinValidator;
@@ -45,10 +40,6 @@ class SettingsScreen extends StatefulWidget {
 
   /// Applies a "Show last seen" change to live presence (chat), if available.
   final Future<void> Function(bool show)? onShowLastSeenChanged;
-
-  /// Lazily resolves the chat backup service (it touches Firebase), or null
-  /// when chat is unavailable (local mode).
-  final ChatBackupService Function()? chatBackupService;
 
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
@@ -76,9 +67,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   bool _photoSyncEnabled = false;
-  bool _wifiOnlyBackup = true;
-  bool _externalStorageMirrorEnabled = true;
-  bool _driveEncryptedBackupEnabled = false;
   AppThemePalette _themePalette = AppThemePalette.royalIndigo;
   String _themeMode = 'system';
   String? _version;
@@ -112,10 +100,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _loadSettings() async {
     final photoSync = await widget.settingsRepository.isPhotoSyncEnabled();
-    final externalMirror = await widget.settingsRepository
-        .isExternalStorageMirrorEnabled();
-    final driveBackup = await widget.settingsRepository
-        .isDriveEncryptedBackupEnabled();
     final autoLock = await widget.settingsRepository
         .isAutoLockOnBackgroundEnabled();
     final autoLockTimeoutSeconds = await widget.settingsRepository
@@ -129,8 +113,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (!mounted) return;
     setState(() {
       _photoSyncEnabled = photoSync;
-      _externalStorageMirrorEnabled = externalMirror;
-      _driveEncryptedBackupEnabled = driveBackup;
       _autoLockOnBackground = autoLock;
       _autoLockTimeoutSeconds = autoLockTimeoutSeconds;
       _showLastSeen = showLastSeen;
@@ -141,7 +123,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _ => 'system',
       };
     });
-    await _loadChatBackupInfo();
   }
 
   @override
@@ -220,111 +201,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
       return;
     }
     await widget.onSettingsChanged();
-  }
-
-  ChatBackupService? _chatBackup() {
-    try {
-      return widget.chatBackupService?.call();
-    } catch (_) {
-      return null;
-    }
-  }
-
-  DateTime? _lastChatBackup;
-  bool _chatBackupBusy = false;
-
-  Future<void> _loadChatBackupInfo() async {
-    final backup = _chatBackup();
-    if (backup == null) return;
-    try {
-      final last = await backup.lastBackupAt();
-      final wifiOnly = await backup.isWifiOnly();
-      if (!mounted) return;
-      setState(() {
-        _lastChatBackup = last;
-        _wifiOnlyBackup = wifiOnly;
-      });
-    } catch (_) {}
-  }
-
-  static String _formatTime(DateTime at) {
-    final l = at.toLocal();
-    String two(int v) => v.toString().padLeft(2, '0');
-    return '${l.year}-${two(l.month)}-${two(l.day)} ${two(l.hour)}:${two(l.minute)}';
-  }
-
-  Future<void> _backUpChatNow() async {
-    final backup = _chatBackup();
-    if (backup == null || _chatBackupBusy) return;
-    final messenger = ScaffoldMessenger.of(context);
-    setState(() => _chatBackupBusy = true);
-    try {
-      final result = await backup.backupNow(interactive: true);
-      final skipped = result.skipped.entries
-          .map((e) => '${e.key}: ${e.value}')
-          .join('; ');
-      messenger.showSnackBar(
-        SnackBar(
-          content: Text(
-            'Backed up ${result.messageCount} messages to '
-            '${result.savedTo.join(' and ')}.'
-            '${skipped.isEmpty ? '' : ' Skipped $skipped'}',
-          ),
-        ),
-      );
-    } catch (e) {
-      messenger.showSnackBar(SnackBar(content: Text('Chat backup failed: $e')));
-    } finally {
-      if (mounted) setState(() => _chatBackupBusy = false);
-      await _loadChatBackupInfo();
-    }
-  }
-
-  Future<void> _restoreChatBackup() async {
-    final backup = _chatBackup();
-    if (backup == null || _chatBackupBusy) return;
-    final messenger = ScaffoldMessenger.of(context);
-    setState(() => _chatBackupBusy = true);
-    try {
-      final snapshot = await backup.findLatestBackup(interactive: true);
-      if (!mounted) return;
-      if (snapshot == null) {
-        messenger.showSnackBar(
-          const SnackBar(content: Text('No chat backup found.')),
-        );
-        return;
-      }
-      final ok = await showDialog<bool>(
-        context: context,
-        builder: (dialogContext) => AlertDialog(
-          title: const Text('Restore chat backup?'),
-          content: Text(
-            'Backup from ${_formatTime(snapshot.backupAt)} on '
-            '${snapshot.source} with ${snapshot.messageCount} messages. '
-            'Messages already on this device are kept.',
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext, false),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(dialogContext, true),
-              child: const Text('Restore'),
-            ),
-          ],
-        ),
-      );
-      if (ok != true) return;
-      await backup.restore(snapshot);
-      messenger.showSnackBar(
-        SnackBar(content: Text('Restored ${snapshot.messageCount} messages.')),
-      );
-    } catch (e) {
-      messenger.showSnackBar(SnackBar(content: Text('Restore failed: $e')));
-    } finally {
-      if (mounted) setState(() => _chatBackupBusy = false);
-    }
   }
 
   Future<void> _selectPalette(AppThemePalette palette) async {
@@ -568,7 +444,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ],
           ),
-          const SectionHeader('Backup & sync'),
+          const SectionHeader('Backup & restore'),
           SettingsCard(
             children: [
               ListTile(
@@ -617,109 +493,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   await widget.onSettingsChanged();
                 },
               ),
-              _SettingsSwitch(
-                icon: Icons.sd_storage_outlined,
-                title: 'External encrypted mirror',
-                subtitle:
-                    'Keep encrypted files and manifest under Android/media for reinstall recovery.',
-                value: _externalStorageMirrorEnabled,
-                onChanged: (v) async {
-                  setState(() => _externalStorageMirrorEnabled = v);
-                  await widget.settingsRepository
-                      .setExternalStorageMirrorEnabled(v);
-                  await widget.onSettingsChanged();
-                },
-              ),
-              _SettingsSwitch(
-                icon: Icons.drive_folder_upload_outlined,
-                title: 'Google Drive encrypted package',
-                subtitle: widget.mode == UserMode.googleEnabled
-                    ? 'Back up encrypted objects, manifest, and wrapped key envelope.'
-                    : 'Switch to Google mode below to enable Drive backup.',
-                value: _driveEncryptedBackupEnabled,
-                onChanged: widget.mode == UserMode.googleEnabled
-                    ? (v) async {
-                        if (!v) {
-                          final allowed = await requirePinReauth(
-                            context: context,
-                            unlockVaultUseCase: widget.unlockVaultUseCase,
-                            pinValidator: widget.pinValidator,
-                            actionLabel: 'disable Drive backup',
-                          );
-                          if (!allowed) return;
-                        }
-                        setState(() => _driveEncryptedBackupEnabled = v);
-                        await widget.settingsRepository
-                            .setDriveEncryptedBackupEnabled(v);
-                        await widget.onSettingsChanged();
-                      }
-                    : null,
-              ),
-            ],
-          ),
-          if (widget.chatBackupService != null) ...[
-            const SectionHeader('Chat backup'),
-            SettingsCard(
-              children: [
-                _SettingsSwitch(
-                  icon: Icons.wifi_rounded,
-                  title: 'Backup on Wi-Fi only',
-                  subtitle: 'Avoid mobile data when nightly chat backups run.',
-                  value: _wifiOnlyBackup,
-                  onChanged: (v) {
-                    setState(() => _wifiOnlyBackup = v);
-                    final backup = _chatBackup();
-                    if (backup != null) unawaited(backup.setWifiOnly(v));
-                  },
-                ),
-                ListTile(
-                  leading: const Icon(Icons.backup_outlined),
-                  title: const Text('Back up chats now'),
-                  subtitle: Text(
-                    _lastChatBackup == null
-                        ? 'Never backed up. Runs nightly around 2 AM to this '
-                              'device and Google Drive.'
-                        : 'Last backup ${_formatTime(_lastChatBackup!)}. '
-                              'Runs nightly around 2 AM.',
-                  ),
-                  trailing: _chatBackupBusy
-                      ? const SizedBox.square(
-                          dimension: 20,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.chevron_right_rounded),
-                  onTap: _chatBackupBusy ? null : _backUpChatNow,
-                ),
-                ListTile(
-                  leading: const Icon(Icons.restore_rounded),
-                  title: const Text('Restore chat backup'),
-                  subtitle: const Text(
-                    'Bring back messages from this device or Google Drive.',
-                  ),
-                  trailing: const Icon(Icons.chevron_right_rounded),
-                  onTap: _chatBackupBusy ? null : _restoreChatBackup,
-                ),
-              ],
-            ),
-          ],
-          const SectionHeader('Account & restore'),
-          SettingsCard(
-            children: [
               ListTile(
-                leading: const Icon(Icons.cloud_outlined),
-                title: const Text('Google mode & restore'),
-                subtitle: Text('${widget.mode.title} · Manage cloud restore'),
+                key: const Key('settings-backup-tile'),
+                leading: const Icon(Icons.backup_outlined),
+                title: const Text('Backup & restore'),
+                subtitle: const Text(
+                  'Manage backups, restore chats/photos, and recover a vault.',
+                ),
                 trailing: const Icon(Icons.chevron_right_rounded),
-                onTap: () async {
-                  final allowed = await requirePinReauth(
-                    context: context,
-                    unlockVaultUseCase: widget.unlockVaultUseCase,
-                    pinValidator: widget.pinValidator,
-                    actionLabel: 'open restore',
-                  );
-                  if (!allowed || !context.mounted) return;
-                  unawaited(context.push('/restore'));
-                },
+                onTap: () => unawaited(context.push('/settings/backup')),
               ),
             ],
           ),

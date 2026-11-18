@@ -16,7 +16,8 @@ Future<bool> showConfirmDialog(
   bool? isDestructive,
 }) async {
   final theme = Theme.of(context);
-  final isDeleteAction = isDestructive ??
+  final isDeleteAction =
+      isDestructive ??
       (confirmLabel.toLowerCase().contains('delete') ||
           confirmLabel.toLowerCase().contains('empty') ||
           confirmLabel.toLowerCase().contains('remove'));
@@ -28,7 +29,9 @@ Future<bool> showConfirmDialog(
         isDeleteAction
             ? Icons.delete_outline_rounded
             : Icons.help_outline_rounded,
-        color: isDeleteAction ? theme.colorScheme.error : theme.colorScheme.primary,
+        color: isDeleteAction
+            ? theme.colorScheme.error
+            : theme.colorScheme.primary,
         size: 28,
       ),
       title: Text(title, textAlign: TextAlign.center),

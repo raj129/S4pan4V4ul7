@@ -96,8 +96,7 @@ class SavedPlace extends Equatable {
       ownerUid: owner,
       label: json['label'] as String? ?? '',
       point: point,
-      radiusMeters:
-          (json['r'] as num?)?.toDouble() ?? defaultRadiusMeters,
+      radiusMeters: (json['r'] as num?)?.toDouble() ?? defaultRadiusMeters,
       tagName: json['tg'] as String?,
       tagColor: (json['tc'] as num?)?.toInt(),
       temporary: json['tmp'] as bool? ?? false,

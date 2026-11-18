@@ -51,17 +51,10 @@ class LocalVmkBackupRepository implements VmkBackupRepository {
     final file = File(path);
     if (!await file.exists()) return null;
 
-    try {
-      final data =
-          jsonDecode(await file.readAsString()) as Map<String, dynamic>;
-      final payload = data[vaultId];
-      if (payload != null) {
-        return Map<String, String>.from(payload as Map);
-      }
-    } catch (_) {
-      // Error reading or parsing
-    }
-    return null;
+    final data = jsonDecode(await file.readAsString()) as Map<String, dynamic>;
+    final payload = data[vaultId];
+    if (payload == null) return null;
+    return Map<String, String>.from(payload as Map);
   }
 
   @override
@@ -70,13 +63,8 @@ class LocalVmkBackupRepository implements VmkBackupRepository {
     final file = File(path);
     if (!await file.exists()) return false;
 
-    try {
-      final data =
-          jsonDecode(await file.readAsString()) as Map<String, dynamic>;
-      return data.containsKey(vaultId);
-    } catch (_) {
-      return false;
-    }
+    final data = jsonDecode(await file.readAsString()) as Map<String, dynamic>;
+    return data.containsKey(vaultId);
   }
 
   @override
@@ -85,12 +73,7 @@ class LocalVmkBackupRepository implements VmkBackupRepository {
     final file = File(path);
     if (!await file.exists()) return [];
 
-    try {
-      final data =
-          jsonDecode(await file.readAsString()) as Map<String, dynamic>;
-      return data.keys.toList();
-    } catch (_) {
-      return [];
-    }
+    final data = jsonDecode(await file.readAsString()) as Map<String, dynamic>;
+    return data.keys.toList();
   }
 }

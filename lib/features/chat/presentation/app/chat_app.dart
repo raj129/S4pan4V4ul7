@@ -118,22 +118,45 @@ class _ChatAppState extends State<ChatApp> with WidgetsBindingObserver {
         ),
       );
       if (restore == true) {
-        await backup.restore(snapshot);
+        final restored = await backup.restore(snapshot);
         if (!mounted) return;
         setState(() => _restoreGeneration++);
         ScaffoldMessenger.maybeOf(context)?.showSnackBar(
           SnackBar(
-            content: Text('Restored ${snapshot.messageCount} messages.'),
+            content: Text(
+              restored == 0
+                  ? 'Chat backup found, but no messages needed restoring.'
+                  : 'Restored ${restored == 1 ? '1 chat message' : '$restored chat messages'} '
+                        'from ${snapshot.source}.',
+              maxLines: 3,
+              overflow: TextOverflow.ellipsis,
+            ),
           ),
         );
       } else if (restore == false) {
         await backup.dismissRestoreOffer();
       }
-    } catch (_) {
-      // Restore is best-effort; chat keeps working without it.
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+          SnackBar(
+            content: Text(
+              'Chat backup could not be restored: '
+              '${_briefBackupError(error)}',
+              maxLines: 3,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        );
+      }
     } finally {
       _restoreOfferInFlight = false;
     }
+  }
+
+  static String _briefBackupError(Object error) {
+    final text = error.toString().replaceAll(RegExp(r'\s+'), ' ').trim();
+    return text.length > 160 ? '${text.substring(0, 160)}…' : text;
   }
 
   static String _formatBackupTime(DateTime at) {

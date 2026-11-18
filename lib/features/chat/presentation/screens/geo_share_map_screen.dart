@@ -134,9 +134,10 @@ class _GeoShareMapScreenState extends State<GeoShareMapScreen> {
                     color: cs.primary,
                     width: 5,
                     points: [
-                      for (final p in share.path.isEmpty
-                          ? [share.point, share.destination!]
-                          : share.path)
+                      for (final p
+                          in share.path.isEmpty
+                              ? [share.point, share.destination!]
+                              : share.path)
                         _ll(p),
                     ],
                   ),

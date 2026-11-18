@@ -1,65 +1,50 @@
 import '../../application/services/restore_flow_service.dart';
-import '../../domain/repositories/secure_storage_repository.dart';
-import '../../domain/repositories/vmk_backup_repository.dart';
+import '../../application/usecases/restore_vault_usecase.dart';
+import '../../domain/repositories/vault_repository.dart';
 
 class BackupRestoreFlowService implements RestoreFlowService {
   BackupRestoreFlowService({
-    required SecureStorageRepository secureStorageRepository,
-    required List<VmkBackupRepository> backupRepositories,
-  }) : _secureStorageRepository = secureStorageRepository,
-       _backupRepositories = backupRepositories;
+    required RestoreVaultUseCase restoreVaultUseCase,
+    required VaultRepository vaultRepository,
+    required Future<RestorePhotosSummary> Function() restorePhotos,
+  }) : _restoreVaultUseCase = restoreVaultUseCase,
+       _vaultRepository = vaultRepository,
+       _restorePhotos = restorePhotos;
 
-  final SecureStorageRepository _secureStorageRepository;
-  final List<VmkBackupRepository> _backupRepositories;
-
-  @override
-  Future<bool> hasBackupManifest() async {
-    // For now, we check if any repository has a backup.
-    // In a real scenario, we might want to check for a specific vaultId if known,
-    // or list all available backups.
-    // For simplicity, we'll assume we are looking for the 'primary' backup.
-    return true; // Simplified
-  }
+  final RestoreVaultUseCase _restoreVaultUseCase;
+  final VaultRepository _vaultRepository;
+  final Future<RestorePhotosSummary> Function() _restorePhotos;
 
   @override
-  Future<void> fetchBackupManifest() async {
-    // Implementation to fetch list of photos/metadata
-  }
+  Future<List<String>> listVaultIds() =>
+      _restoreVaultUseCase.listVaultIds(interactive: true);
 
   @override
-  Future<void> restoreEncryptedVmk() async {
-    Map<String, String>? payload;
-    String? foundVaultId;
+  Future<String?> activeVaultId() => _vaultRepository.getActiveVaultId();
 
-    for (final repo in _backupRepositories) {
-      try {
-        final ids = await repo.listVaultIds(interactive: true);
-        if (ids.isNotEmpty) {
-          foundVaultId = ids.first; // For now, just take the first one found
-          payload = await repo.restoreVmk(foundVaultId, interactive: true);
-          if (payload != null) break;
-        }
-      } catch (_) {
-        continue;
-      }
-    }
+  @override
+  Future<void> restoreVault({
+    required String vaultId,
+    required String originalPin,
+    required String newPin,
+  }) => _restoreVaultUseCase.execute(
+    vaultId: vaultId,
+    originalPin: originalPin,
+    newPin: newPin,
+  );
 
-    if (payload != null && foundVaultId != null) {
-      await _secureStorageRepository.storeWrappedVmk(
-        vaultId: foundVaultId,
-        wrappedVmkBase64: payload['wrappedVmk']!,
-        nonceBase64: payload['nonce']!,
-        macBase64: payload['mac']!,
-        saltBase64: payload['salt']!,
-        encVersion: int.parse(payload['encVersion']!),
+  @override
+  Future<RestorePhotosSummary> restorePhotos({
+    required bool includePhotos,
+  }) async {
+    if (!includePhotos) {
+      return const RestorePhotosSummary(
+        foundBackup: false,
+        restored: 0,
+        alreadyPresent: 0,
+        unavailable: 0,
       );
-    } else {
-      throw Exception('No backup found in any repository.');
     }
-  }
-
-  @override
-  Future<void> restoreMetadataAndPhotos({required bool includePhotos}) async {
-    // Implementation to download files from Drive or copy from local storage
+    return _restorePhotos();
   }
 }

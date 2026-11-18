@@ -52,6 +52,63 @@ class InMemorySettingsRepository implements SettingsRepository {
     _driveEncryptedBackupEnabled = enabled;
   }
 
+  bool _backupChatsEnabled = true;
+  bool _backupVaultPhotosEnabled = true;
+  bool _backupCloudEnabled = false;
+  bool _backupWifiOnly = true;
+  DateTime? _lastVaultPhotoBackupAt;
+  String? _lastVaultPhotoBackupVaultId;
+
+  @override
+  Future<bool> isBackupChatsEnabled() async => _backupChatsEnabled;
+
+  @override
+  Future<void> setBackupChatsEnabled(bool enabled) async {
+    _backupChatsEnabled = enabled;
+  }
+
+  @override
+  Future<bool> isBackupVaultPhotosEnabled() async => _backupVaultPhotosEnabled;
+
+  @override
+  Future<void> setBackupVaultPhotosEnabled(bool enabled) async {
+    _backupVaultPhotosEnabled = enabled;
+  }
+
+  @override
+  Future<bool> isBackupCloudEnabled() async => _backupCloudEnabled;
+
+  @override
+  Future<void> setBackupCloudEnabled(bool enabled) async {
+    _backupCloudEnabled = enabled;
+  }
+
+  @override
+  Future<bool> isBackupWifiOnly() async => _backupWifiOnly;
+
+  @override
+  Future<void> setBackupWifiOnly(bool enabled) async {
+    _backupWifiOnly = enabled;
+  }
+
+  @override
+  Future<DateTime?> getLastVaultPhotoBackupAt() async =>
+      _lastVaultPhotoBackupAt;
+
+  @override
+  Future<void> setLastVaultPhotoBackupAt(DateTime? at) async {
+    _lastVaultPhotoBackupAt = at;
+  }
+
+  @override
+  Future<String?> getLastVaultPhotoBackupVaultId() async =>
+      _lastVaultPhotoBackupVaultId;
+
+  @override
+  Future<void> setLastVaultPhotoBackupVaultId(String? vaultId) async {
+    _lastVaultPhotoBackupVaultId = vaultId;
+  }
+
   String? _chatImageQuality;
   bool _autoLockOnBackground = true;
   int _autoLockTimeoutSeconds =

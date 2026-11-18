@@ -22,6 +22,16 @@ import '../../data/repositories/local_chat_backup_store.dart';
 import 'package:photo_vault/firebase_options.dart';
 import 'package:photo_vault/core/storage/local_db/vault_database.dart';
 import 'package:photo_vault/features/vault/data/repositories/flutter_secure_string_kv.dart';
+import 'package:photo_vault/features/vault/data/repositories/persistent_photo_repository.dart';
+import 'package:photo_vault/features/vault/data/repositories/persistent_settings_repository.dart';
+import 'package:photo_vault/features/vault/data/repositories/persistent_vault_repository.dart';
+import 'package:photo_vault/features/vault/domain/repositories/settings_repository.dart';
+import 'package:photo_vault/features/backup/application/backup_coordinator.dart';
+import 'package:photo_vault/features/backup/application/backup_network.dart';
+import 'package:photo_vault/features/backup/application/photo_hash_cache.dart';
+import 'package:photo_vault/features/backup/application/vault_photo_backup_service.dart';
+import 'package:photo_vault/features/backup/data/drive_backup_blob_store.dart';
+import 'package:photo_vault/features/backup/data/local_backup_blob_store.dart';
 import '../../domain/entities/geo_share.dart';
 import 'arrival_alert_service.dart';
 import 'arrival_geofences.dart';
@@ -101,6 +111,10 @@ void chatBackupCallbackDispatcher() {
 /// Upper bound for one background task, safely under Android's 10 minutes.
 const _taskBudget = Duration(minutes: 8);
 
+/// Time allowed for the photo part, leaving room for the chat part and
+/// shutdown inside [_taskBudget].
+const _photoBudget = Duration(minutes: 5);
+
 /// Firebase init in a cold background isolate can hang on a bad network.
 Future<void> _ensureFirebase() async {
   if (Firebase.apps.isNotEmpty) return;
@@ -162,6 +176,9 @@ Future<bool> runBackgroundArrivalSend() async {
 }
 
 /// Performs one backup outside the UI (own Firebase + database instances).
+///
+/// Chats and vault photos are each gated by the Backup settings. A failure in
+/// one never stops the other.
 Future<void> runBackgroundChatBackup() async {
   WidgetsFlutterBinding.ensureInitialized();
   await _ensureFirebase();
@@ -175,8 +192,34 @@ Future<void> runBackgroundChatBackup() async {
     // Drive is then skipped and retried when the app is next opened.
   }
 
-  final db = VaultDatabase();
+  final settings = PersistentSettingsRepository(
+    FlutterSecureStringKv(const FlutterSecureStorage()),
+  );
   final crypto = ChatCryptoService();
+  // Each part is independent: a failure in one must not stop the other, but
+  // the first error is still rethrown so WorkManager retries the task.
+  Object? firstError;
+  try {
+    await _backUpChatsInBackground(uid, crypto, settings);
+  } catch (e) {
+    firstError = e;
+  }
+  try {
+    await _backUpVaultPhotosInBackground(uid, crypto, settings);
+  } catch (e) {
+    firstError ??= e;
+  } finally {
+    crypto.clearKeyCache();
+  }
+  if (firstError != null) throw firstError;
+}
+
+Future<void> _backUpChatsInBackground(
+  String uid,
+  ChatCryptoService crypto,
+  SettingsRepository settings,
+) async {
+  final db = VaultDatabase();
   try {
     await crypto.requireAccount(uid);
     final service = ChatBackupService(
@@ -187,13 +230,55 @@ Future<void> runBackgroundChatBackup() async {
         GoogleDriveChatBackupStore(authRepository: FirebaseAuthRepository()),
       ],
       currentUid: () => uid,
+      settings: settings,
+      coordinator: BackupCoordinator.shared,
     );
     // Slightly under a day so a periodic run that fires a little early is
     // not skipped.
     await service.backupIfDue(minAge: const Duration(hours: 20));
   } finally {
-    crypto.clearKeyCache();
     await db.close();
+  }
+}
+
+Future<void> _backUpVaultPhotosInBackground(
+  String uid,
+  ChatCryptoService crypto,
+  SettingsRepository settings,
+) async {
+  if (!await settings.isBackupVaultPhotosEnabled()) return;
+  final vaultRepository = PersistentVaultRepository(
+    FlutterSecureStringKv(const FlutterSecureStorage()),
+  );
+  final photos = PersistentPhotoRepositoryImpl(
+    currentVaultId: vaultRepository.getActiveVaultId,
+  );
+  await photos.initialize();
+  try {
+    await crypto.requireAccount(uid);
+    final service = VaultPhotoBackupService(
+      stores: [
+        LocalBackupBlobStore(),
+        DriveBackupBlobStore(authRepository: FirebaseAuthRepository()),
+      ],
+      photoRepository: photos,
+      listPhotos: photos.listAttachments,
+      crypto: crypto,
+      settings: settings,
+      currentUid: () => uid,
+      networkAllowed: () => backupNetworkAllowed(settings),
+      currentVaultId: vaultRepository.getActiveVaultId,
+      hashCache: PhotoHashCache.defaults(),
+      coordinator: BackupCoordinator.shared,
+    );
+    // Stop before the 8-minute task budget so the run ends cleanly and the
+    // next night resumes from the hash cache.
+    await service.backupIfDue(
+      minAge: const Duration(hours: 20),
+      deadline: DateTime.now().add(_photoBudget),
+    );
+  } finally {
+    await photos.close();
   }
 }
 

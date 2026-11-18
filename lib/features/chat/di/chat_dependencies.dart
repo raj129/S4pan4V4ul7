@@ -60,6 +60,7 @@ import '../domain/repositories/typing_repository.dart';
 import '../domain/repositories/user_repository.dart';
 import '../domain/repositories/notes_repository.dart';
 import '../data/repositories/app_notes_repository.dart';
+import 'package:photo_vault/features/backup/application/backup_coordinator.dart';
 import 'package:photo_vault/features/vault/data/repositories/flutter_secure_string_kv.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:photo_vault/features/vault/domain/repositories/settings_repository.dart';
@@ -437,6 +438,8 @@ class ChatDependencies {
     ],
     currentUid: () => authService.currentUid,
     profile: profileService,
+    settings: _settingsRepository,
+    coordinator: BackupCoordinator.shared,
   );
 
   void dispose() {
