@@ -14,8 +14,9 @@ class BaseScreenShell extends StatelessWidget {
     this.showDrawerMenu = true,
     this.showQuickLock = true,
     this.drawerSelectedIndex = -1,
+    GlobalKey<ScaffoldState>? scaffoldKey,
     super.key,
-  }) : _scaffoldKey = GlobalKey<ScaffoldState>();
+  }) : _scaffoldKey = scaffoldKey ?? GlobalKey<ScaffoldState>();
 
   final String title;
   final Widget body;
@@ -41,6 +42,17 @@ class BaseScreenShell extends StatelessWidget {
             : null,
         actions: [
           ...?actions,
+          if (showQuickLock && actions?.isNotEmpty == true)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xs),
+              child: SizedBox(
+                height: 24,
+                child: VerticalDivider(
+                  width: 1,
+                  color: Theme.of(context).colorScheme.outlineVariant,
+                ),
+              ),
+            ),
           if (showQuickLock) const QuickLockActionButton(),
           const SizedBox(width: AppSpacing.xs),
         ],
@@ -50,6 +62,7 @@ class BaseScreenShell extends StatelessWidget {
               selectedIndex: drawerSelectedIndex,
               onDestinationSelected: (index) {
                 Navigator.of(context).pop();
+                if (index == drawerSelectedIndex) return;
                 final path = navigationPathForDestination(index);
                 if (path == null) return;
                 if (isPushedDestination(index)) {

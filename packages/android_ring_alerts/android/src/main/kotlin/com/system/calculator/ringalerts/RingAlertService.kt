@@ -81,6 +81,9 @@ class RingAlertService : Service() {
         stopAlert(removeForeground = false)
         currentAlertId = intent.getStringExtra(EXTRA_ALERT_ID)
         val source = RingAlertPolicy.parseSource(intent.getStringExtra(EXTRA_SOURCE))
+        val notificationAudioUsage =
+            intent.getBooleanExtra(EXTRA_NOTIFICATION_AUDIO_USAGE, false)
+        val repeatVibration = intent.getBooleanExtra(EXTRA_REPEAT_VIBRATION, true)
         val ringSoundEnabled =
             intent.getBooleanExtra(EXTRA_RING_SOUND_ENABLED, true)
         val vibrationEnabled =
@@ -138,7 +141,11 @@ class RingAlertService : Service() {
             if (output == RingAlertOutput.RING ||
                 output == RingAlertOutput.RING_AND_VIBRATE
             ) {
-                startRingtone(source, intent.getStringExtra(EXTRA_RINGTONE_URI))
+                startRingtone(
+                    source,
+                    intent.getStringExtra(EXTRA_RINGTONE_URI),
+                    notificationAudioUsage,
+                )
             }
             if (output == RingAlertOutput.VIBRATE ||
                 output == RingAlertOutput.RING_AND_VIBRATE
@@ -148,7 +155,12 @@ class RingAlertService : Service() {
                 } else {
                     null
                 }
-                startVibration(vibrationPattern, source)
+                startVibration(
+                    vibrationPattern,
+                    source,
+                    notificationAudioUsage,
+                    repeatVibration,
+                )
             }
             if (flashlightAllowedByService) {
                 startFlashlight(intent.getStringExtra(EXTRA_FLASH_PATTERN))
@@ -267,13 +279,23 @@ class RingAlertService : Service() {
         }
     }
 
-    private fun startRingtone(source: RingAlertSource, uriString: String?) {
+    private fun startRingtone(
+        source: RingAlertSource,
+        uriString: String?,
+        notificationAudioUsage: Boolean,
+    ) {
         val selectedUri = if (source == RingAlertSource.CUSTOM) {
             uriString?.takeIf(String::isNotBlank)?.let(Uri::parse)
         } else {
             null
         }
-        val defaultUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
+        val defaultUri = RingtoneManager.getDefaultUri(
+            if (notificationAudioUsage) {
+                RingtoneManager.TYPE_NOTIFICATION
+            } else {
+                RingtoneManager.TYPE_RINGTONE
+            },
+        )
         val sound = try {
             RingtoneManager.getRingtone(this, selectedUri ?: defaultUri)
                 ?: RingtoneManager.getRingtone(this, defaultUri)
@@ -284,10 +306,10 @@ class RingAlertService : Service() {
         } ?: return
         sound.audioAttributes = AudioAttributes.Builder()
             .setUsage(
-                if (source == RingAlertSource.CUSTOM) {
-                    AudioAttributes.USAGE_ALARM
-                } else {
-                    AudioAttributes.USAGE_NOTIFICATION_RINGTONE
+                when {
+                    notificationAudioUsage -> AudioAttributes.USAGE_NOTIFICATION
+                    source == RingAlertSource.CUSTOM -> AudioAttributes.USAGE_ALARM
+                    else -> AudioAttributes.USAGE_NOTIFICATION_RINGTONE
                 },
             )
             .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
@@ -301,7 +323,12 @@ class RingAlertService : Service() {
         sound.play()
     }
 
-    private fun startVibration(patternName: String?, source: RingAlertSource) {
+    private fun startVibration(
+        patternName: String?,
+        source: RingAlertSource,
+        notificationAudioUsage: Boolean,
+        repeat: Boolean,
+    ) {
         vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             getSystemService(VibratorManager::class.java)?.defaultVibrator
         } else {
@@ -313,15 +340,23 @@ class RingAlertService : Service() {
             "longPulses" -> longArrayOf(0, 1_100, 450)
             else -> longArrayOf(0, 700, 500)
         }
+        val repeatIndex = RingAlertPolicy.vibrationRepeatIndex(repeat)
+        val vibrationUsage = RingAlertPolicy.vibrationUsage(
+            source = source,
+            notificationAudioUsage = notificationAudioUsage,
+        )
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val effect = VibrationEffect.createWaveform(timings, 0)
+            val effect = VibrationEffect.createWaveform(timings, repeatIndex)
             if (Build.VERSION.SDK_INT >= 33) {
                 val attributes = VibrationAttributes.Builder()
                     .setUsage(
-                        if (source == RingAlertSource.CUSTOM) {
-                            VibrationAttributes.USAGE_ALARM
-                        } else {
-                            VibrationAttributes.USAGE_RINGTONE
+                        when (vibrationUsage) {
+                            RingVibrationUsage.NOTIFICATION ->
+                                VibrationAttributes.USAGE_NOTIFICATION
+                            RingVibrationUsage.ALARM ->
+                                VibrationAttributes.USAGE_ALARM
+                            RingVibrationUsage.RINGTONE ->
+                                VibrationAttributes.USAGE_RINGTONE
                         },
                     )
                     .build()
@@ -329,10 +364,13 @@ class RingAlertService : Service() {
             } else {
                 val attributes = AudioAttributes.Builder()
                     .setUsage(
-                        if (source == RingAlertSource.CUSTOM) {
-                            AudioAttributes.USAGE_ALARM
-                        } else {
-                            AudioAttributes.USAGE_NOTIFICATION_RINGTONE
+                        when (vibrationUsage) {
+                            RingVibrationUsage.NOTIFICATION ->
+                                AudioAttributes.USAGE_NOTIFICATION
+                            RingVibrationUsage.ALARM ->
+                                AudioAttributes.USAGE_ALARM
+                            RingVibrationUsage.RINGTONE ->
+                                AudioAttributes.USAGE_NOTIFICATION_RINGTONE
                         },
                     )
                     .build()
@@ -340,7 +378,7 @@ class RingAlertService : Service() {
             }
         } else {
             @Suppress("DEPRECATION")
-            vibrator?.vibrate(timings, 0)
+            vibrator?.vibrate(timings, repeatIndex)
         }
     }
 
@@ -440,6 +478,7 @@ class RingAlertService : Service() {
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .setPriority(NotificationCompat.PRIORITY_MIN)
             .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            .setLocalOnly(true)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setAutoCancel(false)
@@ -524,6 +563,8 @@ class RingAlertService : Service() {
         const val EXTRA_FLASH_PATTERN = "flashPattern"
         const val EXTRA_START_DELAY_SECONDS = "startDelaySeconds"
         const val EXTRA_ALLOW_FLASH_IN_BACKGROUND = "allowFlashInBackground"
+        const val EXTRA_NOTIFICATION_AUDIO_USAGE = "notificationAudioUsage"
+        const val EXTRA_REPEAT_VIBRATION = "repeatVibration"
         private const val ACTION_VOLUME_CHANGED = "android.media.VOLUME_CHANGED_ACTION"
         private const val EXTRA_VOLUME_STREAM_TYPE = "android.media.EXTRA_VOLUME_STREAM_TYPE"
         private const val CHANNEL_ID = "chat_ring_alerts_minimal"

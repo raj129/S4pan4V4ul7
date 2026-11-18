@@ -5,6 +5,7 @@ import 'package:photo_vault/features/chat/application/services/chat_notification
 import 'package:photo_vault/features/chat/domain/entities/chat_thread.dart';
 import 'package:photo_vault/features/chat/domain/repositories/thread_repository.dart';
 import 'package:photo_vault/core/testing/repositories/in_memory_settings_repository.dart';
+import 'package:photo_vault/features/vault/domain/entities/incoming_chat_alert_preferences.dart';
 
 class _ThreadRepository implements ThreadRepository {
   // ignore: close_sinks - test fake lives for the whole test.
@@ -93,6 +94,42 @@ void main() {
 
     await service.dispose();
     await repository.updates.close();
+  });
+
+  test('tests use the recipient saved header and body', () async {
+    final repository = _ThreadRepository();
+    final settings = InMemorySettingsRepository();
+    await settings.setIncomingChatAlertTitle('Private preview');
+    await settings.setIncomingChatAlertText('Your configured test text');
+    final notifications = <({String title, String body})>[];
+    final service = ChatNotificationService(
+      threadRepository: repository,
+      settingsRepository: settings,
+      presentNotification:
+          ({required threadId, required title, required body}) async {
+            notifications.add((title: title, body: body));
+          },
+    );
+
+    await service.showTestNotification();
+
+    expect(notifications, [
+      (title: 'Private preview', body: 'Your configured test text'),
+    ]);
+
+    await service.dispose();
+    await repository.updates.close();
+  });
+
+  test('uses the system channel only for Follow system chat alerts', () {
+    expect(
+      ChatNotificationService.channelForSource(NotificationAlertSource.system),
+      ChatNotificationService.systemChannelId,
+    );
+    expect(
+      ChatNotificationService.channelForSource(NotificationAlertSource.custom),
+      ChatNotificationService.channelId,
+    );
   });
 
   test('keeps a blank body for received and test notifications', () async {

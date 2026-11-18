@@ -15,6 +15,8 @@ class StorageKeys {
       'settings.incoming_chat_alert_text';
   static const String incomingChatAlertTitle =
       'settings.incoming_chat_alert_title';
+  static const String incomingChatAlertPreferences =
+      'settings.incoming_chat_alert_preferences';
   static const String backgroundLocationAlertTitle =
       'settings.background_location_alert_title';
   static const String backgroundLocationAlertText =

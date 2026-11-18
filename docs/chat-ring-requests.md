@@ -1,12 +1,17 @@
 # Chat ring requests
 
-Ring requests are explicit events sent from a chat; ordinary message alerts are
-unchanged. A request appears in the conversation with its timestamp and
+Ring requests are explicit events sent from a chat. A request appears in the
+conversation with its timestamp and
 standard sent/delivered/read status. Delivery means the recipient's device
 acknowledged the event, not that Android confirms sound or vibration played.
 Send a request from the chat's overflow menu; the lock-vault action remains in
 the app bar.
 
+Ring-request and incoming-chat notification settings are managed from
+**Settings → Notification settings**. Choose a notification type to open its
+configuration. Each type has independent alert and notification text settings.
+Chat tests and incoming chat alerts use the recipient's saved header/body and
+never display the sender's message content.
 On Android, recipients can enable or disable incoming ring requests and choose
 **Follow system** (the default) or **Use app settings**. In Follow system mode,
 the app uses the phone's default ringtone, vibration mode, and Android's camera
@@ -26,6 +31,31 @@ background FCM event, so app-controlled flashlight blinking cannot be promised
 for locked/background requests on those versions. Follow system mode instead
 reads Android's camera-flash notification setting and uses the system-selected
 behavior when permission, hardware, and Android background rules permit it.
+
+Incoming chat alerts in **Follow system** use Android's standard notification
+sound, vibration, and accessibility flash settings on a dedicated high-
+importance notification channel. In **Use app settings** mode, chat-message
+alerts use a silent notification channel while the selected Android notification
+sound, app vibration pattern, and flashlight are driven separately by the
+native alert service. Chat's app-settings sound picker selects notification
+tones, while ring requests continue using the phone ringtone picker. Android
+does not expose a global vibration-pattern picker; Follow system delegates
+pattern selection to the notification channel, and app settings offer
+standard/short/long patterns. Ring requests continue using their own repeating
+native alert service. Both modes post a
+regular notification that Android can bridge to Wear OS; watch delivery and
+alerting remain subject to phone/watch notification settings and OS policies.
+For app-configured chat alerts, the selected vibration pattern plays once per
+message; ring-request vibration continues repeating until timeout.
+
+The ring service's required foreground-service notification is marked
+phone-local so Wear OS receives the regular user-facing notification rather
+than a second service notification. The repository has no separate Wear OS app;
+watch delivery uses Android's notification bridge.
+
+The background-location notification body defaults to empty but remains
+editable. Its settings test shows a one-off preview and does not start live
+location sharing.
 
 The settings test alert has a separate delay selector (0, 3, 5, 10, or 15
 seconds; default 0). The delay affects only the test, not incoming requests.

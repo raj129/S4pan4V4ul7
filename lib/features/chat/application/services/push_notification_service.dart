@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
@@ -9,12 +10,15 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:android_ring_alerts/android_ring_alerts.dart';
 
 import '../../domain/repositories/message_repository.dart';
+import '../../domain/entities/ring_alert_preferences.dart';
 import 'package:photo_vault/firebase_options.dart';
 import '../../domain/repositories/push_token_repository.dart';
 import 'package:photo_vault/features/vault/data/repositories/storage_keys.dart';
 import 'package:photo_vault/features/vault/domain/repositories/settings_repository.dart';
+import 'package:photo_vault/features/vault/domain/entities/incoming_chat_alert_preferences.dart';
 import 'chat_notification_service.dart';
 import 'chat_backup_scheduler.dart';
+import 'chat_alert_executor.dart';
 
 String? _ringtoneUri(Object? raw) {
   if (raw is! String || raw.isEmpty) return null;
@@ -51,6 +55,37 @@ Future<void> handleChatPushInBackground(RemoteMessage message) async {
   final threadId = rawThreadId;
   final messageId = rawMessageId is String ? rawMessageId : null;
 
+  final notifications = FlutterLocalNotificationsPlugin();
+  await notifications.initialize(
+    settings: const InitializationSettings(
+      android: AndroidInitializationSettings('@mipmap/ic_launcher'),
+    ),
+  );
+  final androidNotifications = notifications
+      .resolvePlatformSpecificImplementation<
+        AndroidFlutterLocalNotificationsPlugin
+      >();
+  await androidNotifications?.createNotificationChannel(
+    const AndroidNotificationChannel(
+      ChatNotificationService.channelId,
+      ChatNotificationService.channelName,
+      description: 'Shows chat messages alongside the selected alert.',
+      importance: Importance.high,
+      playSound: false,
+      enableVibration: false,
+    ),
+  );
+  await androidNotifications?.createNotificationChannel(
+    const AndroidNotificationChannel(
+      ChatNotificationService.systemChannelId,
+      ChatNotificationService.systemChannelName,
+      description: 'Notifies you about incoming chat messages.',
+      importance: Importance.high,
+      playSound: true,
+      enableVibration: true,
+    ),
+  );
+
   if (message.data['eventType'] == 'ringRequest') {
     final source = message.data['ringSource'] == 'custom' ? 'custom' : 'system';
     final oldMode = _ringString(message.data['ringMode'], 'ringAndVibrate');
@@ -64,7 +99,8 @@ Future<void> handleChatPushInBackground(RemoteMessage message) async {
       oldToggles.vibrate,
     );
     final flashlightEnabled = message.data['ringFlashlightEnabled'] == 'true';
-    if (message.data['ringEnabled'] == 'true' &&
+    final ringEnabled = message.data['ringEnabled'] != 'false';
+    if (ringEnabled &&
         (source == 'system' ||
             ringSoundEnabled ||
             vibrationEnabled ||
@@ -77,8 +113,14 @@ Future<void> handleChatPushInBackground(RemoteMessage message) async {
           vibrationEnabled: vibrationEnabled,
           timeoutSeconds:
               int.tryParse(message.data['ringTimeoutSeconds'] ?? '') ?? 5,
-          title: 'Ring request',
-          body: 'Someone is asking you to ring.',
+          title: _ringString(
+            message.data['ringTitle'],
+            RingAlertPreferences.defaultNotificationTitle,
+          ),
+          body: _ringString(
+            message.data['ringBody'],
+            RingAlertPreferences.defaultNotificationBody,
+          ),
           ringtoneUri: _ringtoneUri(message.data['ringtoneUri']),
           vibrationPattern: _ringString(
             message.data['ringVibrationPattern'],
@@ -95,8 +137,34 @@ Future<void> handleChatPushInBackground(RemoteMessage message) async {
         debugPrint('Could not start incoming ring request alert: $error');
       }
     }
+    if (ringEnabled) {
+      await notifications.show(
+        id: 2,
+        title: _ringString(
+          message.data['ringTitle'],
+          RingAlertPreferences.defaultNotificationTitle,
+        ),
+        body: _ringString(
+          message.data['ringBody'],
+          RingAlertPreferences.defaultNotificationBody,
+        ),
+        notificationDetails: NotificationDetails(
+          android: AndroidNotificationDetails(
+            ChatNotificationService.channelId,
+            ChatNotificationService.channelName,
+            channelDescription:
+                'Shows chat messages alongside the selected alert.',
+            importance: Importance.high,
+            priority: Priority.high,
+            playSound: false,
+            enableVibration: false,
+            tag: 'ring-${messageId ?? threadId}',
+          ),
+        ),
+        payload: threadId,
+      );
+    }
   } else if (message.data['notify'] != 'false') {
-    final notifications = FlutterLocalNotificationsPlugin();
     var alertTitle = SettingsRepository.defaultIncomingChatAlertTitle;
     var alertBody = SettingsRepository.defaultIncomingChatAlertText;
     try {
@@ -116,10 +184,23 @@ Future<void> handleChatPushInBackground(RemoteMessage message) async {
     } catch (error) {
       debugPrint('Could not read custom notification settings: $error');
     }
-    await notifications.initialize(
-      settings: const InitializationSettings(
-        android: AndroidInitializationSettings('@mipmap/ic_launcher'),
-      ),
+    var alertPreferences = const IncomingChatAlertPreferences();
+    try {
+      final rawPreferences = await const FlutterSecureStorage().read(
+        key: StorageKeys.incomingChatAlertPreferences,
+      );
+      if (rawPreferences != null) {
+        alertPreferences = IncomingChatAlertPreferences.fromJson(
+          jsonDecode(rawPreferences),
+        );
+      }
+    } catch (error) {
+      debugPrint('Could not read chat alert preferences: $error');
+    }
+    final usesSystemChannel =
+        alertPreferences.source == NotificationAlertSource.system;
+    final notificationChannelId = ChatNotificationService.channelForSource(
+      alertPreferences.source,
     );
     await notifications.show(
       id: 0,
@@ -127,16 +208,31 @@ Future<void> handleChatPushInBackground(RemoteMessage message) async {
       body: alertBody,
       notificationDetails: NotificationDetails(
         android: AndroidNotificationDetails(
-          ChatNotificationService.channelId,
-          'Chat messages',
-          channelDescription: 'Notifies you about new chat messages.',
+          notificationChannelId,
+          usesSystemChannel
+              ? ChatNotificationService.systemChannelName
+              : ChatNotificationService.channelName,
+          channelDescription: usesSystemChannel
+              ? 'Notifies you about incoming chat messages.'
+              : 'Shows chat messages alongside the selected alert.',
           importance: Importance.high,
           priority: Priority.high,
+          playSound: usesSystemChannel,
+          enableVibration: usesSystemChannel,
           tag: threadId,
         ),
       ),
       payload: threadId,
     );
+    try {
+      await startIncomingChatAlert(
+        alertId: messageId ?? threadId,
+        preferences: alertPreferences,
+        allowFlashInBackground: false,
+      );
+    } catch (error) {
+      debugPrint('Could not start incoming chat alert: $error');
+    }
   }
 
   final uid = FirebaseAuth.instance.currentUser?.uid;
@@ -271,31 +367,55 @@ class PushNotificationService {
               ringSoundEnabled ||
               vibrationEnabled ||
               flashlightEnabled)) {
-        unawaited(
-          AndroidRingAlerts.startAlert(
-            alertId: rawMessageId,
-            source: source,
-            ringSoundEnabled: ringSoundEnabled,
-            vibrationEnabled: vibrationEnabled,
-            timeoutSeconds:
-                int.tryParse(message.data['ringTimeoutSeconds'] ?? '') ?? 5,
-            title: 'Ring request',
-            body: 'Someone is asking you to ring.',
-            ringtoneUri: _ringtoneUri(message.data['ringtoneUri']),
-            vibrationPattern: _ringString(
-              message.data['ringVibrationPattern'],
-              'standard',
-            ),
-            flashlightEnabled: flashlightEnabled,
-            flashPattern: _ringString(
-              message.data['ringFlashPattern'],
-              'slowBlink',
-            ),
-            allowFlashInBackground: true,
-          ).catchError((Object error) {
+        unawaited(() async {
+          try {
+            await AndroidRingAlerts.startAlert(
+              alertId: rawMessageId,
+              source: source,
+              ringSoundEnabled: ringSoundEnabled,
+              vibrationEnabled: vibrationEnabled,
+              timeoutSeconds:
+                  int.tryParse(message.data['ringTimeoutSeconds'] ?? '') ?? 5,
+              title: _ringString(
+                message.data['ringTitle'],
+                RingAlertPreferences.defaultNotificationTitle,
+              ),
+              body: _ringString(
+                message.data['ringBody'],
+                RingAlertPreferences.defaultNotificationBody,
+              ),
+              ringtoneUri: _ringtoneUri(message.data['ringtoneUri']),
+              vibrationPattern: _ringString(
+                message.data['ringVibrationPattern'],
+                'standard',
+              ),
+              flashlightEnabled: flashlightEnabled,
+              flashPattern: _ringString(
+                message.data['ringFlashPattern'],
+                'slowBlink',
+              ),
+              allowFlashInBackground: true,
+            );
+          } catch (error) {
             debugPrint('Could not start ring request alert: $error');
-          }),
-        );
+          }
+          try {
+            await _notifications.showRingRequestNotification(
+              threadId: rawThreadId,
+              alertId: rawMessageId,
+              title: _ringString(
+                message.data['ringTitle'],
+                RingAlertPreferences.defaultNotificationTitle,
+              ),
+              body: _ringString(
+                message.data['ringBody'],
+                RingAlertPreferences.defaultNotificationBody,
+              ),
+            );
+          } catch (error) {
+            debugPrint('Could not show ring request notification: $error');
+          }
+        }());
       }
     }
     unawaited(

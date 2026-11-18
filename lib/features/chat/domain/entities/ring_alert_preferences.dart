@@ -20,8 +20,14 @@ class RingAlertPreferences extends Equatable {
     this.flashlightEnabled = false,
     this.flashPattern = RingFlashPattern.slowBlink,
     this.testDelaySeconds = defaultTestDelaySeconds,
+    this.notificationTitle = defaultNotificationTitle,
+    this.notificationBody = defaultNotificationBody,
   });
 
+  static const defaultNotificationTitle = '';
+  static const defaultNotificationBody = '';
+  static const legacyDefaultNotificationTitle = 'Ring request';
+  static const legacyDefaultNotificationBody = 'Someone is asking you to ring.';
   static const defaultTimeoutSeconds = 5;
   static const timeoutOptionsSeconds = [5, 10, 15, 30, 45, 60, 90, 120];
   static const defaultTestDelaySeconds = 0;
@@ -37,6 +43,8 @@ class RingAlertPreferences extends Equatable {
   final bool flashlightEnabled;
   final RingFlashPattern flashPattern;
   final int testDelaySeconds;
+  final String notificationTitle;
+  final String notificationBody;
 
   RingAlertMode get mode => switch ((ringSoundEnabled, vibrationEnabled)) {
     (true, true) => RingAlertMode.ringAndVibrate,
@@ -57,6 +65,8 @@ class RingAlertPreferences extends Equatable {
     bool? flashlightEnabled,
     RingFlashPattern? flashPattern,
     int? testDelaySeconds,
+    String? notificationTitle,
+    String? notificationBody,
   }) => RingAlertPreferences(
     enabled: enabled ?? this.enabled,
     source: source ?? this.source,
@@ -68,6 +78,8 @@ class RingAlertPreferences extends Equatable {
     flashlightEnabled: flashlightEnabled ?? this.flashlightEnabled,
     flashPattern: flashPattern ?? this.flashPattern,
     testDelaySeconds: testDelaySeconds ?? this.testDelaySeconds,
+    notificationTitle: notificationTitle ?? this.notificationTitle,
+    notificationBody: notificationBody ?? this.notificationBody,
   );
 
   Map<String, Object?> toFirestore() => {
@@ -82,6 +94,8 @@ class RingAlertPreferences extends Equatable {
     'flashlightEnabled': flashlightEnabled,
     'flashPattern': flashPattern.name,
     'testDelaySeconds': testDelaySeconds,
+    'notificationTitle': notificationTitle,
+    'notificationBody': notificationBody,
   };
 
   factory RingAlertPreferences.fromFirestore(Map<String, dynamic>? data) {
@@ -116,6 +130,11 @@ class RingAlertPreferences extends Equatable {
     );
     final timeout = (data?['timeoutSeconds'] as num?)?.toInt();
     final testDelay = (data?['testDelaySeconds'] as num?)?.toInt();
+    final storedNotificationTitle = data?['notificationTitle'] as String?;
+    final storedNotificationBody = data?['notificationBody'] as String?;
+    final hasLegacyNotificationDefaults =
+        storedNotificationTitle == legacyDefaultNotificationTitle &&
+        storedNotificationBody == legacyDefaultNotificationBody;
     return RingAlertPreferences(
       enabled: data?['enabled'] as bool? ?? true,
       source: source,
@@ -133,6 +152,12 @@ class RingAlertPreferences extends Equatable {
       testDelaySeconds: testDelayOptionsSeconds.contains(testDelay)
           ? testDelay!
           : defaultTestDelaySeconds,
+      notificationTitle: hasLegacyNotificationDefaults
+          ? defaultNotificationTitle
+          : storedNotificationTitle ?? defaultNotificationTitle,
+      notificationBody: hasLegacyNotificationDefaults
+          ? defaultNotificationBody
+          : storedNotificationBody ?? defaultNotificationBody,
     );
   }
 
@@ -148,5 +173,7 @@ class RingAlertPreferences extends Equatable {
     flashlightEnabled,
     flashPattern,
     testDelaySeconds,
+    notificationTitle,
+    notificationBody,
   ];
 }

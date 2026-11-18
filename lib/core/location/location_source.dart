@@ -11,7 +11,7 @@ class LocationUpdateConfig {
     this.interval = const Duration(seconds: 1),
     this.backgroundNotification = false,
     this.notificationTitle = '',
-    this.notificationText = 'Syncing in background',
+    this.notificationText = '',
   });
 
   final int distanceFilterMeters;

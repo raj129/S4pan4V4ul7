@@ -1,4 +1,5 @@
 import 'package:photo_vault/features/vault/domain/entities/user_mode.dart';
+import 'package:photo_vault/features/vault/domain/entities/incoming_chat_alert_preferences.dart';
 import 'package:photo_vault/features/vault/domain/repositories/settings_repository.dart';
 
 class InMemorySettingsRepository implements SettingsRepository {
@@ -59,6 +60,8 @@ class InMemorySettingsRepository implements SettingsRepository {
       SettingsRepository.defaultIncomingChatAlertTitle;
   String _incomingChatAlertText =
       SettingsRepository.defaultIncomingChatAlertText;
+  IncomingChatAlertPreferences _incomingChatAlertPreferences =
+      const IncomingChatAlertPreferences();
   String _backgroundLocationAlertTitle =
       SettingsRepository.defaultBackgroundLocationAlertTitle;
   String _backgroundLocationAlertText =
@@ -111,6 +114,17 @@ class InMemorySettingsRepository implements SettingsRepository {
   @override
   Future<void> setIncomingChatAlertText(String text) async {
     _incomingChatAlertText = text.trim();
+  }
+
+  @override
+  Future<IncomingChatAlertPreferences>
+  getIncomingChatAlertPreferences() async => _incomingChatAlertPreferences;
+
+  @override
+  Future<void> setIncomingChatAlertPreferences(
+    IncomingChatAlertPreferences preferences,
+  ) async {
+    _incomingChatAlertPreferences = preferences;
   }
 
   @override

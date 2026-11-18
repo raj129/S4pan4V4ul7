@@ -1,4 +1,5 @@
 import '../entities/user_mode.dart';
+import '../entities/incoming_chat_alert_preferences.dart';
 
 abstract class SettingsRepository {
   static const defaultAutoLockTimeoutSeconds = 10;
@@ -6,7 +7,7 @@ abstract class SettingsRepository {
   static const defaultIncomingChatAlertTitle = '';
   static const defaultIncomingChatAlertText = '';
   static const defaultBackgroundLocationAlertTitle = '';
-  static const defaultBackgroundLocationAlertText = 'Syncing in background';
+  static const defaultBackgroundLocationAlertText = '';
 
   Future<UserMode?> getUserMode();
 
@@ -54,6 +55,14 @@ abstract class SettingsRepository {
       defaultIncomingChatAlertText;
 
   Future<void> setIncomingChatAlertText(String text) async {}
+
+  Future<IncomingChatAlertPreferences>
+  getIncomingChatAlertPreferences() async =>
+      const IncomingChatAlertPreferences();
+
+  Future<void> setIncomingChatAlertPreferences(
+    IncomingChatAlertPreferences preferences,
+  ) async {}
 
   /// Title and body shown while live location is shared in the background.
   Future<String> getBackgroundLocationAlertTitle() async =>

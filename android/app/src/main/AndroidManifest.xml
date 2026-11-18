@@ -108,11 +108,10 @@
                 android:resource="@xml/flutter_image_picker_file_paths" />
         </provider>
         
-        <!-- FCM pushes from the onChatMessageCreated Cloud Function land on the
-             same channel ChatNotificationService creates. -->
+        <!-- Default channel used by the local chat notifications. -->
         <meta-data
             android:name="com.google.firebase.messaging.default_notification_channel_id"
-            android:value="chat_messages" />
+            android:value="chat_alerts_system" />
 
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->

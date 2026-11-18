@@ -19,7 +19,24 @@ internal enum class RingAlertOutput {
     SILENT,
 }
 
+internal enum class RingVibrationUsage {
+    NOTIFICATION,
+    ALARM,
+    RINGTONE,
+}
+
 internal object RingAlertPolicy {
+    fun vibrationRepeatIndex(repeat: Boolean): Int = if (repeat) 0 else -1
+
+    fun vibrationUsage(
+        source: RingAlertSource,
+        notificationAudioUsage: Boolean,
+    ): RingVibrationUsage = when {
+        source == RingAlertSource.CUSTOM -> RingVibrationUsage.ALARM
+        notificationAudioUsage -> RingVibrationUsage.NOTIFICATION
+        else -> RingVibrationUsage.RINGTONE
+    }
+
     fun resolve(
         source: RingAlertSource,
         ringSoundEnabled: Boolean,

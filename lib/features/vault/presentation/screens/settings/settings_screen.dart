@@ -561,20 +561,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 leading: const Icon(Icons.notifications_active_outlined),
                 title: const Text('Notification settings'),
                 subtitle: const Text(
-                  'Customize headers and messages for all notifications.',
+                  'Configure chat, ring, and background location notifications.',
                 ),
                 trailing: const Icon(Icons.chevron_right_rounded),
                 onTap: () => unawaited(context.push('/settings/notifications')),
-              ),
-              ListTile(
-                key: const Key('ring-alert-settings-navigation-tile'),
-                leading: const Icon(Icons.ring_volume_outlined),
-                title: const Text('Chat ring requests'),
-                subtitle: const Text(
-                  'Choose whether ring requests vibrate, ring, or stay silent.',
-                ),
-                trailing: const Icon(Icons.chevron_right_rounded),
-                onTap: () => unawaited(context.push('/settings/ring-alerts')),
               ),
             ],
           ),

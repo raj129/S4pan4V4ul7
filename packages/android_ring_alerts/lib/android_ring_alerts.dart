@@ -14,6 +14,13 @@ class AndroidRingAlerts {
     });
   }
 
+  static Future<String?> pickNotificationSound({String? currentUri}) async {
+    if (!Platform.isAndroid) return null;
+    return _channel.invokeMethod<String>('pickNotificationSound', {
+      'currentUri': ?currentUri,
+    });
+  }
+
   static Future<String?> ringtoneTitle(String? uri) async {
     if (!Platform.isAndroid || uri == null) return null;
     return _channel.invokeMethod<String>('ringtoneTitle', {'uri': uri});
@@ -37,6 +44,13 @@ class AndroidRingAlerts {
     await _channel.invokeMethod<void>('openSystemRingtoneSettings');
   }
 
+  static Future<void> openNotificationChannelSettings(String channelId) async {
+    if (!Platform.isAndroid) return;
+    await _channel.invokeMethod<void>('openNotificationChannelSettings', {
+      'channelId': channelId,
+    });
+  }
+
   static Future<void> openSystemFlashSettings() async {
     if (!Platform.isAndroid) return;
     await _channel.invokeMethod<void>('openSystemFlashSettings');
@@ -55,6 +69,8 @@ class AndroidRingAlerts {
     required String flashPattern,
     int startDelaySeconds = 0,
     bool allowFlashInBackground = false,
+    bool notificationAudioUsage = false,
+    bool repeatVibration = true,
     String? ringtoneUri,
   }) async {
     if (!Platform.isAndroid) return;
@@ -71,6 +87,8 @@ class AndroidRingAlerts {
       'flashPattern': flashPattern,
       'startDelaySeconds': startDelaySeconds,
       'allowFlashInBackground': allowFlashInBackground,
+      'notificationAudioUsage': notificationAudioUsage,
+      'repeatVibration': repeatVibration,
       'ringtoneUri': ?ringtoneUri,
     });
   }

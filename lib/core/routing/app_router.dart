@@ -18,8 +18,9 @@ import '../presentation/features/utility_shell/utility_shell.dart';
 import '../../features/chat/presentation/screens/new_chat_screen.dart';
 import '../../features/chat/presentation/screens/my_locations_route.dart';
 import '../../features/chat/presentation/screens/profile_screen.dart';
-import '../../features/chat/presentation/screens/thread_screen.dart';
 import '../../features/chat/presentation/screens/ring_alert_settings_screen.dart';
+import '../../features/chat/presentation/screens/thread_screen.dart';
+import '../../features/chat/application/services/background_location_notification_preview.dart';
 import '../../features/chat/domain/entities/chat_user.dart';
 import '../../features/vault/presentation/screens/files/files_screen.dart';
 import '../../features/vault/presentation/screens/gallery/gallery_home_screen.dart';
@@ -33,6 +34,7 @@ import '../../features/vault/presentation/screens/onboarding/welcome_screen.dart
 import '../../features/vault/presentation/screens/restore/restore_flow_screen.dart';
 import '../../features/vault/presentation/screens/settings/change_pin_screen.dart';
 import '../../features/vault/presentation/screens/settings/notification_settings_screen.dart';
+import '../../features/vault/presentation/screens/settings/notification_type_settings_screen.dart';
 import '../../features/vault/presentation/screens/settings/settings_screen.dart';
 import '../../features/vault/presentation/screens/trash/trash_screen.dart';
 import '../../features/chat/presentation/screens/notes_screen.dart';
@@ -534,34 +536,59 @@ GoRoute _settingsRoute(
     routes: [
       GoRoute(
         path: 'notifications',
-        builder: (context, state) => NotificationSettingsScreen(
-          settingsRepository: deps.settingsRepository,
-          onTestNotification: () =>
-              deps.chatDependencies.notificationService.showTestNotification(),
-          onNotificationSettingsChanged: () async {
-            final locationService = deps.chatDependencies.liveLocationService;
-            if (locationService?.isSharing == true) {
-              await locationService!.refreshNotification();
-            }
-          },
-        ),
-      ),
-      GoRoute(
-        path: 'ring-alerts',
-        builder: (context, state) {
-          final uid = deps.chatDependencies.authService.currentUid;
-          if (uid == null) {
-            return const Scaffold(
-              body: Center(
-                child: Text('Sign in to chat to configure ring requests.'),
-              ),
-            );
-          }
-          return RingAlertSettingsScreen(
-            repository: deps.chatDependencies.ringAlertPreferencesRepository,
-            uid: uid,
-          );
-        },
+        builder: (context, state) => const NotificationSettingsScreen(),
+        routes: [
+          GoRoute(
+            path: 'messages',
+            builder: (context, state) => NotificationTypeSettingsScreen(
+              type: NotificationConfigurationType.chatMessages,
+              settingsRepository: deps.settingsRepository,
+              onTestChatNotification:
+                  ({required title, required body, required preferences}) =>
+                      deps.chatDependencies.notificationService
+                          .showTestNotification(
+                            title: title,
+                            body: body,
+                            preferences: preferences,
+                          ),
+            ),
+          ),
+          GoRoute(
+            path: 'background-location',
+            builder: (context, state) => NotificationTypeSettingsScreen(
+              type: NotificationConfigurationType.backgroundLocation,
+              settingsRepository: deps.settingsRepository,
+              onTestBackgroundLocation:
+                  BackgroundLocationNotificationPreview.show,
+              onNotificationSettingsChanged: () async {
+                final locationService =
+                    deps.chatDependencies.liveLocationService;
+                if (locationService?.isSharing == true) {
+                  await locationService!.refreshNotification();
+                }
+              },
+            ),
+          ),
+          GoRoute(
+            path: 'ring-requests',
+            builder: (context, state) => RingAlertSettingsScreen(
+              repository: deps.chatDependencies.ringAlertPreferencesRepository,
+              uid: deps.chatDependencies.authService.currentUid,
+              onTestNotification: ({required title, required body}) async {
+                final alertId =
+                    'ring-test-${DateTime.now().millisecondsSinceEpoch}';
+                await deps.chatDependencies.notificationService
+                    .showRingRequestNotification(
+                      threadId: 'ring-alert-test',
+                      alertId: alertId,
+                      title: title,
+                      body: body,
+                      openThread: false,
+                    );
+              },
+            ),
+          ),
+        ],
       ),
       GoRoute(
         path: 'change-pin',

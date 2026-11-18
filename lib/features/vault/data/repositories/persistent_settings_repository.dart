@@ -1,4 +1,7 @@
+import 'dart:convert';
+
 import '../../domain/entities/user_mode.dart';
+import '../../domain/entities/incoming_chat_alert_preferences.dart';
 import '../../domain/repositories/settings_repository.dart';
 import 'storage_keys.dart';
 import 'storage_mode_codec.dart';
@@ -152,6 +155,25 @@ class PersistentSettingsRepository implements SettingsRepository {
     final value = text.trim();
     await _kv.write(StorageKeys.incomingChatAlertText, value);
   }
+
+  @override
+  Future<IncomingChatAlertPreferences> getIncomingChatAlertPreferences() async {
+    final raw = await _kv.read(StorageKeys.incomingChatAlertPreferences);
+    if (raw == null) return const IncomingChatAlertPreferences();
+    try {
+      return IncomingChatAlertPreferences.fromJson(jsonDecode(raw));
+    } on FormatException {
+      return const IncomingChatAlertPreferences();
+    }
+  }
+
+  @override
+  Future<void> setIncomingChatAlertPreferences(
+    IncomingChatAlertPreferences preferences,
+  ) => _kv.write(
+    StorageKeys.incomingChatAlertPreferences,
+    jsonEncode(preferences.toJson()),
+  );
 
   @override
   Future<String> getBackgroundLocationAlertTitle() async {

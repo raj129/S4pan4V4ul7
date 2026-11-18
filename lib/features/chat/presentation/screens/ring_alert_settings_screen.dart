@@ -5,6 +5,8 @@ import 'package:android_ring_alerts/android_ring_alerts.dart';
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 
+import 'package:photo_vault/core/widgets/base_screen_shell.dart';
+
 import '../../domain/entities/ring_alert_preferences.dart';
 import '../../domain/repositories/ring_alert_preferences_repository.dart';
 
@@ -12,11 +14,14 @@ class RingAlertSettingsScreen extends StatefulWidget {
   const RingAlertSettingsScreen({
     required this.repository,
     required this.uid,
+    this.onTestNotification,
     super.key,
   });
 
   final RingAlertPreferencesRepository repository;
   final String? uid;
+  final Future<void> Function({required String title, required String body})?
+  onTestNotification;
 
   @override
   State<RingAlertSettingsScreen> createState() =>
@@ -25,6 +30,10 @@ class RingAlertSettingsScreen extends StatefulWidget {
 
 class _RingAlertSettingsScreenState extends State<RingAlertSettingsScreen>
     with WidgetsBindingObserver {
+  final _scaffoldKey = GlobalKey<ScaffoldState>();
+  final _notificationTitleController = TextEditingController();
+  final _notificationBodyController = TextEditingController();
+
   @override
   void initState() {
     super.initState();
@@ -41,6 +50,7 @@ class _RingAlertSettingsScreenState extends State<RingAlertSettingsScreen>
   }
 
   RingAlertPreferences _preferences = const RingAlertPreferences();
+  RingAlertPreferences _savedPreferences = const RingAlertPreferences();
   bool _loading = true;
   bool _saving = false;
   bool _testing = false;
@@ -50,6 +60,55 @@ class _RingAlertSettingsScreenState extends State<RingAlertSettingsScreen>
   String? _error;
   String? _ringtoneTitle;
   String? _systemRingtoneTitle;
+
+  bool get _hasUnsavedChanges => _preferences != _savedPreferences;
+
+  void _stageContentDraft() {
+    _stagePreferences(
+      _preferences.copyWith(
+        notificationTitle: _notificationTitleController.text.trim(),
+        notificationBody: _notificationBodyController.text.trim(),
+      ),
+    );
+  }
+
+  void _stagePreferences(RingAlertPreferences next) {
+    setState(() {
+      if (next.ringtoneUri != _preferences.ringtoneUri) _ringtoneTitle = null;
+      _preferences = next;
+      _error = null;
+    });
+  }
+
+  List<Widget> _buildHeaderActions() => [
+    IconButton(
+      key: const Key('save-ring-alert-settings-button'),
+      tooltip: 'Save',
+      onPressed: widget.uid == null || _saving || !_hasUnsavedChanges
+          ? null
+          : () => unawaited(_saveDraft()),
+      icon: _saving
+          ? const SizedBox.square(
+              dimension: 18,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
+          : const Icon(Icons.save_outlined),
+    ),
+    IconButton(
+      key: const Key('revert-ring-alert-settings-button'),
+      tooltip: 'Revert to saved',
+      onPressed: _saving || !_hasUnsavedChanges ? null : _revertDraft,
+      icon: const Icon(Icons.undo_rounded),
+    ),
+    IconButton(
+      key: const Key('reset-ring-alert-settings-button'),
+      tooltip: 'Reset notification',
+      onPressed: widget.uid == null || _saving
+          ? null
+          : () => unawaited(_resetToDefaults()),
+      icon: const Icon(Icons.restart_alt_rounded),
+    ),
+  ];
 
   Future<void> _load() async {
     final uid = widget.uid;
@@ -73,6 +132,9 @@ class _RingAlertSettingsScreenState extends State<RingAlertSettingsScreen>
       if (!mounted) return;
       setState(() {
         _preferences = settings;
+        _savedPreferences = settings;
+        _notificationTitleController.text = settings.notificationTitle;
+        _notificationBodyController.text = settings.notificationBody;
         _ringtoneTitle = title;
         _systemRingtoneTitle = systemSettings['ringtoneTitle'] as String?;
         _systemFlashEnabled = systemSettings['cameraFlashEnabled'] == true;
@@ -110,40 +172,74 @@ class _RingAlertSettingsScreenState extends State<RingAlertSettingsScreen>
     }
   }
 
-  Future<void> _save(RingAlertPreferences next) async {
+  Future<void> _saveDraft() async {
     final uid = widget.uid;
-    if (uid == null || _saving) return;
-    final previous = _preferences;
+    if (uid == null || _saving || !_hasUnsavedChanges) return;
+    final previous = _savedPreferences;
+    final next = _preferences;
     setState(() {
-      _preferences = next;
       _saving = true;
       _error = null;
     });
-    var saved = false;
     try {
       await widget.repository.savePreferences(uid, next);
-      saved = true;
+      if (!mounted) return;
+      setState(() {
+        _savedPreferences = next;
+        _saving = false;
+      });
+      if (previous.enabled && !next.enabled) {
+        try {
+          await AndroidRingAlerts.stopAlert();
+        } catch (error) {
+          if (mounted) {
+            setState(
+              () => _error =
+                  'Setting saved, but the active alert did not stop: $error',
+            );
+          }
+        }
+      }
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Ring request settings saved.')),
+        );
+      }
     } catch (error) {
       if (mounted) {
-        setState(() {
-          _preferences = previous;
-          _error = 'Could not save ring-request settings: $error';
-        });
+        setState(() => _error = 'Could not save ring-request settings: $error');
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Could not save ring-request settings: $error'),
+          ),
+        );
       }
     } finally {
       if (mounted) setState(() => _saving = false);
     }
-    if (saved && previous.enabled && !next.enabled) {
-      try {
-        await AndroidRingAlerts.stopAlert();
-      } catch (error) {
-        if (mounted) {
-          setState(
-            () => _error =
-                'Setting saved, but the active alert did not stop: '
-                '$error',
-          );
-        }
+  }
+
+  void _revertDraft() {
+    setState(() {
+      _preferences = _savedPreferences;
+      _notificationTitleController.text = _savedPreferences.notificationTitle;
+      _notificationBodyController.text = _savedPreferences.notificationBody;
+      _error = null;
+    });
+    if (_preferences.source == RingAlertSource.custom) {
+      unawaited(_refreshRingtoneTitle());
+    }
+  }
+
+  Future<void> _refreshRingtoneTitle() async {
+    try {
+      final title = await AndroidRingAlerts.ringtoneTitle(
+        _preferences.ringtoneUri,
+      );
+      if (mounted) setState(() => _ringtoneTitle = title);
+    } catch (error) {
+      if (mounted) {
+        setState(() => _error = 'Could not load the selected ringtone: $error');
       }
     }
   }
@@ -156,8 +252,7 @@ class _RingAlertSettingsScreenState extends State<RingAlertSettingsScreen>
       );
       if (uri == null) return;
       final next = _preferences.copyWith(ringtoneUri: uri);
-      await _save(next);
-      if (_preferences.ringtoneUri != uri) return;
+      _stagePreferences(next);
       final title = await AndroidRingAlerts.ringtoneTitle(uri);
       if (mounted) setState(() => _ringtoneTitle = title);
     } catch (error) {
@@ -219,19 +314,23 @@ class _RingAlertSettingsScreenState extends State<RingAlertSettingsScreen>
         return;
       }
     }
-    await _save(_preferences.copyWith(flashlightEnabled: enabled));
+    _stagePreferences(_preferences.copyWith(flashlightEnabled: enabled));
   }
 
   Future<void> _testAlert() async {
-    if (_testing ||
-        (_preferences.source == RingAlertSource.custom &&
-            !_preferences.ringSoundEnabled &&
-            !_preferences.vibrationEnabled &&
-            !_preferences.flashlightEnabled)) {
-      return;
-    }
+    if (_testing) return;
     setState(() => _testing = true);
     try {
+      await widget.onTestNotification?.call(
+        title: _preferences.notificationTitle,
+        body: _preferences.notificationBody,
+      );
+      final hasSelectedOutput =
+          _preferences.source == RingAlertSource.system ||
+          _preferences.ringSoundEnabled ||
+          _preferences.vibrationEnabled ||
+          _preferences.flashlightEnabled;
+      if (!hasSelectedOutput) return;
       await AndroidRingAlerts.startAlert(
         alertId: 'ring-test-${DateTime.now().millisecondsSinceEpoch}',
         source: _preferences.source.name,
@@ -256,6 +355,40 @@ class _RingAlertSettingsScreenState extends State<RingAlertSettingsScreen>
     } finally {
       if (mounted) setState(() => _testing = false);
     }
+  }
+
+  Future<void> _resetToDefaults() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Reset ring request settings?'),
+        content: const Text(
+          'This stages the default settings. Save to apply them.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Reset'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted || _saving) return;
+    const defaults = RingAlertPreferences();
+    setState(() {
+      _preferences = defaults;
+      _notificationTitleController.text = defaults.notificationTitle;
+      _notificationBodyController.text = defaults.notificationBody;
+      _ringtoneTitle = null;
+      _error = null;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Defaults staged. Save to apply.')),
+    );
   }
 
   Future<void> _openSystemSoundSettings() async {
@@ -297,6 +430,8 @@ class _RingAlertSettingsScreenState extends State<RingAlertSettingsScreen>
 
   @override
   void dispose() {
+    _notificationTitleController.dispose();
+    _notificationBodyController.dispose();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -304,20 +439,25 @@ class _RingAlertSettingsScreenState extends State<RingAlertSettingsScreen>
   @override
   Widget build(BuildContext context) {
     final uid = widget.uid;
-    return Scaffold(
-      appBar: AppBar(title: const Text('Ring requests')),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : uid == null
-          ? Center(
-              child: Padding(
-                padding: const EdgeInsets.all(24),
-                child: Text(
-                  _error ?? 'Sign in to chat to configure this feature.',
-                ),
+    final body = _loading
+        ? const Center(child: CircularProgressIndicator())
+        : uid == null
+        ? Center(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Text(
+                _error ?? 'Sign in to chat to configure ring requests.',
               ),
-            )
-          : _buildSettings(context),
+            ),
+          )
+        : _buildSettings(context);
+    return BaseScreenShell(
+      title: 'Ring requests',
+      showDrawerMenu: false,
+      drawerSelectedIndex: 6,
+      scaffoldKey: _scaffoldKey,
+      actions: _buildHeaderActions(),
+      body: body,
     );
   }
 
@@ -352,7 +492,42 @@ class _RingAlertSettingsScreenState extends State<RingAlertSettingsScreen>
           onChanged: _saving
               ? null
               : (enabled) =>
-                    unawaited(_save(preference.copyWith(enabled: enabled))),
+                    _stagePreferences(preference.copyWith(enabled: enabled)),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 20, 16, 4),
+          child: Text(
+            'Notification content',
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+          child: TextField(
+            key: const Key('ring-alert-title-field'),
+            controller: _notificationTitleController,
+            maxLength: 80,
+            decoration: const InputDecoration(
+              labelText: 'Notification header',
+              helperText: 'Leave blank to hide the header.',
+            ),
+            onChanged: (_) => _stageContentDraft(),
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+          child: TextField(
+            key: const Key('ring-alert-body-field'),
+            controller: _notificationBodyController,
+            maxLength: 240,
+            minLines: 1,
+            maxLines: 3,
+            decoration: const InputDecoration(
+              labelText: 'Notification message',
+              helperText: 'Leave blank for no message.',
+            ),
+            onChanged: (_) => _stageContentDraft(),
+          ),
         ),
         const Divider(height: 1),
         Padding(
@@ -364,8 +539,9 @@ class _RingAlertSettingsScreenState extends State<RingAlertSettingsScreen>
         ),
         RadioGroup<RingAlertSource>(
           groupValue: preference.source,
-          onChanged: (source) =>
-              unawaited(_save(preference.copyWith(source: source))),
+          onChanged: (source) => source == null
+              ? null
+              : _stagePreferences(preference.copyWith(source: source)),
           child: Column(
             children: [
               RadioListTile<RingAlertSource>(
@@ -417,8 +593,8 @@ class _RingAlertSettingsScreenState extends State<RingAlertSettingsScreen>
             value: preference.ringSoundEnabled,
             onChanged: _saving
                 ? null
-                : (enabled) => unawaited(
-                    _save(preference.copyWith(ringSoundEnabled: enabled)),
+                : (enabled) => _stagePreferences(
+                    preference.copyWith(ringSoundEnabled: enabled),
                   ),
           ),
           if (preference.ringSoundEnabled)
@@ -439,8 +615,8 @@ class _RingAlertSettingsScreenState extends State<RingAlertSettingsScreen>
             value: preference.vibrationEnabled,
             onChanged: _saving
                 ? null
-                : (enabled) => unawaited(
-                    _save(preference.copyWith(vibrationEnabled: enabled)),
+                : (enabled) => _stagePreferences(
+                    preference.copyWith(vibrationEnabled: enabled),
                   ),
           ),
         ],
@@ -454,8 +630,8 @@ class _RingAlertSettingsScreenState extends State<RingAlertSettingsScreen>
                   ? null
                   : (pattern) {
                       if (pattern != null) {
-                        unawaited(
-                          _save(preference.copyWith(vibrationPattern: pattern)),
+                        _stagePreferences(
+                          preference.copyWith(vibrationPattern: pattern),
                         );
                       }
                     },
@@ -498,8 +674,8 @@ class _RingAlertSettingsScreenState extends State<RingAlertSettingsScreen>
                   ? null
                   : (pattern) {
                       if (pattern != null) {
-                        unawaited(
-                          _save(preference.copyWith(flashPattern: pattern)),
+                        _stagePreferences(
+                          preference.copyWith(flashPattern: pattern),
                         );
                       }
                     },
@@ -519,6 +695,13 @@ class _RingAlertSettingsScreenState extends State<RingAlertSettingsScreen>
               ],
             ),
           ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 20, 16, 4),
+          child: Text(
+            'Alert timing',
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+        ),
         ListTile(
           title: const Text('Alert timeout'),
           subtitle: const Text(
@@ -530,8 +713,8 @@ class _RingAlertSettingsScreenState extends State<RingAlertSettingsScreen>
                 ? null
                 : (seconds) {
                     if (seconds != null) {
-                      unawaited(
-                        _save(preference.copyWith(timeoutSeconds: seconds)),
+                      _stagePreferences(
+                        preference.copyWith(timeoutSeconds: seconds),
                       );
                     }
                   },
@@ -553,8 +736,8 @@ class _RingAlertSettingsScreenState extends State<RingAlertSettingsScreen>
                 ? null
                 : (seconds) {
                     if (seconds != null) {
-                      unawaited(
-                        _save(preference.copyWith(testDelaySeconds: seconds)),
+                      _stagePreferences(
+                        preference.copyWith(testDelaySeconds: seconds),
                       );
                     }
                   },
@@ -570,13 +753,8 @@ class _RingAlertSettingsScreenState extends State<RingAlertSettingsScreen>
         ),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-          child: OutlinedButton.icon(
-            onPressed:
-                _testing ||
-                    (preference.source == RingAlertSource.custom &&
-                        !preference.ringSoundEnabled &&
-                        !preference.vibrationEnabled &&
-                        !preference.flashlightEnabled)
+          child: FilledButton.icon(
+            onPressed: _testing || _saving
                 ? null
                 : () => unawaited(_testAlert()),
             icon: _testing

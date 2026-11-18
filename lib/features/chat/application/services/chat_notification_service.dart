@@ -6,6 +6,9 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import '../../domain/entities/chat_thread.dart';
 import '../../domain/repositories/thread_repository.dart';
 import 'package:photo_vault/features/vault/domain/repositories/settings_repository.dart';
+import 'package:photo_vault/features/vault/domain/entities/incoming_chat_alert_preferences.dart';
+
+import 'chat_alert_executor.dart';
 
 typedef ChatNotificationPresenter =
     Future<void> Function({
@@ -41,13 +44,19 @@ class ChatNotificationService {
   final DateTime Function() _clock;
   final _plugin = FlutterLocalNotificationsPlugin();
 
-  /// Must match `android.notification.channelId` in the Cloud Function and the
-  /// default channel declared in AndroidManifest.xml.
-  static const channelId = 'chat_messages';
+  /// New channel IDs avoid immutable settings from earlier releases.
+  static const channelId = 'chat_alerts_silent';
+  static const channelName = 'Chat notifications (app settings)';
+  static const systemChannelId = 'chat_alerts_system';
+  static const systemChannelName = 'Chat messages';
+
+  static String channelForSource(NotificationAlertSource source) =>
+      source == NotificationAlertSource.system ? systemChannelId : channelId;
 
   /// FCM posts tagged notifications with id 0; reusing it lets them replace.
   static const _notificationId = 0;
   static const _testNotificationId = 1;
+  static const _ringNotificationId = 2;
 
   /// Keep foreground burst behavior aligned with the Cloud Function throttle.
   static const _alertCooldown = Duration(seconds: 30);
@@ -83,9 +92,21 @@ class ChatNotificationService {
       await android?.createNotificationChannel(
         const AndroidNotificationChannel(
           channelId,
-          'Chat messages',
-          description: 'Notifies you about new chat messages.',
+          channelName,
+          description: 'Shows chat messages alongside the selected alert.',
           importance: Importance.high,
+          playSound: false,
+          enableVibration: false,
+        ),
+      );
+      await android?.createNotificationChannel(
+        const AndroidNotificationChannel(
+          systemChannelId,
+          systemChannelName,
+          description: 'Notifies you about incoming chat messages.',
+          importance: Importance.high,
+          playSound: true,
+          enableVibration: true,
         ),
       );
       await android?.requestNotificationsPermission();
@@ -153,6 +174,7 @@ class ChatNotificationService {
 
     final title = await _incomingChatAlertTitle();
     final body = await _incomingChatAlertText();
+    final preferences = await _incomingChatAlertPreferences();
 
     final presentNotification = _presentNotification;
     if (presentNotification != null) {
@@ -167,8 +189,53 @@ class ChatNotificationService {
       id: _notificationId,
       title: title,
       body: body,
-      notificationDetails: _notificationDetails(tag: thread.threadId),
+      notificationDetails: _notificationDetails(
+        tag: thread.threadId,
+        source: preferences.source,
+      ),
       payload: thread.threadId,
+    );
+    await _startAlert(
+      thread.threadId,
+      preferences: preferences,
+      allowFlashInBackground: false,
+    );
+  }
+
+  Future<void> _startAlert(
+    String alertId, {
+    required IncomingChatAlertPreferences preferences,
+    required bool allowFlashInBackground,
+  }) async {
+    try {
+      await startIncomingChatAlert(
+        alertId: alertId,
+        preferences: preferences,
+        allowFlashInBackground: allowFlashInBackground,
+      );
+    } catch (error) {
+      debugPrint('Could not start incoming chat alert: $error');
+    }
+  }
+
+  Future<void> showRingRequestNotification({
+    required String threadId,
+    required String alertId,
+    required String title,
+    required String body,
+    bool openThread = true,
+  }) async {
+    await init();
+    if (_presentNotification != null) {
+      await _presentNotification(threadId: threadId, title: title, body: body);
+      return;
+    }
+    await _plugin.show(
+      id: _ringNotificationId,
+      title: title,
+      body: body,
+      notificationDetails: _notificationDetails(tag: 'ring-$alertId'),
+      payload: openThread ? threadId : null,
     );
   }
 
@@ -178,25 +245,48 @@ class ChatNotificationService {
     await _notify(thread);
   }
 
-  Future<void> showTestNotification() async {
+  Future<void> showTestNotification({
+    String? title,
+    String? body,
+    IncomingChatAlertPreferences? preferences,
+  }) async {
     await init();
-    final title = await _incomingChatAlertTitle();
-    final body = await _incomingChatAlertText();
+    final notificationTitle = title ?? await _incomingChatAlertTitle();
+    final notificationBody = body ?? await _incomingChatAlertText();
+    final alertPreferences =
+        preferences ?? await _incomingChatAlertPreferences();
     final presentNotification = _presentNotification;
     if (presentNotification != null) {
       await presentNotification(
         threadId: 'test-notification',
-        title: title,
-        body: body,
+        title: notificationTitle,
+        body: notificationBody,
       );
       return;
     }
     await _plugin.show(
       id: _testNotificationId,
-      title: title,
-      body: body,
-      notificationDetails: _notificationDetails(),
+      title: notificationTitle,
+      body: notificationBody,
+      notificationDetails: _notificationDetails(
+        source: alertPreferences.source,
+      ),
     );
+    await _startAlert(
+      'chat-test-${DateTime.now().millisecondsSinceEpoch}',
+      preferences: alertPreferences,
+      allowFlashInBackground: true,
+    );
+  }
+
+  Future<IncomingChatAlertPreferences> _incomingChatAlertPreferences() async {
+    try {
+      return await _settingsRepository?.getIncomingChatAlertPreferences() ??
+          const IncomingChatAlertPreferences();
+    } catch (error) {
+      debugPrint('Could not read incoming chat alert preferences: $error');
+      return const IncomingChatAlertPreferences();
+    }
   }
 
   Future<String> _incomingChatAlertTitle() async {
@@ -225,17 +315,26 @@ class ChatNotificationService {
     }
   }
 
-  NotificationDetails _notificationDetails({String? tag}) =>
-      NotificationDetails(
-        android: AndroidNotificationDetails(
-          channelId,
-          'Chat messages',
-          channelDescription: 'Notifies you about new chat messages.',
-          importance: Importance.high,
-          priority: Priority.high,
-          tag: tag,
-        ),
-      );
+  NotificationDetails _notificationDetails({
+    String? tag,
+    NotificationAlertSource source = NotificationAlertSource.custom,
+  }) {
+    final usesSystemChannel = source == NotificationAlertSource.system;
+    return NotificationDetails(
+      android: AndroidNotificationDetails(
+        usesSystemChannel ? systemChannelId : channelId,
+        usesSystemChannel ? systemChannelName : channelName,
+        channelDescription: usesSystemChannel
+            ? 'Notifies you about incoming chat messages.'
+            : 'Shows chat messages alongside the selected alert.',
+        importance: Importance.high,
+        priority: Priority.high,
+        playSound: usesSystemChannel,
+        enableVibration: usesSystemChannel,
+        tag: tag,
+      ),
+    );
+  }
 
   Future<void> setActiveThread(String? threadId) async {
     _activeThreadId = threadId;
