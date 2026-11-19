@@ -1,79 +1,29 @@
-import 'dart:convert';
 import 'dart:io';
-import 'package:external_path/external_path.dart';
-import 'package:path/path.dart' as p;
-import '../../domain/repositories/vmk_backup_repository.dart';
 
-class LocalVmkBackupRepository implements VmkBackupRepository {
-  static const String _folderName = 'PhotoVault_Recovery';
+import 'package:photo_vault/features/backup/data/local_backup_blob_store.dart';
+import 'package:photo_vault/features/backup/domain/backup_blob_store.dart';
+import 'blob_vmk_backup_repository.dart';
+
+/// Persists wrapped VMK envelopes locally so they survive app-data clears.
+///
+/// Delegates to [LocalBackupBlobStore] so Android 11+ scoped storage uses the
+/// app-owned `Android/media/<pkg>/PhotoVault_Recovery` folder (with read-only
+/// fallback to legacy public `Documents`), desktop uses `ApplicationDocuments`,
+/// and writes are atomic via `.tmp` rename.
+class LocalVmkBackupRepository extends BlobVmkBackupRepository {
+  LocalVmkBackupRepository({
+    Future<Directory> Function()? baseDirectory,
+    Future<Directory?> Function()? legacyDirectory,
+    BackupByteStore? store,
+  }) : super(
+         store:
+             store ??
+             LocalBackupBlobStore(
+               baseDirectory: baseDirectory,
+               legacyDirectory: legacyDirectory,
+             ),
+         fileName: _fileName,
+       );
+
   static const String _fileName = 'vmk_recovery.json';
-
-  Future<String> _getBackupPath() async {
-    final documentsPath = await ExternalPath.getExternalStoragePublicDirectory(
-      ExternalPath.DIRECTORY_DOCUMENTS,
-    );
-    final directory = Directory(p.join(documentsPath, _folderName));
-    if (!await directory.exists()) {
-      await directory.create(recursive: true);
-    }
-    return p.join(directory.path, _fileName);
-  }
-
-  @override
-  Future<void> backupVmk({
-    required String vaultId,
-    required Map<String, String> payload,
-    bool interactive = false,
-  }) async {
-    final path = await _getBackupPath();
-    final file = File(path);
-
-    // We store it as a JSON map indexed by vaultId to support multiple vaults if needed
-    Map<String, dynamic> data = {};
-    if (await file.exists()) {
-      try {
-        data = jsonDecode(await file.readAsString()) as Map<String, dynamic>;
-      } catch (_) {
-        // Corrupted file, start fresh
-      }
-    }
-
-    data[vaultId] = payload;
-    await file.writeAsString(jsonEncode(data));
-  }
-
-  @override
-  Future<Map<String, String>?> restoreVmk(
-    String vaultId, {
-    bool interactive = false,
-  }) async {
-    final path = await _getBackupPath();
-    final file = File(path);
-    if (!await file.exists()) return null;
-
-    final data = jsonDecode(await file.readAsString()) as Map<String, dynamic>;
-    final payload = data[vaultId];
-    if (payload == null) return null;
-    return Map<String, String>.from(payload as Map);
-  }
-
-  @override
-  Future<bool> hasBackup(String vaultId, {bool interactive = false}) async {
-    final path = await _getBackupPath();
-    final file = File(path);
-    if (!await file.exists()) return false;
-
-    final data = jsonDecode(await file.readAsString()) as Map<String, dynamic>;
-    return data.containsKey(vaultId);
-  }
-
-  @override
-  Future<List<String>> listVaultIds({bool interactive = false}) async {
-    final path = await _getBackupPath();
-    final file = File(path);
-    if (!await file.exists()) return [];
-
-    final data = jsonDecode(await file.readAsString()) as Map<String, dynamic>;
-    return data.keys.toList();
-  }
 }

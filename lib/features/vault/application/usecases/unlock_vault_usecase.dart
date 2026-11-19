@@ -3,6 +3,7 @@ import 'dart:convert';
 import '../services/kdf_service.dart';
 import 'package:photo_vault/core/crypto/models/wrapped_key.dart';
 import 'package:photo_vault/core/crypto/services/crypto_service.dart';
+import 'package:photo_vault/features/backup/application/vault_backup_key_service.dart';
 import '../../domain/repositories/secure_storage_repository.dart';
 import '../../domain/repositories/unlock_attempt_store.dart';
 import '../../domain/repositories/vault_repository.dart';
@@ -128,6 +129,9 @@ class UnlockVaultUseCase {
       final aad = utf8.encode('$vaultId:vmk:v1');
       vmk = await _cryptoService.unwrapKey(wrapped, derivedKey, aad: aad);
       if (vmk.isEmpty) return false;
+      await VaultBackupKeyService(
+        _secureStorageRepository,
+      ).ensureStored(vaultId: vaultId, vmkBytes: vmk);
       _vaultSession.unlock(vaultId: vaultId, vmkBytes: vmk, pin: pin);
       return true;
     } catch (_) {

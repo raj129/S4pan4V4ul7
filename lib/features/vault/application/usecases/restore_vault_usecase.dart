@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:photo_vault/core/crypto/models/wrapped_key.dart';
 import 'package:photo_vault/core/crypto/services/crypto_service.dart';
 import 'package:photo_vault/core/session/vault_session.dart';
+import 'package:photo_vault/features/backup/application/vault_backup_key_service.dart';
 
 import '../../domain/entities/user_mode.dart';
 import '../../domain/entities/vault_settings.dart';
@@ -219,6 +220,9 @@ class RestoreVaultUseCase {
           saltBase64: base64Encode(newSalt),
           encVersion: localEnvelope.encryptionVersion,
         );
+        await VaultBackupKeyService(
+          _secureStorageRepository,
+        ).deriveAndStore(vaultId: vaultId, vmkBytes: vmk);
         await _vaultRepository.initializeVault(
           vaultId: vaultId,
           settings: VaultSettings.defaults(mode: UserMode.googleEnabled),

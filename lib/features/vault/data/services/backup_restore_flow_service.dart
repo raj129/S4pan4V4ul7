@@ -7,13 +7,26 @@ class BackupRestoreFlowService implements RestoreFlowService {
     required RestoreVaultUseCase restoreVaultUseCase,
     required VaultRepository vaultRepository,
     required Future<RestorePhotosSummary> Function() restorePhotos,
+    Future<void> Function({
+      required String vaultId,
+      required String originalPin,
+      required String newPin,
+    })?
+    onVaultRestored,
   }) : _restoreVaultUseCase = restoreVaultUseCase,
        _vaultRepository = vaultRepository,
-       _restorePhotos = restorePhotos;
+       _restorePhotos = restorePhotos,
+       _onVaultRestored = onVaultRestored;
 
   final RestoreVaultUseCase _restoreVaultUseCase;
   final VaultRepository _vaultRepository;
   final Future<RestorePhotosSummary> Function() _restorePhotos;
+  final Future<void> Function({
+    required String vaultId,
+    required String originalPin,
+    required String newPin,
+  })?
+  _onVaultRestored;
 
   @override
   Future<List<String>> listVaultIds() =>
@@ -27,11 +40,18 @@ class BackupRestoreFlowService implements RestoreFlowService {
     required String vaultId,
     required String originalPin,
     required String newPin,
-  }) => _restoreVaultUseCase.execute(
-    vaultId: vaultId,
-    originalPin: originalPin,
-    newPin: newPin,
-  );
+  }) async {
+    await _restoreVaultUseCase.execute(
+      vaultId: vaultId,
+      originalPin: originalPin,
+      newPin: newPin,
+    );
+    await _onVaultRestored?.call(
+      vaultId: vaultId,
+      originalPin: originalPin,
+      newPin: newPin,
+    );
+  }
 
   @override
   Future<RestorePhotosSummary> restorePhotos({

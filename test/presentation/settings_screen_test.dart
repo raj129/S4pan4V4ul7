@@ -745,4 +745,26 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Chat previous screen'), findsOneWidget);
   });
+
+  testWidgets('standalone Photo sync toggle is removed and auto-lock delay disables when auto-lock is off', (
+    tester,
+  ) async {
+    await pump(tester, _FakeBattery(exempt: true));
+
+    expect(find.text('Photo sync'), findsNothing);
+
+    final dropdownFinder = find.byKey(const Key('auto-lock-timeout-dropdown'));
+    expect(
+      tester.widget<DropdownButton<int>>(dropdownFinder).onChanged,
+      isNotNull,
+    );
+
+    await tester.tap(find.text('Auto-lock on background'));
+    await tester.pumpAndSettle();
+
+    expect(
+      tester.widget<DropdownButton<int>>(dropdownFinder).onChanged,
+      isNull,
+    );
+  });
 }

@@ -148,4 +148,28 @@ void main() {
       throwsArgumentError,
     );
   });
+
+  test('migrates legacy photoSyncEnabled into backupVaultPhotosEnabled once without disabling fresh vaults', () async {
+    final kv = _MemoryStringKv()
+      ..values[StorageKeys.photoSyncEnabled] = 'true';
+    final repository = PersistentSettingsRepository(kv);
+
+    await repository.migrateLegacyPhotoSyncSetting();
+
+    expect(kv.values[StorageKeys.backupVaultPhotosEnabled], 'true');
+    expect(kv.values[StorageKeys.legacyPhotoSyncMigrated], 'true');
+
+    // Explicit user changes afterwards are not overwritten by re-running migration.
+    await repository.setBackupVaultPhotosEnabled(false);
+    await repository.migrateLegacyPhotoSyncSetting();
+    expect(await repository.isBackupVaultPhotosEnabled(), isFalse);
+  });
+
+  test('persists vaultPhotoBackupCloudPending flag', () async {
+    final repository = PersistentSettingsRepository(_MemoryStringKv());
+
+    expect(await repository.isVaultPhotoBackupCloudPending(), isFalse);
+    await repository.setVaultPhotoBackupCloudPending(true);
+    expect(await repository.isVaultPhotoBackupCloudPending(), isTrue);
+  });
 }

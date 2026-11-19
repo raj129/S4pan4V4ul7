@@ -1,140 +1,20 @@
-import 'dart:convert';
-import 'package:googleapis/drive/v3.dart' as drive;
 import 'package:photo_vault/core/domain/repositories/auth_repository.dart';
-import '../../domain/repositories/vmk_backup_repository.dart';
+import 'package:photo_vault/features/backup/data/drive_backup_blob_store.dart';
+import 'package:photo_vault/features/backup/domain/backup_blob_store.dart';
+import 'blob_vmk_backup_repository.dart';
 
-class GoogleDriveVmkRepository implements VmkBackupRepository {
-  GoogleDriveVmkRepository({required AuthRepository authRepository})
-    : _authRepository = authRepository;
+/// Persists wrapped VMK envelopes in Google Drive `appDataFolder`.
+///
+/// Delegates to [DriveBackupBlobStore] so queries exclude trashed files, pick
+/// the newest copy, clean up duplicate entries, and validate JSON safely.
+class GoogleDriveVmkRepository extends BlobVmkBackupRepository {
+  GoogleDriveVmkRepository({
+    required AuthRepository authRepository,
+    BackupByteStore? store,
+  }) : super(
+         store: store ?? DriveBackupBlobStore(authRepository: authRepository),
+         fileName: _fileName,
+       );
 
-  final AuthRepository _authRepository;
   static const String _fileName = 'vmk_backup.json';
-
-  Future<drive.DriveApi> _getDriveApi({required bool interactive}) async {
-    final client = await _authRepository.getAuthenticatedClient(
-      interactive: interactive,
-    );
-    if (client == null) {
-      throw StateError('Google Drive is not authorized.');
-    }
-    return drive.DriveApi(client);
-  }
-
-  Future<drive.File?> _findBackupFile(drive.DriveApi api) async {
-    final response = await api.files.list(
-      spaces: 'appDataFolder',
-      q: "name = '$_fileName'",
-      $fields: 'files(id, name)',
-    );
-    final files = response.files;
-    if (files == null || files.isEmpty) return null;
-    return files.first;
-  }
-
-  @override
-  Future<void> backupVmk({
-    required String vaultId,
-    required Map<String, String> payload,
-    bool interactive = false,
-  }) async {
-    final api = await _getDriveApi(interactive: interactive);
-
-    final existingFile = await _findBackupFile(api);
-
-    Map<String, dynamic> data = {};
-    if (existingFile != null) {
-      final drive.Media download =
-          await api.files.get(
-                existingFile.id!,
-                downloadOptions: drive.DownloadOptions.fullMedia,
-              )
-              as drive.Media;
-
-      final content = await utf8.decodeStream(download.stream);
-      data = jsonDecode(content) as Map<String, dynamic>;
-    }
-
-    data[vaultId] = payload;
-    final bytes = utf8.encode(jsonEncode(data));
-    final media = drive.Media(Stream.value(bytes), bytes.length);
-
-    if (existingFile != null) {
-      await api.files.update(
-        drive.File(),
-        existingFile.id!,
-        uploadMedia: media,
-      );
-    } else {
-      final fileToCreate = drive.File()
-        ..name = _fileName
-        ..parents = ['appDataFolder'];
-      await api.files.create(fileToCreate, uploadMedia: media);
-    }
-  }
-
-  @override
-  Future<Map<String, String>?> restoreVmk(
-    String vaultId, {
-    bool interactive = false,
-  }) async {
-    final api = await _getDriveApi(interactive: interactive);
-
-    final existingFile = await _findBackupFile(api);
-    if (existingFile == null) return null;
-
-    final drive.Media download =
-        await api.files.get(
-              existingFile.id!,
-              downloadOptions: drive.DownloadOptions.fullMedia,
-            )
-            as drive.Media;
-
-    final content = await utf8.decodeStream(download.stream);
-    final data = jsonDecode(content) as Map<String, dynamic>;
-    final payload = data[vaultId];
-    if (payload != null) {
-      return Map<String, String>.from(payload as Map);
-    }
-    return null;
-  }
-
-  @override
-  Future<bool> hasBackup(String vaultId, {bool interactive = false}) async {
-    final api = await _getDriveApi(interactive: interactive);
-
-    final existingFile = await _findBackupFile(api);
-    if (existingFile == null) return false;
-
-    // To be sure the vaultId is inside, we might need to download or trust filename if it was per vaultId
-    // But since we aggregate, we have to download.
-    final drive.Media download =
-        await api.files.get(
-              existingFile.id!,
-              downloadOptions: drive.DownloadOptions.fullMedia,
-            )
-            as drive.Media;
-
-    final content = await utf8.decodeStream(download.stream);
-    final data = jsonDecode(content) as Map<String, dynamic>;
-    return data.containsKey(vaultId);
-  }
-
-  @override
-  Future<List<String>> listVaultIds({bool interactive = false}) async {
-    final api = await _getDriveApi(interactive: interactive);
-
-    final existingFile = await _findBackupFile(api);
-    if (existingFile == null) return [];
-
-    final drive.Media download =
-        await api.files.get(
-              existingFile.id!,
-              downloadOptions: drive.DownloadOptions.fullMedia,
-            )
-            as drive.Media;
-
-    final content = await utf8.decodeStream(download.stream);
-    final data = jsonDecode(content) as Map<String, dynamic>;
-    return data.keys.toList();
-  }
 }

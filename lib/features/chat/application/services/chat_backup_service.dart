@@ -196,6 +196,10 @@ class ChatBackupService {
     return ms == null ? null : DateTime.fromMillisecondsSinceEpoch(ms);
   }
 
+  /// Whether a cloud upload is queued for retry once connectivity allows.
+  Future<bool> isCloudPending() async =>
+      await _cache.readSetting(_cloudPendingKey) != null;
+
   /// Whether the network allows a backup now (respects Wi-Fi only).
   Future<bool> networkAllowed() async {
     final results = await _checkConnectivity();

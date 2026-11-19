@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:typed_data';
 
 /// A place named blobs can be kept (device folder, Google Drive).
 ///
@@ -31,4 +32,19 @@ abstract class BackupBlobStore {
 
   /// Removes the blob named [name]; a missing blob is not an error.
   Future<void> delete(String name, {bool interactive = false});
+}
+
+/// Extension of [BackupBlobStore] for small in-memory payloads (chat snapshots,
+/// wrapped VMK JSON) so all backup artifacts share identical local recovery
+/// folders, atomic writes, and Google Drive appDataFolder handling.
+abstract class BackupByteStore extends BackupBlobStore {
+  /// Writes [bytes] atomically under [name], replacing any existing blob.
+  Future<void> writeBytes(
+    String name,
+    Uint8List bytes, {
+    bool interactive = false,
+  });
+
+  /// Reads the blob [name] into memory, or returns null if it does not exist.
+  Future<Uint8List?> readBytes(String name, {bool interactive = false});
 }

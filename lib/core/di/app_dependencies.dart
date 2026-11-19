@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../../features/vault/application/services/import_manager.dart';
@@ -36,10 +37,14 @@ import '../../features/vault/domain/repositories/secure_storage_repository.dart'
 import '../../features/vault/domain/repositories/settings_repository.dart';
 import '../../features/vault/domain/repositories/vault_repository.dart';
 import '../../features/vault/domain/repositories/vmk_backup_repository.dart';
+import '../../features/chat/application/services/chat_identity_service.dart';
 import '../../features/chat/di/chat_dependencies.dart';
 import '../../features/backup/application/backup_coordinator.dart';
+import '../../features/backup/application/backup_manager.dart';
 import '../../features/backup/application/backup_network.dart';
+import '../../features/backup/application/backup_scheduler.dart';
 import '../../features/backup/application/photo_hash_cache.dart';
+import '../../features/backup/application/vault_backup_key_service.dart';
 import '../../features/backup/application/vault_photo_backup_service.dart';
 import '../../features/backup/data/drive_backup_blob_store.dart';
 import '../../features/backup/data/local_backup_blob_store.dart';
@@ -192,8 +197,15 @@ class AppDependencies {
   /// Process-wide location provider (real GPS or mock).
   AppLocation get location => AppLocation.instance;
 
-  /// Vault photo backup to this device and Google Drive (shares the chat
-  /// backup account key and network gating).
+  bool get _canTouchChat =>
+      chatOverride != null || _chatInitialised || Firebase.apps.isNotEmpty;
+
+  /// Vault-bound manifest encryption keys (one-way HKDF-SHA256 from VMK).
+  late final VaultBackupKeyService vaultBackupKeys = VaultBackupKeyService(
+    secureStorageRepository,
+  );
+
+  /// Vault photo backup to this device and Google Drive.
   late final VaultPhotoBackupService vaultPhotoBackup = VaultPhotoBackupService(
     stores: [
       LocalBackupBlobStore(),
@@ -205,9 +217,11 @@ class AppDependencies {
         repository.listAttachments(),
       _ => throw StateError('Vault photos are unavailable in this mode.'),
     },
-    crypto: chat.cryptoService,
+    vaultBackupKeys: vaultBackupKeys,
+    legacyCrypto: () => _canTouchChat ? chatDependencies.cryptoService : null,
     settings: settingsRepository,
-    currentUid: () => chat.authService.currentUid,
+    currentUid: () =>
+        _canTouchChat ? chatDependencies.authService.currentUid : null,
     networkAllowed: () => backupNetworkAllowed(settingsRepository),
     currentVaultId: () async =>
         vaultSession.vaultId ?? await vaultRepository.getActiveVaultId(),
@@ -215,12 +229,52 @@ class AppDependencies {
     coordinator: BackupCoordinator.shared,
   );
 
+  /// App-scoped backup & restore state + background catch-up coordinator.
+  late final BackupManager backupManager = BackupManager(
+    settingsRepository: settingsRepository,
+    chatBackup: () =>
+        _canTouchChat ? chatDependencies.backupService : null,
+    vaultPhotoBackup: () => vaultPhotoBackup,
+    authRepository: authRepository,
+    scheduleCatchUp: schedulePendingBackupCatchUp,
+  );
+
   /// Google vault recovery uses the same ID/key and optionally restores photos.
   late final RestoreFlowService restoreFlowService = BackupRestoreFlowService(
     restoreVaultUseCase: restoreVaultUseCase,
     vaultRepository: vaultRepository,
+    onVaultRestored: ({
+      required vaultId,
+      required originalPin,
+      required newPin,
+    }) async {
+      await settingsRepository.setBackupCloudEnabled(true);
+      await settingsRepository.setDriveEncryptedBackupEnabled(true);
+      if (!_canTouchChat) return;
+      try {
+        final uid = chatDependencies.authService.currentUid;
+        if (uid == null) return;
+        final synced = await chatDependencies.identityService.sync(
+          uid: uid,
+          pin: originalPin,
+        );
+        if (newPin != originalPin &&
+            (synced == IdentitySyncResult.restored ||
+                synced == IdentitySyncResult.upToDate)) {
+          await chatDependencies.identityService.rewrapForNewPin(
+            uid: uid,
+            newPin: newPin,
+          );
+        }
+      } catch (_) {
+        // Vault VMK recovery still succeeds even if chat key sync is offline.
+      }
+    },
     restorePhotos: () async {
-      final result = await vaultPhotoBackup.restore(interactive: true);
+      final result = await vaultPhotoBackup.restore(
+        interactive: true,
+        includeCloud: true,
+      );
       return RestorePhotosSummary(
         foundBackup: result.foundBackup,
         restored: result.restored,
@@ -293,6 +347,7 @@ class AppDependencies {
   /// Releases resources held by dependencies that need explicit teardown.
   Future<void> dispose() async {
     vaultSession.lock();
+    backupManager.dispose();
     if (_chatInitialised) chat.dispose();
     await _initialization;
     if (photoRepository case final PersistentPhotoRepositoryImpl repository) {

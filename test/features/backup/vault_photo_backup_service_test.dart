@@ -5,8 +5,10 @@ import 'dart:typed_data';
 import 'package:crypto/crypto.dart' as hash;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:photo_vault/core/testing/repositories/in_memory_photo_repository.dart';
+import 'package:photo_vault/core/testing/repositories/in_memory_secure_storage_repository.dart';
 import 'package:photo_vault/core/testing/repositories/in_memory_settings_repository.dart';
 import 'package:photo_vault/features/backup/application/photo_hash_cache.dart';
+import 'package:photo_vault/features/backup/application/vault_backup_key_service.dart';
 import 'package:photo_vault/features/backup/application/vault_photo_backup_service.dart';
 import 'package:photo_vault/features/backup/domain/backup_blob_store.dart';
 import 'package:photo_vault/features/chat/application/crypto/chat_crypto_service.dart';
@@ -44,6 +46,7 @@ class _MemoryBlobStore implements BackupBlobStore {
   final Map<String, Uint8List> blobs = {};
   int writes = 0;
   Object? readFailure;
+  Object? Function(String name)? writeFailureFor;
 
   @override
   Future<void> writeFile(
@@ -51,6 +54,8 @@ class _MemoryBlobStore implements BackupBlobStore {
     File source, {
     bool interactive = false,
   }) async {
+    final err = writeFailureFor?.call(name);
+    if (err != null) throw err;
     writes++;
     blobs[name] = await source.readAsBytes();
   }
@@ -616,5 +621,103 @@ void main() {
     // The poisoned cache entries were trusted, so restore must reject them.
     final restored = await buildService(stores: [device]).restore();
     expect(restored.unavailable, 2);
+  });
+
+  test('Local-only mode backs up and restores via VaultBackupKeyService without uid or chat crypto', () async {
+    final secureStorage = InMemorySecureStorageRepository();
+    final keyService = VaultBackupKeyService(secureStorage);
+    await keyService.deriveAndStore(
+      vaultId: 'local-vault',
+      vmkBytes: Uint8List.fromList(List<int>.generate(32, (i) => i + 1)),
+    );
+    await settings.setBackupCloudEnabled(false);
+
+    final localBackup = VaultPhotoBackupService(
+      stores: [device],
+      photoRepository: photos,
+      listPhotos: () async => vault,
+      crypto: null,
+      vaultBackupKeys: keyService,
+      settings: settings,
+      currentUid: () => null,
+      networkAllowed: () async => false,
+      currentVaultId: () async => 'local-vault',
+      restoreRoot: () async => restoreRoot,
+      tempRoot: () async => tmp,
+    );
+
+    final backupResult = await localBackup.backup();
+    expect(backupResult.photoCount, 2);
+    expect(backupResult.savedTo, ['This device']);
+    expect(
+      device.blobs.keys.any((k) => k.startsWith('vp_vk_') && k.endsWith('manifest.bin')),
+      isTrue,
+    );
+
+    final fresh = InMemoryPhotoRepository();
+    final localRestore = VaultPhotoBackupService(
+      stores: [device],
+      photoRepository: fresh,
+      listPhotos: () async => const [],
+      crypto: null,
+      vaultBackupKeys: keyService,
+      settings: settings,
+      currentUid: () => null,
+      networkAllowed: () async => false,
+      currentVaultId: () async => 'local-vault',
+      restoreRoot: () async => restoreRoot,
+      tempRoot: () async => tmp,
+    );
+
+    final restored = await localRestore.restore();
+    expect(restored.restored, 2);
+    expect(await fresh.getPhotoById('p1'), isNotNull);
+  });
+
+  test('partial cloud upload failure skips cloud manifest, marks cloud pending, and retries on backupIfDue', () async {
+    cloud.writeFailureFor = (name) =>
+        name.contains('photo_p2') ? const SocketException('lost wifi') : null;
+
+    final first = await service.backup();
+    expect(first.savedTo, ['This device']);
+    expect(first.skipped.containsKey('Google Drive'), isTrue);
+    // Cloud must NOT receive a manifest referencing a missing photo_p2!
+    expect(cloud.blobs.keys.any((k) => k.endsWith('manifest.bin')), isFalse);
+    expect(await settings.isVaultPhotoBackupCloudPending(), isTrue);
+
+    // Even though lastBackupAt was just recorded, backupIfDue retries immediately
+    // once network recovers because vaultPhotoBackupCloudPending is true!
+    cloud.writeFailureFor = null;
+    final retry = await service.backupIfDue(minAge: const Duration(hours: 20));
+    expect(retry, isNotNull);
+    expect(retry!.savedTo, containsAll(['This device', 'Google Drive']));
+    expect(cloud.blobs.keys.any((k) => k.endsWith('manifest.bin')), isTrue);
+    expect(await settings.isVaultPhotoBackupCloudPending(), isFalse);
+  });
+
+  test('includeCloud restores from Google Drive even before cloud toggle is enabled', () async {
+    await service.backup();
+    await settings.setBackupCloudEnabled(false);
+    device.blobs.clear();
+
+    final fresh = InMemoryPhotoRepository();
+    final freshService = VaultPhotoBackupService(
+      stores: [device, cloud],
+      photoRepository: fresh,
+      listPhotos: () async => const [],
+      crypto: _FakeCrypto(),
+      settings: settings,
+      currentUid: () => 'uid-1',
+      networkAllowed: () async => true,
+      currentVaultId: () async => 'vault-1',
+      restoreRoot: () async => restoreRoot,
+      tempRoot: () async => tmp,
+    );
+
+    final restored = await freshService.restore(
+      interactive: true,
+      includeCloud: true,
+    );
+    expect(restored.restored, 2);
   });
 }

@@ -1,9 +1,15 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
+import 'package:http/http.dart' as http;
 
+import 'package:photo_vault/core/domain/repositories/auth_repository.dart';
+import 'package:photo_vault/core/platform/battery_optimization.dart';
 import 'package:photo_vault/core/testing/repositories/in_memory_photo_repository.dart';
 import 'package:photo_vault/core/testing/repositories/in_memory_settings_repository.dart';
+import 'package:photo_vault/features/backup/application/backup_manager.dart';
 import 'package:photo_vault/features/backup/application/vault_photo_backup_service.dart';
 import 'package:photo_vault/features/backup/presentation/backup_screen.dart';
 import 'package:photo_vault/features/chat/application/crypto/chat_crypto_service.dart';
@@ -104,7 +110,10 @@ class _StubPhotoBackupService extends VaultPhotoBackupService {
   }
 
   @override
-  Future<VaultPhotoRestoreResult> restore({bool interactive = false}) async {
+  Future<VaultPhotoRestoreResult> restore({
+    bool interactive = false,
+    bool includeCloud = false,
+  }) async {
     return restoreResult ??
         const VaultPhotoRestoreResult(
           restored: 0,
@@ -112,6 +121,66 @@ class _StubPhotoBackupService extends VaultPhotoBackupService {
           unavailable: 0,
         );
   }
+}
+
+class _FakeAuth implements AuthRepository {
+  _FakeAuth({this.signedIn = true, this.warmUpFailure});
+
+  bool signedIn;
+  Object? warmUpFailure;
+  int warmUpCalls = 0;
+
+  @override
+  Future<bool> isSignedIn() async => signedIn;
+
+  @override
+  Future<AuthResult> signInWithGoogle() async {
+    signedIn = true;
+    return const AuthResult(userId: 'u1', email: 'u1@example.com');
+  }
+
+  @override
+  Future<void> warmUpDriveAuthorization({bool interactive = false}) async {
+    warmUpCalls++;
+    final err = warmUpFailure;
+    if (err != null) throw err;
+  }
+
+  @override
+  Future<http.Client?> getAuthenticatedClient({bool interactive = false}) async =>
+      null;
+
+  @override
+  Future<void> signOut() async {
+    signedIn = false;
+  }
+}
+
+class _FakeBattery implements BatteryOptimization {
+  _FakeBattery({required this.exempt});
+
+  bool exempt;
+
+  @override
+  Future<bool> isExempt() async => exempt;
+
+  @override
+  Future<bool> requestExemption() async {
+    exempt = true;
+    return true;
+  }
+}
+
+class _DelayedPhotoBackupService extends _StubPhotoBackupService {
+  _DelayedPhotoBackupService(this.completer);
+
+  final Completer<VaultPhotoBackupResult> completer;
+
+  @override
+  Future<VaultPhotoBackupResult> backup({
+    bool interactive = false,
+    DateTime? deadline,
+  }) => completer.future;
 }
 
 void main() {
@@ -122,6 +191,9 @@ void main() {
     Future<List<VaultPhoto>> Function()? listPhotos,
     ChatBackupService? Function()? chatBackup,
     VaultPhotoBackupService? vaultPhotoBackup,
+    AuthRepository? authRepository,
+    BackupManager? backupManager,
+    BatteryOptimization? batteryOptimization,
   }) async {
     tester.view.physicalSize = const Size(1080, 4000);
     tester.view.devicePixelRatio = 2.75;
@@ -159,6 +231,10 @@ void main() {
                 vaultPhotoBackup: () => vaultPhotoBackup ?? photoBackup,
                 unlockVaultUseCase: _FakeUnlock(),
                 pinValidator: PinValidator(),
+                authRepository: authRepository,
+                backupManager: backupManager,
+                batteryOptimization:
+                    batteryOptimization ?? _FakeBattery(exempt: true),
               ),
             ),
           ],
@@ -427,5 +503,118 @@ void main() {
     await tester.tap(find.text('Cancel'));
     await tester.pumpAndSettle();
     expect(find.text('Delete backup?'), findsNothing);
+  });
+
+  testWidgets('enabling Google Drive warms up Drive OAuth and reverts on failure', (
+    tester,
+  ) async {
+    final auth = _FakeAuth(
+      signedIn: true,
+      warmUpFailure: const AuthException('Google Drive access was cancelled.'),
+    );
+    await pump(tester, authRepository: auth);
+
+    await tester.tap(switchTile('Google Drive'));
+    await tester.pumpAndSettle();
+
+    expect(auth.warmUpCalls, 1);
+    expect(await settings.isBackupCloudEnabled(), isFalse);
+    expect(
+      find.textContaining('Google Drive access was cancelled.'),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('backup continues in background via BackupManager across route pop and re-entry', (
+    tester,
+  ) async {
+    final completer = Completer<VaultPhotoBackupResult>();
+    final delayedPhotos = _DelayedPhotoBackupService(completer);
+    final sharedSettings = InMemorySettingsRepository();
+    await sharedSettings.setBackupChatsEnabled(false);
+    final manager = BackupManager(
+      settingsRepository: sharedSettings,
+      chatBackup: () => null,
+      vaultPhotoBackup: () => delayedPhotos,
+    );
+    addTearDown(manager.dispose);
+
+    tester.view.physicalSize = const Size(1080, 4000);
+    tester.view.devicePixelRatio = 2.75;
+    addTearDown(tester.view.reset);
+    final router = GoRouter(
+      initialLocation: '/',
+      routes: [
+        GoRoute(
+          path: '/',
+          builder: (context, state) => Scaffold(
+            body: Center(
+              child: TextButton(
+                onPressed: () => context.push('/settings/backup'),
+                child: const Text('Open backup'),
+              ),
+            ),
+          ),
+          routes: [
+            GoRoute(
+              path: 'settings/backup',
+              builder: (context, state) => BackupScreen(
+                settingsRepository: sharedSettings,
+                chatBackup: () => null,
+                vaultPhotoBackup: () => delayedPhotos,
+                unlockVaultUseCase: _FakeUnlock(),
+                pinValidator: PinValidator(),
+                backupManager: manager,
+                batteryOptimization: _FakeBattery(exempt: true),
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+    addTearDown(router.dispose);
+
+    await tester.pumpWidget(MaterialApp.router(routerConfig: router));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Open backup'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Back up now'));
+    await tester.pump();
+    expect(manager.isBusy, isTrue);
+
+    // Pop BackupScreen while backup is still running in the background.
+    tester.state<NavigatorState>(find.byType(Navigator)).pop();
+    await tester.pumpAndSettle();
+    expect(manager.isBusy, isTrue);
+
+    completer.complete(
+      const VaultPhotoBackupResult(
+        photoCount: 4,
+        missingCount: 0,
+        savedTo: ['This device'],
+        skipped: {},
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(manager.isBusy, isFalse);
+
+    // Reopen BackupScreen: the completed result is shown cleanly.
+    await tester.tap(find.text('Open backup'));
+    await tester.pumpAndSettle();
+    expect(
+      find.textContaining('Backed up 4 vault photos to This device.'),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('shows battery restriction warning banner when not exempt', (
+    tester,
+  ) async {
+    await pump(tester, batteryOptimization: _FakeBattery(exempt: false));
+    expect(
+      find.byKey(const Key('backup-battery-warning-banner')),
+      findsOneWidget,
+    );
   });
 }

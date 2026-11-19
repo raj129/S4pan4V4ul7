@@ -92,11 +92,11 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
         );
       }),
     );
+    _deps.backupManager.onSettingsChanged = _hydrateSessionSettings;
     unawaited(_hydrateSessionSettings());
-    // Desktop has no nightly job; back up vault photos when due on open.
-    unawaited(
-      _deps.vaultPhotoBackup.backupIfDue().catchError((Object _) => null),
-    );
+    // Run overdue or pending backups silently on open (covers desktop and
+    // network catch-up without OS notifications).
+    unawaited(_deps.backupManager.backupIfDue());
   }
 
   void _updateChatVisibility() {
@@ -107,15 +107,16 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
   }
 
   Future<void> _hydrateSessionSettings() async {
+    await _deps.settingsRepository.migrateLegacyPhotoSyncSetting();
     final mode = await _deps.settingsRepository.getUserMode();
     final calculatorOnboardingCompleted = await _deps.settingsRepository
         .isCalculatorOnboardingCompleted();
     final photoSyncEnabled = await _deps.settingsRepository
-        .isPhotoSyncEnabled();
+        .isBackupVaultPhotosEnabled();
     final externalMirrorEnabled = await _deps.settingsRepository
         .isExternalStorageMirrorEnabled();
     final driveEncryptedBackupEnabled = await _deps.settingsRepository
-        .isDriveEncryptedBackupEnabled();
+        .isBackupCloudEnabled();
     final autoLockOnBackground = await _deps.settingsRepository
         .isAutoLockOnBackgroundEnabled();
     final autoLockTimeoutSeconds = await _deps.settingsRepository
@@ -196,6 +197,15 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden) {
+      unawaited(
+        _deps.backupManager.scheduleCatchUpIfNeeded(forceIfBusy: true),
+      );
+    } else if (state == AppLifecycleState.resumed) {
+      unawaited(_deps.backupManager.backupIfDue());
+    }
+
     if (!_session.isUnlocked || !_autoLockOnBackground) return;
     if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.hidden ||

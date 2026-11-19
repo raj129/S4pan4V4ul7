@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:googleapis/drive/v3.dart' as drive;
 
@@ -7,7 +8,7 @@ import '../domain/backup_blob_store.dart';
 
 /// Keeps blobs in the user's Google Drive app-data folder, private to this
 /// app and kept across uninstall or cleared data.
-class DriveBackupBlobStore implements BackupBlobStore {
+class DriveBackupBlobStore implements BackupByteStore {
   DriveBackupBlobStore({required AuthRepository authRepository})
     : _authRepository = authRepository;
 
@@ -105,6 +106,52 @@ class DriveBackupBlobStore implements BackupBlobStore {
       await sink.close();
     }
     return true;
+  }
+
+  @override
+  Future<void> writeBytes(
+    String name,
+    Uint8List bytes, {
+    bool interactive = false,
+  }) async {
+    final api = await _api(interactive);
+    final matches = await _findAll(api, name);
+    final media = drive.Media(Stream.value(bytes), bytes.length);
+    if (matches.isNotEmpty) {
+      await api.files.update(
+        drive.File(),
+        matches.first.id!,
+        uploadMedia: media,
+      );
+      for (final extra in matches.skip(1)) {
+        await api.files.delete(extra.id!);
+      }
+    } else {
+      await api.files.create(
+        drive.File()
+          ..name = name
+          ..parents = ['appDataFolder'],
+        uploadMedia: media,
+      );
+    }
+  }
+
+  @override
+  Future<Uint8List?> readBytes(String name, {bool interactive = false}) async {
+    final api = await _api(interactive);
+    final matches = await _findAll(api, name);
+    if (matches.isEmpty) return null;
+    final media =
+        await api.files.get(
+              matches.first.id!,
+              downloadOptions: drive.DownloadOptions.fullMedia,
+            )
+            as drive.Media;
+    final builder = BytesBuilder(copy: false);
+    await for (final chunk in media.stream) {
+      builder.add(chunk);
+    }
+    return builder.takeBytes();
   }
 
   @override

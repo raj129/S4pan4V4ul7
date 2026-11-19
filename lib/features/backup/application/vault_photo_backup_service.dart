@@ -9,6 +9,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:photo_vault/features/backup/application/backup_coordinator.dart';
 import 'package:photo_vault/features/backup/application/backup_progress.dart';
 import 'package:photo_vault/features/backup/application/photo_hash_cache.dart';
+import 'package:photo_vault/features/backup/application/vault_backup_key_service.dart';
 import 'package:photo_vault/features/backup/domain/backup_blob_store.dart';
 import 'package:photo_vault/features/chat/application/crypto/chat_crypto_service.dart';
 import 'package:photo_vault/features/vault/application/services/vault_storage_root.dart';
@@ -95,7 +96,9 @@ class VaultPhotoBackupService {
     required List<BackupBlobStore> stores,
     required PhotoRepository photoRepository,
     required Future<List<VaultPhoto>> Function() listPhotos,
-    required ChatCryptoService crypto,
+    ChatCryptoService? crypto,
+    ChatCryptoService? Function()? legacyCrypto,
+    VaultBackupKeyService? vaultBackupKeys,
     required SettingsRepository settings,
     required String? Function() currentUid,
     required Future<bool> Function() networkAllowed,
@@ -108,6 +111,8 @@ class VaultPhotoBackupService {
        _photoRepository = photoRepository,
        _listPhotos = listPhotos,
        _crypto = crypto,
+       _legacyCrypto = legacyCrypto,
+       _vaultBackupKeys = vaultBackupKeys,
        _settings = settings,
        _currentUid = currentUid,
        _networkAllowed = networkAllowed,
@@ -120,7 +125,9 @@ class VaultPhotoBackupService {
   final List<BackupBlobStore> _stores;
   final PhotoRepository _photoRepository;
   final Future<List<VaultPhoto>> Function() _listPhotos;
-  final ChatCryptoService _crypto;
+  final ChatCryptoService? _crypto;
+  final ChatCryptoService? Function()? _legacyCrypto;
+  final VaultBackupKeyService? _vaultBackupKeys;
   final SettingsRepository _settings;
   final String? Function() _currentUid;
   final Future<bool> Function() _networkAllowed;
@@ -151,15 +158,19 @@ class VaultPhotoBackupService {
     return resolveVaultRoot(useExternalMirror: mirror, vaultId: vaultId);
   }
 
-  /// Stable, non-reversible prefix for one account and vault.
-  String? _prefix(String vaultId) {
+  static String _vaultHash(String vaultId) =>
+      hash.sha256.convert(utf8.encode(vaultId)).toString().substring(0, 20);
+
+  /// Vault-scoped prefix independent of Chat/Google sign-in, used whenever
+  /// [VaultBackupKeyService] holds the derived manifest key for [vaultId].
+  static String _vaultKeyPrefix(String vaultId) =>
+      'vp_vk_${_vaultHash(vaultId)}_';
+
+  /// Account + vault prefix used when encrypting manifests with [ChatCryptoService].
+  String? _accountScopedPrefix(String vaultId) {
     final accountPrefix = _legacyPrefix();
     if (accountPrefix == null) return null;
-    final vaultHash = hash.sha256
-        .convert(utf8.encode(vaultId))
-        .toString()
-        .substring(0, 20);
-    return '$accountPrefix${vaultHash}_';
+    return '$accountPrefix${_vaultHash(vaultId)}_';
   }
 
   /// Prefix used by backups written before photo backups were vault-scoped.
@@ -171,6 +182,55 @@ class VaultPhotoBackupService {
         .toString()
         .substring(0, 20);
     return 'vp_${id}_';
+  }
+
+  ChatCryptoService? _resolveLegacyCrypto() {
+    if (_crypto != null) return _crypto;
+    try {
+      return _legacyCrypto?.call();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<(String prefix, bool useVaultKey)?> _tryResolveWriteTarget(
+    String vaultId,
+  ) async {
+    final vaultKeys = _vaultBackupKeys;
+    if (vaultKeys != null && await vaultKeys.hasKey(vaultId)) {
+      return (_vaultKeyPrefix(vaultId), true);
+    }
+    final scoped = _accountScopedPrefix(vaultId);
+    if (scoped != null && _resolveLegacyCrypto() != null) {
+      return (scoped, false);
+    }
+    return null;
+  }
+
+  Future<(String prefix, bool useVaultKey)> _resolveWriteTarget(
+    String vaultId,
+  ) async {
+    final target = await _tryResolveWriteTarget(vaultId);
+    if (target != null) return target;
+    if (_vaultBackupKeys != null) {
+      throw StateError(
+        'Unlock your vault once on this device to initialise photo backup.',
+      );
+    }
+    throw StateError('Not signed in to chat.');
+  }
+
+  Future<List<String>> _candidateReadPrefixes(String vaultId) async {
+    final prefixes = <String>[];
+    final vaultKeys = _vaultBackupKeys;
+    if (vaultKeys != null && await vaultKeys.hasKey(vaultId)) {
+      prefixes.add(_vaultKeyPrefix(vaultId));
+    }
+    final scoped = _accountScopedPrefix(vaultId);
+    if (scoped != null) prefixes.add(scoped);
+    final legacy = _legacyPrefix();
+    if (legacy != null) prefixes.add(legacy);
+    return prefixes;
   }
 
   /// Device is always used; cloud only when enabled and the network allows.
@@ -192,8 +252,8 @@ class VaultPhotoBackupService {
     return active;
   }
 
-  /// Backs up when the last photo backup is older than [minAge] or never ran.
-  /// Called on app open so desktop, which has no nightly job, is covered too.
+  /// Backs up when the last photo backup is older than [minAge], never ran,
+  /// or has a pending cloud upload whose network conditions are now met.
   /// Returns null when nothing was due.
   Future<VaultPhotoBackupResult?> backupIfDue({
     Duration minAge = backupInterval,
@@ -201,14 +261,21 @@ class VaultPhotoBackupService {
     DateTime? deadline,
   }) {
     return _coordinator.run(() async {
-      if (_legacyPrefix() == null) return null;
+      await _settings.migrateLegacyPhotoSyncSetting();
       if (!await _settings.isBackupVaultPhotosEnabled()) return null;
       final vaultId = await _currentVaultId();
       if (vaultId == null) return null;
+      if (await _tryResolveWriteTarget(vaultId) == null) return null;
+
+      final cloudPending =
+          await _settings.isVaultPhotoBackupCloudPending() &&
+          await _settings.isBackupCloudEnabled() &&
+          await _networkAllowed();
       final last = await _settings.getLastVaultPhotoBackupAt();
       final lastVaultId = await _settings.getLastVaultPhotoBackupVaultId();
       final current = now ?? DateTime.now();
-      if (last != null &&
+      if (!cloudPending &&
+          last != null &&
           lastVaultId == vaultId &&
           current.difference(last) < minAge) {
         return null;
@@ -237,8 +304,7 @@ class VaultPhotoBackupService {
   }) async {
     final vaultId = await _currentVaultId();
     if (vaultId == null) throw StateError('No vault to back up.');
-    final prefix = _prefix(vaultId);
-    if (prefix == null) throw StateError('Not signed in to chat.');
+    final (prefix, useVaultKey) = await _resolveWriteTarget(vaultId);
 
     final skippedByStore = <BackupBlobStore, String>{};
     final active = await _activeStores(skippedByStore);
@@ -257,6 +323,9 @@ class VaultPhotoBackupService {
       );
     }
 
+    final cloudOn = await _settings.isBackupCloudEnabled();
+    final hasCloudStore = _stores.any((store) => store.isCloud);
+
     await _hashCache?.load();
     backupProgress.begin('Backing up vault photos', total: photos.length);
     try {
@@ -271,7 +340,9 @@ class VaultPhotoBackupService {
           skippedByStore[store] = e.toString();
         }
       }
-      final stores = present.keys.toList();
+      // Track stores where every blob write has succeeded; a store that fails
+      // mid-run is removed immediately so it never receives an incomplete manifest.
+      final healthyStores = present.keys.toList();
 
       var done = 0;
       var missing = 0;
@@ -303,7 +374,7 @@ class VaultPhotoBackupService {
 
         final photoName = _blobName(prefix, _photoInfix, photo.id);
         final thumbName = _blobName(prefix, _thumbInfix, photo.id);
-        for (final store in stores) {
+        for (final store in healthyStores.toList()) {
           final have = present[store]!;
           if (have.contains(photoName) && have.contains(thumbName)) continue;
           try {
@@ -320,52 +391,83 @@ class VaultPhotoBackupService {
             have
               ..add(photoName)
               ..add(thumbName);
-            savedTo.add(store.label);
           } catch (e) {
             skippedByStore[store] = e.toString();
+            healthyStores.remove(store);
           }
         }
       }
 
       if (!completed) {
+        if (cloudOn && hasCloudStore) {
+          await _settings.setVaultPhotoBackupCloudPending(true);
+        }
         // Stopped early: the old manifest stays valid, and nothing is deleted,
         // because photos not reached yet are still in the vault.
         return VaultPhotoBackupResult(
           photoCount: backed.length,
           missingCount: missing,
-          savedTo: savedTo.toList(),
+          savedTo: const [],
           skipped: skippedLabels(),
           completed: false,
         );
       }
 
-      final manifest = await _encodeManifest(vaultId, backed, hashes);
-      final manifestFile = await _tempFile('manifest');
-      try {
-        await manifestFile.writeAsBytes(manifest, flush: true);
-        for (final store in stores) {
-          await store.writeFile(
-            '$prefix$_manifestSuffix',
-            manifestFile,
-            interactive: interactive,
-          );
-          savedTo.add(store.label);
-        }
-      } finally {
-        await _deleteQuietly(manifestFile);
-      }
-      // Drop blobs only for photos that left the vault (e.g. trashed). A photo
-      // whose local file is missing keeps its backup.
-      final live = {for (final photo in photos) photo.id};
-      for (final store in stores) {
-        for (final name in present[store]!) {
-          if (!_isStaleBlob(prefix, name, live)) continue;
-          await store.delete(name, interactive: interactive);
+      final manifestSavedStores = <BackupBlobStore>[];
+      if (healthyStores.isNotEmpty) {
+        final manifest = await _encodeManifest(
+          vaultId,
+          backed,
+          hashes,
+          useVaultKey: useVaultKey,
+        );
+        final manifestFile = await _tempFile('manifest');
+        try {
+          await manifestFile.writeAsBytes(manifest, flush: true);
+          for (final store in healthyStores) {
+            try {
+              await store.writeFile(
+                '$prefix$_manifestSuffix',
+                manifestFile,
+                interactive: interactive,
+              );
+              savedTo.add(store.label);
+              manifestSavedStores.add(store);
+            } catch (e) {
+              skippedByStore[store] = e.toString();
+            }
+          }
+        } finally {
+          await _deleteQuietly(manifestFile);
         }
       }
 
-      await _settings.setLastVaultPhotoBackupAt(DateTime.now());
-      await _settings.setLastVaultPhotoBackupVaultId(vaultId);
+      // Drop blobs only for photos that left the vault (e.g. trashed), and
+      // only on stores whose manifest was updated cleanly.
+      final live = {for (final photo in photos) photo.id};
+      for (final store in manifestSavedStores) {
+        for (final name in present[store]!) {
+          if (!_isStaleBlob(prefix, name, live)) continue;
+          try {
+            await store.delete(name, interactive: interactive);
+          } catch (_) {
+            // Best-effort cleanup; the new manifest is already committed.
+          }
+        }
+      }
+
+      if (savedTo.isNotEmpty || backed.isEmpty) {
+        await _settings.setLastVaultPhotoBackupAt(DateTime.now());
+        await _settings.setLastVaultPhotoBackupVaultId(vaultId);
+      }
+
+      final allCloudSaved = _stores
+          .where((store) => store.isCloud)
+          .every(manifestSavedStores.contains);
+      await _settings.setVaultPhotoBackupCloudPending(
+        cloudOn && hasCloudStore && backed.isNotEmpty && !allCloudSaved,
+      );
+
       return VaultPhotoBackupResult(
         photoCount: backed.length,
         missingCount: missing,
@@ -381,20 +483,37 @@ class VaultPhotoBackupService {
   /// Restores photos from the first store that has the manifest (device
   /// first, then Drive). Photos already in the vault are left untouched.
   ///
+  /// When [includeCloud] is true (e.g. during Google vault recovery on a fresh
+  /// install), cloud stores are checked even if cloud backup has not been
+  /// enabled in settings yet.
+  ///
   /// Throws [VaultPhotoBackupMismatch] if the backup belongs to another vault
-  /// or was encrypted with a different account key.
-  Future<VaultPhotoRestoreResult> restore({bool interactive = false}) {
-    return _coordinator.run(() => _restoreUnlocked(interactive: interactive));
+  /// or was encrypted with a different account/vault key.
+  Future<VaultPhotoRestoreResult> restore({
+    bool interactive = false,
+    bool includeCloud = false,
+  }) {
+    return _coordinator.run(
+      () => _restoreUnlocked(
+        interactive: interactive,
+        includeCloud: includeCloud,
+      ),
+    );
   }
 
   Future<VaultPhotoRestoreResult> _restoreUnlocked({
     bool interactive = false,
+    bool includeCloud = false,
   }) async {
     final vaultId = await _currentVaultId();
     if (vaultId == null) throw StateError('No vault to restore into.');
-    final prefix = _prefix(vaultId);
-    final legacyPrefix = _legacyPrefix();
-    if (prefix == null || legacyPrefix == null) {
+    final candidates = await _candidateReadPrefixes(vaultId);
+    if (candidates.isEmpty) {
+      if (_vaultBackupKeys != null) {
+        throw StateError(
+          'Unlock your vault once on this device to restore photo backups.',
+        );
+      }
       throw StateError('Not signed in to chat.');
     }
     const none = VaultPhotoRestoreResult(
@@ -402,35 +521,43 @@ class VaultPhotoBackupService {
       alreadyPresent: 0,
       unavailable: 0,
     );
-    if (!await _settings.isBackupVaultPhotosEnabled()) return none;
+    if (!includeCloud && !await _settings.isBackupVaultPhotosEnabled()) {
+      return none;
+    }
 
     final failures = <String>{};
     final manifestFile = await _tempFile('manifest_read');
     try {
-      final found = await _readFirstToFile(
-        '$prefix$_manifestSuffix',
-        manifestFile,
-        interactive: interactive,
-        failures: failures,
-        fallbackNames: ['$legacyPrefix$_manifestSuffix'],
-      );
-      if (!found) {
+      String? matchedPrefix;
+      for (final prefix in candidates) {
+        final found = await _readFirstToFile(
+          '$prefix$_manifestSuffix',
+          manifestFile,
+          interactive: interactive,
+          includeCloud: includeCloud,
+          failures: failures,
+        );
+        if (found) {
+          matchedPrefix = prefix;
+          break;
+        }
+      }
+      if (matchedPrefix == null) {
         if (failures.isNotEmpty) {
           throw VaultPhotoBackupReadException(failures.toList());
         }
         return none;
       }
 
-      final Uint8List plain;
-      try {
-        plain = await _crypto.decryptBackup(await manifestFile.readAsBytes());
-      } catch (_) {
-        throw const VaultPhotoBackupMismatch(
-          'This backup cannot be decrypted. It may belong to a different '
-          'account or be damaged.',
-        );
-      }
+      final Uint8List plain = await _decryptManifestBytes(
+        vaultId,
+        await manifestFile.readAsBytes(),
+      );
       final entries = await _decodeManifest(plain, vaultId);
+      final otherPrefixes = [
+        for (final prefix in candidates)
+          if (prefix != matchedPrefix) prefix,
+      ];
 
       final root = await _root();
       final objectsDir = Directory(p.join(root.path, 'objects'));
@@ -466,22 +593,30 @@ class VaultPhotoBackupService {
           final photoOk =
               existingPhotoValid ||
               await _restoreVerified(
-                _blobName(prefix, _photoInfix, photo.id),
+                _blobName(matchedPrefix, _photoInfix, photo.id),
                 photoHash,
                 File(photoPath),
                 interactive: interactive,
+                includeCloud: includeCloud,
                 failures: failures,
-                fallbackNames: [_blobName(legacyPrefix, _photoInfix, photo.id)],
+                fallbackNames: [
+                  for (final pfx in otherPrefixes)
+                    _blobName(pfx, _photoInfix, photo.id),
+                ],
               );
           final thumbOk =
               existingThumbValid ||
               await _restoreVerified(
-                _blobName(prefix, _thumbInfix, photo.id),
+                _blobName(matchedPrefix, _thumbInfix, photo.id),
                 thumbHash,
                 File(thumbPath),
                 interactive: interactive,
+                includeCloud: includeCloud,
                 failures: failures,
-                fallbackNames: [_blobName(legacyPrefix, _thumbInfix, photo.id)],
+                fallbackNames: [
+                  for (final pfx in otherPrefixes)
+                    _blobName(pfx, _thumbInfix, photo.id),
+                ],
               );
           if (!photoOk || !thumbOk) {
             if (photoOk && !existingPhotoValid) {
@@ -516,22 +651,29 @@ class VaultPhotoBackupService {
     }
   }
 
-  /// Removes this account's vault photo backup from the chosen stores.
+  /// Removes this vault's photo backup from the chosen stores (including any
+  /// legacy account-scoped copies belonging to this vault).
   Future<void> deleteBackup({required bool device, required bool cloud}) {
     return _coordinator.run(() async {
       final vaultId = await _currentVaultId();
       if (vaultId == null) throw StateError('No vault to delete backup for.');
-      final prefix = _prefix(vaultId);
+      final scopedPrefixes = <String>[
+        if (_vaultBackupKeys != null) _vaultKeyPrefix(vaultId),
+        ?_accountScopedPrefix(vaultId),
+      ];
       final legacyPrefix = _legacyPrefix();
-      if (prefix == null || legacyPrefix == null) {
+      if (scopedPrefixes.isEmpty && legacyPrefix == null) {
         throw StateError('Not signed in to chat.');
       }
       for (final store in _stores) {
         if (store.isCloud ? !cloud : !device) continue;
-        for (final name in await store.list(prefix, interactive: true)) {
-          await store.delete(name, interactive: true);
+        for (final prefix in scopedPrefixes) {
+          for (final name in await store.list(prefix, interactive: true)) {
+            await store.delete(name, interactive: true);
+          }
         }
-        if (await _legacyManifestBelongsToVault(store, legacyPrefix, vaultId)) {
+        if (legacyPrefix != null &&
+            await _legacyManifestBelongsToVault(store, legacyPrefix, vaultId)) {
           for (final name in await store.list(
             legacyPrefix,
             interactive: true,
@@ -539,6 +681,9 @@ class VaultPhotoBackupService {
             await store.delete(name, interactive: true);
           }
         }
+      }
+      if (cloud) {
+        await _settings.setVaultPhotoBackupCloudPending(false);
       }
     });
   }
@@ -548,6 +693,8 @@ class VaultPhotoBackupService {
     String prefix,
     String vaultId,
   ) async {
+    final legacyCrypto = _resolveLegacyCrypto();
+    if (legacyCrypto == null) return false;
     final manifest = await _tempFile('legacy_manifest');
     try {
       final found = await store.readToFile(
@@ -556,10 +703,12 @@ class VaultPhotoBackupService {
         interactive: true,
       );
       if (!found) return false;
-      final plain = await _crypto.decryptBackup(await manifest.readAsBytes());
+      final plain = await legacyCrypto.decryptBackup(
+        await manifest.readAsBytes(),
+      );
       await _decodeManifest(plain, vaultId);
       return true;
-    } on VaultPhotoBackupMismatch {
+    } catch (_) {
       return false;
     } finally {
       await _deleteQuietly(manifest);
@@ -607,6 +756,7 @@ class VaultPhotoBackupService {
     String expectedSha256,
     File destination, {
     bool interactive = false,
+    bool includeCloud = false,
     required Set<String> failures,
     List<String> fallbackNames = const [],
   }) async {
@@ -616,6 +766,7 @@ class VaultPhotoBackupService {
         name,
         scratch,
         interactive: interactive,
+        includeCloud: includeCloud,
         expectedSha256: expectedSha256,
         failures: failures,
         fallbackNames: fallbackNames,
@@ -646,11 +797,12 @@ class VaultPhotoBackupService {
     String name,
     File destination, {
     bool interactive = false,
+    bool includeCloud = false,
     String? expectedSha256,
     Set<String>? failures,
     List<String> fallbackNames = const [],
   }) async {
-    final cloudOn = await _settings.isBackupCloudEnabled();
+    final cloudOn = includeCloud || await _settings.isBackupCloudEnabled();
     for (final candidate in [name, ...fallbackNames]) {
       for (final store in _stores) {
         if (store.isCloud && !cloudOn) continue;
@@ -696,8 +848,9 @@ class VaultPhotoBackupService {
   Future<Uint8List> _encodeManifest(
     String vaultId,
     List<VaultPhoto> photos,
-    Map<String, (String, String)> hashes,
-  ) async {
+    Map<String, (String, String)> hashes, {
+    required bool useVaultKey,
+  }) async {
     final json = jsonEncode({
       'v': _manifestVersion,
       'vaultId': vaultId,
@@ -710,7 +863,49 @@ class VaultPhotoBackupService {
           },
       ],
     });
-    return _crypto.encryptBackup(utf8.encode(json));
+    final plainBytes = utf8.encode(json);
+    if (useVaultKey) {
+      return _vaultBackupKeys!.encryptManifest(
+        vaultId: vaultId,
+        plaintext: plainBytes,
+      );
+    }
+    final legacyCrypto = _resolveLegacyCrypto();
+    if (legacyCrypto == null) {
+      throw StateError('Not signed in to chat.');
+    }
+    return legacyCrypto.encryptBackup(plainBytes);
+  }
+
+  Future<Uint8List> _decryptManifestBytes(
+    String vaultId,
+    Uint8List encrypted,
+  ) async {
+    final vaultKeys = _vaultBackupKeys;
+    if (vaultKeys != null &&
+        encrypted.isNotEmpty &&
+        encrypted[0] == 4 &&
+        await vaultKeys.hasKey(vaultId)) {
+      try {
+        return await vaultKeys.decryptManifest(
+          vaultId: vaultId,
+          encrypted: encrypted,
+        );
+      } catch (_) {
+        // Fall through to legacy decryptor in case a legacy payload happened
+        // to start with byte 0x04, or report mismatch if both fail.
+      }
+    }
+    final legacyCrypto = _resolveLegacyCrypto();
+    if (legacyCrypto != null) {
+      try {
+        return await legacyCrypto.decryptBackup(encrypted);
+      } catch (_) {}
+    }
+    throw const VaultPhotoBackupMismatch(
+      'This backup cannot be decrypted. It may belong to a different '
+      'account or be damaged.',
+    );
   }
 
   Future<List<(VaultPhoto, String, String)>> _decodeManifest(

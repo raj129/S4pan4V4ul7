@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:external_path/external_path.dart';
 import 'package:path/path.dart' as p;
@@ -13,7 +14,7 @@ import '../domain/backup_blob_store.dart';
 /// permission on Android 11+. Older builds wrote to public Documents, which
 /// scoped storage now blocks, so reads also check that location as a
 /// read-only fallback. On desktop the primary location is Documents.
-class LocalBackupBlobStore implements BackupBlobStore {
+class LocalBackupBlobStore implements BackupByteStore {
   LocalBackupBlobStore({
     Future<Directory> Function()? baseDirectory,
     Future<Directory?> Function()? legacyDirectory,
@@ -104,6 +105,31 @@ class LocalBackupBlobStore implements BackupBlobStore {
     if (!await old.exists()) return false;
     await old.copy(destination.path);
     return true;
+  }
+
+  @override
+  Future<void> writeBytes(
+    String name,
+    Uint8List bytes, {
+    bool interactive = false,
+  }) async {
+    final dir = await _folder();
+    final file = File(p.join(dir.path, name));
+    final tmp = File('${file.path}.tmp');
+    await tmp.writeAsBytes(bytes, flush: true);
+    if (await file.exists()) await file.delete();
+    await tmp.rename(file.path);
+  }
+
+  @override
+  Future<Uint8List?> readBytes(String name, {bool interactive = false}) async {
+    final primary = File(p.join((await _folder()).path, name));
+    if (await primary.exists()) return primary.readAsBytes();
+    final legacy = await _legacyFolder();
+    if (legacy == null) return null;
+    final old = File(p.join(legacy.path, name));
+    if (!await old.exists()) return null;
+    return old.readAsBytes();
   }
 
   @override

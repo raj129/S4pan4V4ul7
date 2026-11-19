@@ -25,10 +25,13 @@ import 'package:photo_vault/features/vault/data/repositories/flutter_secure_stri
 import 'package:photo_vault/features/vault/data/repositories/persistent_photo_repository.dart';
 import 'package:photo_vault/features/vault/data/repositories/persistent_settings_repository.dart';
 import 'package:photo_vault/features/vault/data/repositories/persistent_vault_repository.dart';
+import 'package:photo_vault/features/vault/data/repositories/secure_storage_flutter_repository.dart';
 import 'package:photo_vault/features/vault/domain/repositories/settings_repository.dart';
 import 'package:photo_vault/features/backup/application/backup_coordinator.dart';
 import 'package:photo_vault/features/backup/application/backup_network.dart';
+import 'package:photo_vault/features/backup/application/backup_scheduler.dart';
 import 'package:photo_vault/features/backup/application/photo_hash_cache.dart';
+import 'package:photo_vault/features/backup/application/vault_backup_key_service.dart';
 import 'package:photo_vault/features/backup/application/vault_photo_backup_service.dart';
 import 'package:photo_vault/features/backup/data/drive_backup_blob_store.dart';
 import 'package:photo_vault/features/backup/data/local_backup_blob_store.dart';
@@ -43,18 +46,22 @@ import 'chat_receive_service.dart';
 import '../media/android_chat_downloads.dart';
 import '../media/android_chat_local_media.dart';
 
+export 'package:photo_vault/features/backup/application/backup_scheduler.dart'
+    show
+        catchUpBackupTaskName,
+        delayUntilNextBackup,
+        nightlyBackupTaskName,
+        scheduleNightlyBackup,
+        schedulePendingBackupCatchUp;
+
 /// OAuth web client id used by Google Sign-In (shared with `main.dart`).
 const googleServerClientId =
     '209716874258-p9n2n9jmu87oqqu84703hf9kvuodokdn.apps.googleusercontent.com';
 
-const _nightlyTaskName = 'photo_vault.chat_backup.nightly';
 const _receiveTaskName = 'photo_vault.chat_receive';
 
 /// Sent by the native geofence receiver (`ArrivalSendScheduler.TASK`).
 const arrivalSendTaskName = 'arrival_send';
-
-/// Target local time of the nightly backup.
-const _backupHour = 2;
 
 /// Background isolate entry point for workmanager.
 ///
@@ -95,12 +102,16 @@ void chatBackupCallbackDispatcher() {
         return false;
       }
     }
-    if (task != _nightlyTaskName) return true;
+    if (task != nightlyBackupTaskName && task != catchUpBackupTaskName) {
+      return true;
+    }
     try {
-      await runBackgroundChatBackup().timeout(_taskBudget);
+      await runBackgroundChatBackup(
+        catchUpOnly: task == catchUpBackupTaskName,
+      ).timeout(_taskBudget);
       return true;
     } catch (e) {
-      debugPrint('Nightly chat backup failed: $e');
+      debugPrint('Background backup ($task) failed: $e');
       // Ask WorkManager to retry with backoff instead of waiting a whole day;
       // backupIfDue makes a retry after a later success a no-op.
       return false;
@@ -178,34 +189,54 @@ Future<bool> runBackgroundArrivalSend() async {
 /// Performs one backup outside the UI (own Firebase + database instances).
 ///
 /// Chats and vault photos are each gated by the Backup settings. A failure in
-/// one never stops the other.
-Future<void> runBackgroundChatBackup() async {
+/// one never stops the other, and local-only vault photo backups still run
+/// when no Google/Firebase account is signed in.
+Future<void> runBackgroundChatBackup({bool catchUpOnly = false}) async {
   WidgetsFlutterBinding.ensureInitialized();
-  await _ensureFirebase();
-  final uid = FirebaseAuth.instance.currentUser?.uid;
-  if (uid == null) return;
+  String? uid;
   try {
-    await GoogleSignIn.instance
-        .initialize(serverClientId: googleServerClientId)
-        .timeout(const Duration(seconds: 10));
+    await _ensureFirebase();
+    uid = FirebaseAuth.instance.currentUser?.uid;
   } catch (_) {
-    // Drive is then skipped and retried when the app is next opened.
+    // Offline or local-only install: local vault photo backup can still run.
+  }
+  if (uid != null) {
+    try {
+      await GoogleSignIn.instance
+          .initialize(serverClientId: googleServerClientId)
+          .timeout(const Duration(seconds: 10));
+    } catch (_) {
+      // Drive is then skipped and retried when connectivity/app allows.
+    }
   }
 
+  const secureStorage = FlutterSecureStorage();
   final settings = PersistentSettingsRepository(
-    FlutterSecureStringKv(const FlutterSecureStorage()),
+    FlutterSecureStringKv(secureStorage),
   );
+  await settings.migrateLegacyPhotoSyncSetting();
+  final minAge = catchUpOnly
+      ? const Duration(hours: 24)
+      : const Duration(hours: 20);
   final crypto = ChatCryptoService();
   // Each part is independent: a failure in one must not stop the other, but
   // the first error is still rethrown so WorkManager retries the task.
   Object? firstError;
-  try {
-    await _backUpChatsInBackground(uid, crypto, settings);
-  } catch (e) {
-    firstError = e;
+  if (uid != null) {
+    try {
+      await _backUpChatsInBackground(uid, crypto, settings, minAge: minAge);
+    } catch (e) {
+      firstError = e;
+    }
   }
   try {
-    await _backUpVaultPhotosInBackground(uid, crypto, settings);
+    await _backUpVaultPhotosInBackground(
+      uid,
+      crypto,
+      settings,
+      secureStorage: secureStorage,
+      minAge: minAge,
+    );
   } catch (e) {
     firstError ??= e;
   } finally {
@@ -217,8 +248,9 @@ Future<void> runBackgroundChatBackup() async {
 Future<void> _backUpChatsInBackground(
   String uid,
   ChatCryptoService crypto,
-  SettingsRepository settings,
-) async {
+  SettingsRepository settings, {
+  required Duration minAge,
+}) async {
   final db = VaultDatabase();
   try {
     await crypto.requireAccount(uid);
@@ -233,37 +265,47 @@ Future<void> _backUpChatsInBackground(
       settings: settings,
       coordinator: BackupCoordinator.shared,
     );
-    // Slightly under a day so a periodic run that fires a little early is
-    // not skipped.
-    await service.backupIfDue(minAge: const Duration(hours: 20));
+    await service.backupIfDue(minAge: minAge);
   } finally {
     await db.close();
   }
 }
 
 Future<void> _backUpVaultPhotosInBackground(
-  String uid,
+  String? uid,
   ChatCryptoService crypto,
-  SettingsRepository settings,
-) async {
+  SettingsRepository settings, {
+  required FlutterSecureStorage secureStorage,
+  required Duration minAge,
+}) async {
   if (!await settings.isBackupVaultPhotosEnabled()) return;
   final vaultRepository = PersistentVaultRepository(
-    FlutterSecureStringKv(const FlutterSecureStorage()),
+    FlutterSecureStringKv(secureStorage),
   );
   final photos = PersistentPhotoRepositoryImpl(
     currentVaultId: vaultRepository.getActiveVaultId,
   );
   await photos.initialize();
   try {
-    await crypto.requireAccount(uid);
+    if (uid != null) {
+      try {
+        await crypto.requireAccount(uid);
+      } catch (_) {
+        // VaultBackupKeyService handles v4 manifests without chat identity keys.
+      }
+    }
     final service = VaultPhotoBackupService(
       stores: [
         LocalBackupBlobStore(),
-        DriveBackupBlobStore(authRepository: FirebaseAuthRepository()),
+        if (Firebase.apps.isNotEmpty)
+          DriveBackupBlobStore(authRepository: FirebaseAuthRepository()),
       ],
       photoRepository: photos,
       listPhotos: photos.listAttachments,
-      crypto: crypto,
+      vaultBackupKeys: VaultBackupKeyService(
+        SecureStorageFlutterRepository(secureStorage),
+      ),
+      legacyCrypto: uid == null ? null : () => crypto,
       settings: settings,
       currentUid: () => uid,
       networkAllowed: () => backupNetworkAllowed(settings),
@@ -272,9 +314,9 @@ Future<void> _backUpVaultPhotosInBackground(
       coordinator: BackupCoordinator.shared,
     );
     // Stop before the 8-minute task budget so the run ends cleanly and the
-    // next night resumes from the hash cache.
+    // next run resumes from the hash cache.
     await service.backupIfDue(
-      minAge: const Duration(hours: 20),
+      minAge: minAge,
       deadline: DateTime.now().add(_photoBudget),
     );
   } finally {
@@ -283,26 +325,7 @@ Future<void> _backUpVaultPhotosInBackground(
 }
 
 /// Schedules the nightly backup (Android only; desktop backs up on open).
-Future<void> scheduleNightlyChatBackup() async {
-  if (!Platform.isAndroid) return;
-  await Workmanager().initialize(chatBackupCallbackDispatcher);
-  await Workmanager().registerPeriodicTask(
-    _nightlyTaskName,
-    _nightlyTaskName,
-    frequency: const Duration(hours: 24),
-    initialDelay: delayUntilNextBackup(DateTime.now()),
-    constraints: Constraints(
-      networkType: NetworkType.notRequired,
-      requiresBatteryNotLow: true,
-    ),
-    backoffPolicy: BackoffPolicy.exponential,
-    backoffPolicyDelay: const Duration(minutes: 15),
-    // `update` applies new constraints/backoff to an existing registration
-    // while preserving its timing, so app launches never push the next run
-    // a day further out.
-    existingWorkPolicy: ExistingPeriodicWorkPolicy.update,
-  );
-}
+Future<void> scheduleNightlyChatBackup() => scheduleNightlyBackup();
 
 /// WorkManager owns the durable offline queue; input contains IDs, not content.
 Future<void> scheduleChatReceive({
@@ -441,12 +464,4 @@ Future<bool> runBackgroundChatReceive(
     crypto.clearKeyCache();
     await db.close();
   }
-}
-
-/// Time from [now] until the next [_backupHour]:00 local time.
-@visibleForTesting
-Duration delayUntilNextBackup(DateTime now) {
-  var next = DateTime(now.year, now.month, now.day, _backupHour);
-  if (!next.isAfter(now)) next = next.add(const Duration(days: 1));
-  return next.difference(now);
 }

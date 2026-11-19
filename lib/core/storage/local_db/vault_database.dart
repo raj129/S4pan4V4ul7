@@ -1183,7 +1183,7 @@ LazyDatabase _openConnection() {
       native: DriftNativeOptions(
         shareAcrossIsolates: true,
         setup: (database) {
-          database.execute('PRAGMA busy_timeout = 1000');
+          database.execute('PRAGMA busy_timeout = 5000');
           database.execute('PRAGMA journal_mode = WAL');
         },
       ),

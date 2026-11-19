@@ -28,4 +28,15 @@ abstract class SecureStorageRepository {
   /// Removes all VMK-related blobs for [vaultId].
   /// Called on vault deletion or creation cleanup.
   Future<void> deleteVmkBlobs(String vaultId);
+
+  /// Persists a one-way HKDF-derived manifest backup key (never raw VMK) for
+  /// [vaultId] so encrypted vault photo manifests can be read/written in
+  /// Local-only mode and during locked nightly background runs.
+  Future<void> storeBackupKey({
+    required String vaultId,
+    required String backupKeyBase64,
+  }) async {}
+
+  /// Loads the HKDF-derived manifest backup key for [vaultId], if stored.
+  Future<String?> loadBackupKey(String vaultId) async => null;
 }

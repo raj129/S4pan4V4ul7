@@ -91,7 +91,6 @@ void main() {
           mode: UserMode.googleEnabled,
           photoRepository: repository,
           importManager: importManager,
-          photoSyncEnabled: true,
         ),
       ),
     );

@@ -49,7 +49,6 @@ void main() {
           mode: UserMode.localOnly,
           photoRepository: repository,
           importManager: importManager,
-          photoSyncEnabled: false,
         ),
       ),
     );

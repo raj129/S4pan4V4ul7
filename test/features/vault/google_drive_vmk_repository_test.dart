@@ -1,9 +1,11 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:photo_vault/core/domain/repositories/auth_repository.dart';
 import 'package:photo_vault/features/vault/data/repositories/google_drive_vmk_repository.dart';
+import 'package:photo_vault/features/vault/data/repositories/local_vmk_backup_repository.dart';
 
 class _MemoryAuthRepository implements AuthRepository {
   _MemoryAuthRepository(this.client);
@@ -95,5 +97,31 @@ void main() {
       repository.listVaultIds(interactive: true),
       throwsA(isA<StateError>()),
     );
+  });
+
+  test('LocalVmkBackupRepository backs up, lists, and heals corrupt JSON', () async {
+    final dir = await Directory.systemTemp.createTemp('local_vmk_test');
+    addTearDown(() => dir.delete(recursive: true));
+    final repo = LocalVmkBackupRepository(baseDirectory: () async => dir);
+
+    await repo.backupVmk(
+      vaultId: 'vault-1',
+      payload: const {'wrappedVmk': 'k1'},
+    );
+    expect(await repo.listVaultIds(), ['vault-1']);
+    expect(await repo.restoreVmk('vault-1'), {'wrappedVmk': 'k1'});
+
+    // Corrupting the file surfaces FormatException on list/restore rather than
+    // silently claiming no backup, returns false from hasBackup, and heals on write.
+    await File(
+      '${dir.path}/PhotoVault_Recovery/vmk_recovery.json',
+    ).writeAsString('{corrupt-json');
+    await expectLater(repo.listVaultIds(), throwsFormatException);
+    expect(await repo.hasBackup('vault-1'), isFalse);
+    await repo.backupVmk(
+      vaultId: 'vault-2',
+      payload: const {'wrappedVmk': 'k2'},
+    );
+    expect(await repo.listVaultIds(), ['vault-2']);
   });
 }

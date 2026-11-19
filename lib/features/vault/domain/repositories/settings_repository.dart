@@ -59,6 +59,17 @@ abstract class SettingsRepository {
 
   Future<void> setLastVaultPhotoBackupVaultId(String? vaultId) async {}
 
+  /// True when a vault photo backup saved locally while Google Drive was
+  /// deferred (e.g. waiting for Wi-Fi or transient error) and still needs
+  /// cloud upload as soon as network conditions allow.
+  Future<bool> isVaultPhotoBackupCloudPending() async => false;
+
+  Future<void> setVaultPhotoBackupCloudPending(bool pending) async {}
+
+  /// Migrates the legacy standalone `photoSyncEnabled` preference into the
+  /// unified `backupVaultPhotosEnabled` setting once, if needed.
+  Future<void> migrateLegacyPhotoSyncSetting() async {}
+
   /// Last attachment quality the user picked, preselected next time.
   Future<String?> getChatImageQuality();
 

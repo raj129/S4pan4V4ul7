@@ -247,6 +247,7 @@ GoRoute _galleryRoute(AppDependencies deps, AppSessionState session) {
         photoRepository: deps.photoRepository,
         importManager: deps.importManager,
         photoSyncEnabled: session.photoSyncEnabled,
+        backupManager: deps.backupManager,
         vaultSession: deps.vaultSession,
         exportPhotoUseCase: deps.exportPhotoUseCase,
         unlockVaultUseCase: deps.unlockVaultUseCase,
@@ -523,6 +524,7 @@ GoRoute _settingsRoute(
       unlockVaultUseCase: deps.unlockVaultUseCase,
       pinValidator: deps.pinValidator,
       onSettingsChanged: onSettingsChanged,
+      backupManager: deps.backupManager,
       onShowLastSeenChanged: (show) async {
         try {
           await deps.chatDependencies.presenceService.setShareLastSeen(show);
@@ -547,6 +549,8 @@ GoRoute _settingsRoute(
           vaultPhotoBackup: () => deps.vaultPhotoBackup,
           unlockVaultUseCase: deps.unlockVaultUseCase,
           pinValidator: deps.pinValidator,
+          backupManager: deps.backupManager,
+          authRepository: deps.authRepository,
         ),
       ),
       GoRoute(
@@ -675,7 +679,8 @@ GoRoute _restoreRoute(AppDependencies deps, AppSessionState session) {
         session.mode = UserMode.googleEnabled;
         await deps.settingsRepository.saveUserMode(UserMode.googleEnabled);
         session.photoSyncEnabled = await deps.settingsRepository
-            .isPhotoSyncEnabled();
+            .isBackupVaultPhotosEnabled();
+        unawaited(deps.backupManager.load());
         session.unlock();
         if (!context.mounted) return;
         context.go('/gallery', extra: UserMode.googleEnabled);

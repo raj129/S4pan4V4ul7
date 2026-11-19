@@ -58,6 +58,7 @@ class InMemorySettingsRepository implements SettingsRepository {
   bool _backupWifiOnly = true;
   DateTime? _lastVaultPhotoBackupAt;
   String? _lastVaultPhotoBackupVaultId;
+  bool _vaultPhotoBackupCloudPending = false;
 
   @override
   Future<bool> isBackupChatsEnabled() async => _backupChatsEnabled;
@@ -108,6 +109,18 @@ class InMemorySettingsRepository implements SettingsRepository {
   Future<void> setLastVaultPhotoBackupVaultId(String? vaultId) async {
     _lastVaultPhotoBackupVaultId = vaultId;
   }
+
+  @override
+  Future<bool> isVaultPhotoBackupCloudPending() async =>
+      _vaultPhotoBackupCloudPending;
+
+  @override
+  Future<void> setVaultPhotoBackupCloudPending(bool pending) async {
+    _vaultPhotoBackupCloudPending = pending;
+  }
+
+  @override
+  Future<void> migrateLegacyPhotoSyncSetting() async {}
 
   String? _chatImageQuality;
   bool _autoLockOnBackground = true;

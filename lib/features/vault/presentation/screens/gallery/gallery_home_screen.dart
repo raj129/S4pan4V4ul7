@@ -18,6 +18,7 @@ import '../../widgets/confirm_dialog.dart';
 import '../../widgets/pin_reauth_dialog.dart';
 import 'package:photo_vault/core/widgets/main_scaffold_scope.dart';
 import 'package:photo_vault/core/presentation/theme/app_spacing.dart';
+import 'package:photo_vault/features/backup/application/backup_manager.dart';
 import '../import/import_screen.dart';
 
 /// Screen 8: Gallery home — empty state.
@@ -30,7 +31,8 @@ class GalleryHomeScreen extends StatelessWidget {
     required this.mode,
     required this.photoRepository,
     required this.importManager,
-    required this.photoSyncEnabled,
+    this.photoSyncEnabled = true,
+    this.backupManager,
     this.vaultSession,
     this.exportPhotoUseCase,
     this.unlockVaultUseCase,
@@ -41,6 +43,7 @@ class GalleryHomeScreen extends StatelessWidget {
   final PhotoRepository photoRepository;
   final ImportManager importManager;
   final bool photoSyncEnabled;
+  final BackupManager? backupManager;
   final VaultSession? vaultSession;
   final ExportPhotoUseCase? exportPhotoUseCase;
   final UnlockVaultUseCase? unlockVaultUseCase;
@@ -48,6 +51,7 @@ class GalleryHomeScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final manager = backupManager;
     return Scaffold(
       appBar: AppBar(
         title: const Text('Photos'),
@@ -56,7 +60,24 @@ class GalleryHomeScreen extends StatelessWidget {
           onPressed: () => openAppNavigationDrawer(context),
         ),
         actions: [
-          if (mode == UserMode.googleEnabled)
+          if (manager != null)
+            ListenableBuilder(
+              listenable: manager,
+              builder: (context, _) {
+                if (!manager.photosEnabled) return const SizedBox.shrink();
+                return _BackupStatusBadge(
+                  synced: manager.isGalleryBackedUp,
+                  busy: manager.isBusy,
+                  onTap: () {
+                    final router = GoRouter.maybeOf(context);
+                    if (router != null) {
+                      unawaited(router.push('/settings/backup'));
+                    }
+                  },
+                );
+              },
+            )
+          else if (mode == UserMode.googleEnabled && photoSyncEnabled)
             const _BackupStatusBadge(synced: false),
           const QuickLockActionButton(),
         ],
@@ -64,7 +85,6 @@ class GalleryHomeScreen extends StatelessWidget {
       body: _GalleryBody(
         photoRepository: photoRepository,
         importManager: importManager,
-        photoSyncEnabled: photoSyncEnabled,
         vaultSession: vaultSession,
         exportPhotoUseCase: exportPhotoUseCase,
         unlockVaultUseCase: unlockVaultUseCase,
@@ -86,7 +106,6 @@ class _GalleryBody extends StatefulWidget {
   const _GalleryBody({
     required this.photoRepository,
     required this.importManager,
-    required this.photoSyncEnabled,
     this.vaultSession,
     this.exportPhotoUseCase,
     this.unlockVaultUseCase,
@@ -94,7 +113,6 @@ class _GalleryBody extends StatefulWidget {
   });
   final PhotoRepository photoRepository;
   final ImportManager importManager;
-  final bool photoSyncEnabled;
   final VaultSession? vaultSession;
   final ExportPhotoUseCase? exportPhotoUseCase;
   final UnlockVaultUseCase? unlockVaultUseCase;
@@ -598,23 +616,33 @@ class _GalleryTile extends StatelessWidget {
 }
 
 class _BackupStatusBadge extends StatelessWidget {
-  const _BackupStatusBadge({required this.synced});
+  const _BackupStatusBadge({
+    required this.synced,
+    this.busy = false,
+    this.onTap,
+  });
   final bool synced;
+  final bool busy;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
+    final icon = busy
+        ? Icons.sync_rounded
+        : (synced ? Icons.cloud_done_rounded : Icons.cloud_upload_outlined);
+    final label = busy
+        ? 'Backing up…'
+        : (synced ? 'Backed up' : 'Backup pending');
     return Padding(
       padding: const EdgeInsets.symmetric(
         vertical: AppSpacing.sm,
         horizontal: AppSpacing.xs,
       ),
-      child: Chip(
-        avatar: Icon(
-          synced ? Icons.cloud_done_rounded : Icons.cloud_upload_outlined,
-          size: 16,
-        ),
-        label: Text(synced ? 'Backed up' : 'Backup pending'),
+      child: ActionChip(
+        avatar: Icon(icon, size: 16),
+        label: Text(label),
         visualDensity: VisualDensity.compact,
+        onPressed: onTap,
       ),
     );
   }

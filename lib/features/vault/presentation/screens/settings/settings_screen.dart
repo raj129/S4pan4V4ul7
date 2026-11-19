@@ -14,8 +14,8 @@ import 'package:photo_vault/features/vault/domain/repositories/settings_reposito
 import 'package:photo_vault/core/platform/screenshot_protection.dart';
 import 'package:photo_vault/core/presentation/theme/app_colors.dart';
 import 'package:photo_vault/core/presentation/theme/app_spacing.dart';
-import '../../widgets/pin_reauth_dialog.dart';
 import 'package:photo_vault/core/platform/battery_optimization.dart';
+import 'package:photo_vault/features/backup/application/backup_manager.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({
@@ -23,6 +23,7 @@ class SettingsScreen extends StatefulWidget {
     required this.unlockVaultUseCase,
     required this.pinValidator,
     required this.onSettingsChanged,
+    this.backupManager,
     this.screenshotProtection = const AndroidScreenshotProtection(),
     this.onShowLastSeenChanged,
     this.batteryOptimization = const AndroidBatteryOptimization(),
@@ -33,6 +34,7 @@ class SettingsScreen extends StatefulWidget {
   final UnlockVaultUseCase unlockVaultUseCase;
   final PinValidator pinValidator;
   final Future<void> Function() onSettingsChanged;
+  final BackupManager? backupManager;
   final ScreenshotProtectionController screenshotProtection;
 
   /// Reports and requests exemption from Android battery optimisation.
@@ -55,6 +57,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _showLastSeen = true;
   bool _screenshotProtectionEnabled = true;
   bool? _backgroundAllowed;
+  bool _loaded = false;
 
   Future<void> _loadBackgroundStatus() async {
     final allowed = await widget.batteryOptimization.isExempt();
@@ -66,7 +69,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     await _loadBackgroundStatus();
   }
 
-  bool _photoSyncEnabled = false;
   AppThemePalette _themePalette = AppThemePalette.royalIndigo;
   String _themeMode = 'system';
   String? _version;
@@ -81,9 +83,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
     HdrPreviewPreference.instance.enabled.addListener(_onHdrPreviewChanged);
     unawaited(HdrPreviewCapability.instance.load());
     unawaited(_loadMediaPreviewPreferences());
-    _loadSettings();
+    unawaited(_loadSettings());
     unawaited(_loadAbout());
     unawaited(_loadBackgroundStatus());
+    final manager = widget.backupManager;
+    if (manager != null && !manager.isLoaded) {
+      unawaited(manager.load());
+    }
   }
 
   Future<void> _loadAbout() async {
@@ -99,7 +105,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _loadSettings() async {
-    final photoSync = await widget.settingsRepository.isPhotoSyncEnabled();
+    await widget.settingsRepository.migrateLegacyPhotoSyncSetting();
     final autoLock = await widget.settingsRepository
         .isAutoLockOnBackgroundEnabled();
     final autoLockTimeoutSeconds = await widget.settingsRepository
@@ -112,7 +118,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final themeMode = await widget.settingsRepository.getThemeMode();
     if (!mounted) return;
     setState(() {
-      _photoSyncEnabled = photoSync;
       _autoLockOnBackground = autoLock;
       _autoLockTimeoutSeconds = autoLockTimeoutSeconds;
       _showLastSeen = showLastSeen;
@@ -122,6 +127,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         'light' || 'dark' => themeMode!,
         _ => 'system',
       };
+      _loaded = true;
     });
   }
 
@@ -225,9 +231,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return BaseScreenShell(
       title: 'Settings',
       drawerSelectedIndex: 6,
-      body: ListView(
-        padding: const EdgeInsets.only(bottom: AppSpacing.xl),
-        children: [
+      body: !_loaded
+          ? const Center(child: CircularProgressIndicator())
+          : ListView(
+              padding: const EdgeInsets.only(bottom: AppSpacing.xl),
+              children: [
           const SectionHeader('Appearance'),
           SettingsCard(
             children: [
@@ -357,20 +365,25 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 },
               ),
               ListTile(
+                enabled: _autoLockOnBackground,
                 leading: const Icon(Icons.timer_outlined),
                 title: const Text('Auto-lock delay'),
                 subtitle: Text(
-                  'Lock the vault after ${_autoLockTimeoutLabel(_autoLockTimeoutSeconds)} '
-                  'in the background.',
+                  _autoLockOnBackground
+                      ? 'Lock the vault after ${_autoLockTimeoutLabel(_autoLockTimeoutSeconds)} '
+                            'in the background.'
+                      : 'Turn on Auto-lock on background to choose a delay.',
                 ),
                 trailing: DropdownButton<int>(
                   key: const Key('auto-lock-timeout-dropdown'),
                   value: _autoLockTimeoutSeconds,
-                  onChanged: (seconds) {
-                    if (seconds != null) {
-                      unawaited(_selectAutoLockTimeout(seconds));
-                    }
-                  },
+                  onChanged: _autoLockOnBackground
+                      ? (seconds) {
+                          if (seconds != null) {
+                            unawaited(_selectAutoLockTimeout(seconds));
+                          }
+                        }
+                      : null,
                   items: SettingsRepository.autoLockTimeoutOptionsSeconds
                       .map(
                         (seconds) => DropdownMenuItem<int>(
@@ -447,6 +460,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
           const SectionHeader('Backup & restore'),
           SettingsCard(
             children: [
+              _BackupEntryTile(
+                manager: widget.backupManager,
+                onTap: () => unawaited(context.push('/settings/backup')),
+              ),
               ListTile(
                 leading: Icon(
                   _backgroundAllowed == false
@@ -468,51 +485,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 onTap: _backgroundAllowed == false
                     ? () => unawaited(_requestBackground())
                     : null,
-              ),
-            ],
-          ),
-          SettingsCard(
-            children: [
-              _SettingsSwitch(
-                icon: Icons.cloud_sync_outlined,
-                title: 'Photo sync',
-                subtitle: 'Upload encrypted photo packages only when enabled.',
-                value: _photoSyncEnabled,
-                onChanged: (v) async {
-                  if (!v) {
-                    final allowed = await requirePinReauth(
-                      context: context,
-                      unlockVaultUseCase: widget.unlockVaultUseCase,
-                      pinValidator: widget.pinValidator,
-                      actionLabel: 'disable photo sync',
-                    );
-                    if (!allowed) return;
-                  }
-                  setState(() => _photoSyncEnabled = v);
-                  await widget.settingsRepository.setPhotoSyncEnabled(v);
-                  await widget.onSettingsChanged();
-                },
-              ),
-              ListTile(
-                key: const Key('settings-backup-tile'),
-                leading: const Icon(Icons.backup_outlined),
-                title: const Text('Backup & restore'),
-                subtitle: const Text(
-                  'Manage backups, restore chats/photos, and recover a vault.',
-                ),
-                trailing: const Icon(Icons.chevron_right_rounded),
-                onTap: () => unawaited(context.push('/settings/backup')),
-              ),
-            ],
-          ),
-          const SectionHeader('About'),
-          SettingsCard(
-            children: [
-              ListTile(
-                key: const Key('settings-version-tile'),
-                leading: const Icon(Icons.info_outline_rounded),
-                title: const Text('Version'),
-                subtitle: Text(_version ?? '…'),
               ),
             ],
           ),
@@ -588,7 +560,58 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ],
           ),
+          const SectionHeader('About'),
+          SettingsCard(
+            children: [
+              ListTile(
+                key: const Key('settings-version-tile'),
+                leading: const Icon(Icons.info_outline_rounded),
+                title: const Text('Version'),
+                subtitle: Text(_version ?? '…'),
+              ),
+            ],
+          ),
         ],
+      ),
+    );
+  }
+}
+
+class _BackupEntryTile extends StatelessWidget {
+  const _BackupEntryTile({required this.manager, required this.onTap});
+
+  final BackupManager? manager;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final backup = manager;
+    if (backup == null) {
+      return ListTile(
+        key: const Key('settings-backup-tile'),
+        leading: const Icon(Icons.backup_outlined),
+        title: const Text('Backup & restore'),
+        subtitle: const Text(
+          'Chats, vault photos, Google Drive, and vault recovery.',
+        ),
+        trailing: const Icon(Icons.chevron_right_rounded),
+        onTap: onTap,
+      );
+    }
+    return ListenableBuilder(
+      listenable: backup,
+      builder: (context, _) => ListTile(
+        key: const Key('settings-backup-tile'),
+        leading: backup.isBusy
+            ? const SizedBox.square(
+                dimension: 20,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            : const Icon(Icons.backup_outlined),
+        title: const Text('Backup & restore'),
+        subtitle: Text(backup.settingsSummary()),
+        trailing: const Icon(Icons.chevron_right_rounded),
+        onTap: onTap,
       ),
     );
   }

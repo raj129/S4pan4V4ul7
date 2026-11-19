@@ -41,6 +41,10 @@ class StorageKeys {
       'settings.last_vault_photo_backup_at';
   static const String lastVaultPhotoBackupVaultId =
       'settings.last_vault_photo_backup_vault_id';
+  static const String vaultPhotoBackupCloudPending =
+      'settings.vault_photo_backup_cloud_pending';
+  static const String legacyPhotoSyncMigrated =
+      'settings.legacy_photo_sync_migrated';
   static const String chatImageQuality = 'settings.chat_image_quality';
   static const String themePalette = 'settings.theme_palette';
   static const String themeMode = 'settings.theme_mode';

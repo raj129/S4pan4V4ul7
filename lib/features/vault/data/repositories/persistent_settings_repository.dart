@@ -149,6 +149,32 @@ class PersistentSettingsRepository implements SettingsRepository {
   }
 
   @override
+  Future<bool> isVaultPhotoBackupCloudPending() async =>
+      await _kv.read(StorageKeys.vaultPhotoBackupCloudPending) == 'true';
+
+  @override
+  Future<void> setVaultPhotoBackupCloudPending(bool pending) async {
+    if (!pending) {
+      await _kv.delete(StorageKeys.vaultPhotoBackupCloudPending);
+      return;
+    }
+    await _kv.write(StorageKeys.vaultPhotoBackupCloudPending, 'true');
+  }
+
+  @override
+  Future<void> migrateLegacyPhotoSyncSetting() async {
+    if (await _kv.read(StorageKeys.legacyPhotoSyncMigrated) == 'true') return;
+    final explicitPhotos = await _kv.read(StorageKeys.backupVaultPhotosEnabled);
+    final legacySync = await _kv.read(StorageKeys.photoSyncEnabled);
+    // Only carry over an explicit legacy setting if backupVaultPhotosEnabled
+    // was never explicitly configured, keeping default true for fresh installs.
+    if (explicitPhotos == null && legacySync == 'true') {
+      await _kv.write(StorageKeys.backupVaultPhotosEnabled, 'true');
+    }
+    await _kv.write(StorageKeys.legacyPhotoSyncMigrated, 'true');
+  }
+
+  @override
   Future<String?> getChatImageQuality() =>
       _kv.read(StorageKeys.chatImageQuality);
 
