@@ -63,6 +63,46 @@ void main() {
     expect(find.byType(LottieBuilder), findsOneWidget);
     expect(find.text('🦖'), findsOneWidget);
     expect(find.bySemanticsLabel('😀🦖'), findsOneWidget);
+
+    final animatedBox = tester.widget<SizedBox>(
+      find.byKey(const ValueKey('emoji-box-0')),
+    );
+    final staticBox = tester.widget<SizedBox>(
+      find.byKey(const ValueKey('emoji-box-1')),
+    );
+    expect(staticBox.width, animatedBox.width);
+    expect(staticBox.height, animatedBox.height);
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('emoji-box-1')),
+        matching: find.byType(FittedBox),
+      ),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('visually scales multiple steady emoji to the animation size', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Scaffold(
+          body: AnimatedEmojiText(text: '🦖🦖', playbackId: 'multiple-static'),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final steadyTransforms = tester
+        .widgetList<Transform>(find.byType(Transform))
+        .where((transform) => transform.child is FittedBox);
+    expect(steadyTransforms, hasLength(2));
+    for (final transform in steadyTransforms) {
+      expect(
+        transform.transform.getMaxScaleOnAxis(),
+        closeTo(AnimatedEmojiText.steadyEmojiVisualScale, 0.001),
+      );
+    }
   });
 
   testWidgets('sizes emoji-only messages by emoji count', (tester) async {
@@ -91,7 +131,7 @@ void main() {
     }
   });
 
-  testWidgets('keeps the settled emoji centered in the animation-sized box', (
+  testWidgets('restores the steady emoji after animation completion', (
     tester,
   ) async {
     await tester.pumpWidget(
@@ -103,25 +143,29 @@ void main() {
     );
     final boxFinder = find.byKey(const ValueKey('emoji-box-0'));
     final animationFinder = find.byKey(const ValueKey('emoji-animation-0'));
-    final animatedSize = tester.widget<SizedBox>(boxFinder).width;
     await tester.pumpAndSettle();
 
-    expect(tester.widget<Opacity>(animationFinder).opacity, 1);
-    expect(find.byType(FittedBox), findsNothing);
-    await tester.pump(
-      AnimatedEmojiText.staticEmojiDelay - const Duration(milliseconds: 1),
-    );
-    expect(find.byType(FittedBox), findsNothing);
-    await tester.pump(const Duration(milliseconds: 1));
-
-    expect(find.text('😀'), findsOneWidget);
     expect(tester.widget<Opacity>(animationFinder).opacity, 0);
     expect(find.byType(FittedBox), findsOneWidget);
-    expect(tester.widget<SizedBox>(boxFinder).width, animatedSize);
-    expect(animatedSize, closeTo(62.208, 0.01));
+    expect(find.text('😀'), findsOneWidget);
+    await tester.pump(const Duration(seconds: 1));
+    expect(tester.widget<Opacity>(animationFinder).opacity, 0);
+    expect(find.byType(FittedBox), findsOneWidget);
+    expect(find.text('😀'), findsOneWidget);
+    expect(tester.widget<SizedBox>(boxFinder).width, closeTo(62.208, 0.01));
+    final steadyScale = tester
+        .widget<Transform>(
+          find.ancestor(of: find.text('😀'), matching: find.byType(Transform)),
+        )
+        .transform
+        .getMaxScaleOnAxis();
+    expect(
+      steadyScale,
+      closeTo(AnimatedEmojiText.steadyEmojiVisualScale, 0.001),
+    );
   });
 
-  testWidgets('remounted played emoji stays static until tapped', (
+  testWidgets('remounted played emoji stays steady and replays', (
     tester,
   ) async {
     Widget app() => const MaterialApp(
@@ -142,12 +186,19 @@ void main() {
 
     await tester.pumpAndSettle();
     expect(tester.widget<Opacity>(animationOpacity).opacity, 0);
+    expect(find.byType(FittedBox), findsOneWidget);
     expect(find.text('😀'), findsOneWidget);
 
     await tester.tap(find.byType(AnimatedEmojiText));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 200));
     expect(tester.widget<Opacity>(animationOpacity).opacity, 1);
+    final replayProgress = tester
+        .widget<LottieBuilder>(find.byType(LottieBuilder))
+        .controller!
+        .value;
+    expect(replayProgress, greaterThan(0));
+    expect(replayProgress, lessThan(1));
   });
 
   testWidgets('emoji without a Google animation still bounce, once', (
@@ -166,7 +217,7 @@ void main() {
             matching: find.byType(Transform),
           ),
         )
-        .last
+        .lastWhere((transform) => transform.child is Transform)
         .transform
         .getMaxScaleOnAxis();
 

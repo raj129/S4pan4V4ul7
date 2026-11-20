@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/services.dart';
@@ -97,7 +96,7 @@ class AnimatedEmojiText extends StatefulWidget {
   final VoidCallback? onLongPress;
 
   static const bounceDuration = Duration(milliseconds: 900);
-  static const staticEmojiDelay = Duration(milliseconds: 400);
+  static const steadyEmojiVisualScale = 1.0;
 
   static final Set<String> _played = <String>{};
 
@@ -121,9 +120,6 @@ class AnimatedEmojiText extends StatefulWidget {
 class _AnimatedEmojiTextState extends State<AnimatedEmojiText>
     with TickerProviderStateMixin {
   final Map<int, AnimationController> _controllers = {};
-  final Map<int, Timer> _staticEmojiTimers = {};
-  final Set<int> _animatedOnce = {};
-  final Set<int> _showStaticEmoji = {};
   late bool _autoplay;
 
   @override
@@ -142,38 +138,11 @@ class _AnimatedEmojiTextState extends State<AnimatedEmojiText>
     for (final c in _controllers.values) {
       c.dispose();
     }
-    for (final timer in _staticEmojiTimers.values) {
-      timer.cancel();
-    }
     super.dispose();
   }
 
   AnimationController _controllerFor(int index) =>
-      _controllers.putIfAbsent(index, () {
-        final controller = AnimationController(vsync: this);
-        controller.addStatusListener((status) {
-          if (status == AnimationStatus.forward ||
-              status == AnimationStatus.reverse) {
-            _staticEmojiTimers.remove(index)?.cancel();
-            _showStaticEmoji.remove(index);
-            _animatedOnce.add(index);
-          } else if (status == AnimationStatus.completed) {
-            if (!_animatedOnce.contains(index)) {
-              _showStaticEmoji.add(index);
-              return;
-            }
-            _staticEmojiTimers[index]?.cancel();
-            _staticEmojiTimers[index] = Timer(
-              AnimatedEmojiText.staticEmojiDelay,
-              () {
-                if (!mounted) return;
-                setState(() => _showStaticEmoji.add(index));
-              },
-            );
-          }
-        });
-        return controller;
-      });
+      _controllers.putIfAbsent(index, () => AnimationController(vsync: this));
 
   /// Gives [controller] a fixed duration for the bounce fallback and starts it
   /// if this message is autoplaying. Deferred to after the frame because it
@@ -202,7 +171,7 @@ class _AnimatedEmojiTextState extends State<AnimatedEmojiText>
       widget.size,
       graphemes.length,
     );
-    final fallbackStyle = TextStyle(fontSize: emojiSize * 0.92, height: 1.1);
+    final fallbackStyle = TextStyle(fontSize: emojiSize, height: 1.1);
 
     return Semantics(
       label: widget.text,
@@ -228,18 +197,27 @@ class _AnimatedEmojiTextState extends State<AnimatedEmojiText>
     AnimationController controller,
     String grapheme,
     TextStyle style,
-  ) {
+    double emojiSize, {
+    Key? key,
+  }) {
     _startBounce(controller);
-    return _BouncingEmoji(
-      animation: controller,
-      child: Text(grapheme, style: style),
+    return SizedBox.square(
+      key: key,
+      dimension: emojiSize,
+      child: _BouncingEmoji(
+        animation: controller,
+        child: _staticEmoji(grapheme, style),
+      ),
     );
   }
 
-  Widget _staticEmoji(String grapheme, TextStyle style) => FittedBox(
-    fit: BoxFit.contain,
-    alignment: Alignment.center,
-    child: Text(grapheme, style: style),
+  Widget _staticEmoji(String grapheme, TextStyle style) => Transform.scale(
+    scale: AnimatedEmojiText.steadyEmojiVisualScale,
+    child: FittedBox(
+      fit: BoxFit.contain,
+      alignment: Alignment.center,
+      child: Text(grapheme, style: style),
+    ),
   );
 
   Widget _buildGrapheme(
@@ -250,16 +228,22 @@ class _AnimatedEmojiTextState extends State<AnimatedEmojiText>
   ) {
     final controller = _controllerFor(index);
     final asset = AnimatedEmojiRegistry.assetFor(grapheme);
-    if (asset == null) return _bounce(controller, grapheme, fallbackStyle);
+    if (asset == null) {
+      return _bounce(
+        controller,
+        grapheme,
+        fallbackStyle,
+        emojiSize,
+        key: ValueKey('emoji-box-$index'),
+      );
+    }
 
     return AnimatedBuilder(
       animation: controller,
       builder: (context, child) {
         final isPlaying =
             controller.status == AnimationStatus.forward ||
-            controller.status == AnimationStatus.reverse ||
-            (controller.status == AnimationStatus.completed &&
-                !_showStaticEmoji.contains(index));
+            controller.status == AnimationStatus.reverse;
         return SizedBox.square(
           key: ValueKey('emoji-box-$index'),
           dimension: emojiSize,
@@ -292,7 +276,7 @@ class _AnimatedEmojiTextState extends State<AnimatedEmojiText>
         },
         errorBuilder: (context, error, stack) {
           debugPrint('AnimatedEmoji: failed to load $asset: $error');
-          return _bounce(controller, grapheme, fallbackStyle);
+          return _bounce(controller, grapheme, fallbackStyle, emojiSize);
         },
       ),
     );
