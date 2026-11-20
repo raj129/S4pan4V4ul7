@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:photo_vault/core/presentation/theme/app_theme.dart';
+import 'package:photo_vault/features/calculator/domain/models/secret_entry_config.dart';
 import 'package:photo_vault/features/calculator/presentation/calculator_feature.dart';
 import 'package:photo_vault/features/calculator/presentation/theme/calculator_theme.dart';
 import 'package:photo_vault/features/calculator/presentation/widgets/calc_button.dart';
@@ -15,6 +16,8 @@ void main() {
   Future<void> pumpCalculator(
     WidgetTester tester, {
     VoidCallback? onVaultTriggerRequested,
+    SecretEntryConfig secretEntryConfig = const SecretEntryConfig(),
+    Future<bool> Function(String pin)? onStealthPinSubmitted,
   }) {
     return tester.pumpWidget(
       MaterialApp(
@@ -24,7 +27,9 @@ void main() {
           body: SizedBox(
             height: 700,
             child: CalculatorFeature(
+              secretEntryConfig: secretEntryConfig,
               onVaultTriggerRequested: onVaultTriggerRequested ?? () {},
+              onStealthPinSubmitted: onStealthPinSubmitted,
             ),
           ),
         ),
@@ -180,4 +185,108 @@ void main() {
     expect(find.textContaining('Vault'), findsNothing);
     expect(find.textContaining('Hold'), findsNothing);
   });
+
+  testWidgets('holdPinConfirm (Method 99) submits PIN when MR is pressed and 7 + = still works', (
+    tester,
+  ) async {
+    String? submittedPin;
+    var defaultTriggered = 0;
+    await pumpCalculator(
+      tester,
+      secretEntryConfig: SecretEntryConfig.defaultsFor(
+        SecretEntryMethod.holdPinConfirm,
+        oneHandedEnabled: true,
+      ),
+      onVaultTriggerRequested: () => defaultTriggered++,
+      onStealthPinSubmitted: (pin) async {
+        submittedPin = pin;
+        return true;
+      },
+    );
+
+    final equals = await tester.startGesture(
+      tester.getCenter(find.byKey(const ValueKey<String>(kEqualsKeyId))),
+    );
+    await tester.pump(const Duration(milliseconds: 900));
+    await equals.up();
+    await tester.pump();
+
+    await tester.tap(find.byKey(const ValueKey<String>('digit-1')));
+    await tester.tap(find.byKey(const ValueKey<String>('digit-9')));
+    await tester.tap(find.byKey(const ValueKey<String>('digit-5')));
+    await tester.tap(find.byKey(const ValueKey<String>('digit-8')));
+    await tester.tap(find.byKey(const ValueKey<String>(kMemoryRecallKeyId)));
+    await tester.pumpAndSettle();
+
+    expect(submittedPin, '1958');
+
+    // Wait for cooldown, then verify default 7 + = still works as fallback.
+    await tester.pump(const Duration(milliseconds: 900));
+    final seven = await tester.startGesture(
+      tester.getCenter(find.byKey(const ValueKey<String>(kSevenKeyId))),
+    );
+    final equalsFallback = await tester.startGesture(
+      tester.getCenter(find.byKey(const ValueKey<String>(kEqualsKeyId))),
+    );
+    await tester.pump(const Duration(milliseconds: 1300));
+    expect(defaultTriggered, 1);
+    await seven.up();
+    await equalsFallback.up();
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets(
+    'secretMathEquation (Method 4) submits trailing PIN on hold and evaluates normally if invalid',
+    (tester) async {
+      String? submittedPin;
+      await pumpCalculator(
+        tester,
+        secretEntryConfig: SecretEntryConfig.defaultsFor(
+          SecretEntryMethod.secretMathEquation,
+        ),
+        onStealthPinSubmitted: (pin) async {
+          submittedPin = pin;
+          return pin == '1958';
+        },
+      );
+
+      // Invalid PIN evaluates normally on release with no error.
+      await tester.tap(find.byKey(const ValueKey<String>('digit-1')));
+      await tester.tap(find.byKey(const ValueKey<String>('add')));
+      await tester.tap(find.byKey(const ValueKey<String>('digit-1')));
+      await tester.tap(find.byKey(const ValueKey<String>('digit-2')));
+      await tester.tap(find.byKey(const ValueKey<String>('digit-3')));
+      await tester.tap(find.byKey(const ValueKey<String>('digit-4')));
+      await tester.pump();
+
+      final equalsInvalid = await tester.startGesture(
+        tester.getCenter(find.byKey(const ValueKey<String>(kEqualsKeyId))),
+      );
+      await tester.pump(const Duration(milliseconds: 1100));
+      await equalsInvalid.up();
+      await tester.pump();
+
+      expect(submittedPin, '1234');
+      expect(displayText('1235'), findsOneWidget);
+
+      await tester.pump(const Duration(milliseconds: 900));
+
+      // Valid PIN triggers direct unlock.
+      await tester.tap(find.byKey(const ValueKey<String>('clear')));
+      await tester.tap(find.byKey(const ValueKey<String>('digit-1')));
+      await tester.tap(find.byKey(const ValueKey<String>('digit-9')));
+      await tester.tap(find.byKey(const ValueKey<String>('digit-5')));
+      await tester.tap(find.byKey(const ValueKey<String>('digit-8')));
+      await tester.pump();
+
+      final equalsValid = await tester.startGesture(
+        tester.getCenter(find.byKey(const ValueKey<String>(kEqualsKeyId))),
+      );
+      await tester.pump(const Duration(milliseconds: 1100));
+      await equalsValid.up();
+      await tester.pumpAndSettle();
+
+      expect(submittedPin, '1958');
+    },
+  );
 }

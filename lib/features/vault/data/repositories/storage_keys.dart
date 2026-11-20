@@ -49,6 +49,7 @@ class StorageKeys {
   static const String themePalette = 'settings.theme_palette';
   static const String themeMode = 'settings.theme_mode';
   static const String mockLocationPrefs = 'settings.mock_location_prefs';
+  static const String secretEntryConfig = 'settings.secret_entry_config';
   static const String unlockFailures = 'vault.unlock_failures';
   static const String unlockLockedUntil = 'vault.unlock_locked_until';
 }

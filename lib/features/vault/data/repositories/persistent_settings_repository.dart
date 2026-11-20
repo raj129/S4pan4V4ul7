@@ -3,6 +3,7 @@ import 'dart:convert';
 import '../../domain/entities/user_mode.dart';
 import '../../domain/entities/incoming_chat_alert_preferences.dart';
 import '../../domain/repositories/settings_repository.dart';
+import '../../../calculator/domain/models/secret_entry_config.dart';
 import 'storage_keys.dart';
 import 'storage_mode_codec.dart';
 import 'storage_string_kv.dart';
@@ -348,4 +349,21 @@ class PersistentSettingsRepository implements SettingsRepository {
   @override
   Future<void> setMockLocationPrefs(String json) =>
       _kv.write(StorageKeys.mockLocationPrefs, json);
+
+  @override
+  Future<SecretEntryConfig> getSecretEntryConfig() async {
+    final raw = await _kv.read(StorageKeys.secretEntryConfig);
+    if (raw == null || raw.isEmpty) return const SecretEntryConfig();
+    try {
+      return SecretEntryConfig.fromJson(jsonDecode(raw));
+    } on FormatException {
+      return const SecretEntryConfig();
+    }
+  }
+
+  @override
+  Future<void> setSecretEntryConfig(SecretEntryConfig config) => _kv.write(
+    StorageKeys.secretEntryConfig,
+    jsonEncode(config.toJson()),
+  );
 }

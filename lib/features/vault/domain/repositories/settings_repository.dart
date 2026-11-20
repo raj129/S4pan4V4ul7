@@ -1,5 +1,6 @@
 import '../entities/user_mode.dart';
 import '../entities/incoming_chat_alert_preferences.dart';
+import '../../../calculator/domain/models/secret_entry_config.dart';
 
 abstract class SettingsRepository {
   static const defaultAutoLockTimeoutSeconds = 10;
@@ -147,4 +148,10 @@ abstract class SettingsRepository {
   Future<String?> getMockLocationPrefs() async => null;
 
   Future<void> setMockLocationPrefs(String json) async {}
+
+  /// Calculator secret-entry method & key configuration.
+  Future<SecretEntryConfig> getSecretEntryConfig() async =>
+      const SecretEntryConfig();
+
+  Future<void> setSecretEntryConfig(SecretEntryConfig config) async {}
 }

@@ -138,10 +138,13 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
     }
     final paletteId = await _deps.settingsRepository.getThemePaletteId();
     final rawThemeMode = await _deps.settingsRepository.getThemeMode();
+    final secretEntryConfig = await _deps.settingsRepository
+        .getSecretEntryConfig();
     if (!mounted) return;
     if (mode != null) _session.mode = mode;
     _session.calculatorOnboardingCompleted = calculatorOnboardingCompleted;
     _session.photoSyncEnabled = photoSyncEnabled;
+    _session.secretEntryConfig = secretEntryConfig;
     _deps.importManager.configureStorage(
       useExternalStorageMirror: externalMirrorEnabled,
       driveEncryptedBackupEnabled: driveEncryptedBackupEnabled,

@@ -1,6 +1,7 @@
 import 'package:photo_vault/features/vault/domain/entities/user_mode.dart';
 import 'package:photo_vault/features/vault/domain/entities/incoming_chat_alert_preferences.dart';
 import 'package:photo_vault/features/vault/domain/repositories/settings_repository.dart';
+import 'package:photo_vault/features/calculator/domain/models/secret_entry_config.dart';
 
 class InMemorySettingsRepository implements SettingsRepository {
   UserMode? _selectedMode;
@@ -261,6 +262,7 @@ class InMemorySettingsRepository implements SettingsRepository {
   }
 
   String? _mockLocationPrefs;
+  SecretEntryConfig _secretEntryConfig = const SecretEntryConfig();
 
   @override
   Future<String?> getMockLocationPrefs() async => _mockLocationPrefs;
@@ -268,5 +270,13 @@ class InMemorySettingsRepository implements SettingsRepository {
   @override
   Future<void> setMockLocationPrefs(String json) async {
     _mockLocationPrefs = json;
+  }
+
+  @override
+  Future<SecretEntryConfig> getSecretEntryConfig() async => _secretEntryConfig;
+
+  @override
+  Future<void> setSecretEntryConfig(SecretEntryConfig config) async {
+    _secretEntryConfig = config;
   }
 }

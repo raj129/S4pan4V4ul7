@@ -35,6 +35,7 @@ import '../../features/vault/presentation/screens/restore/restore_flow_screen.da
 import '../../features/vault/presentation/screens/settings/change_pin_screen.dart';
 import '../../features/vault/presentation/screens/settings/notification_settings_screen.dart';
 import '../../features/vault/presentation/screens/settings/notification_type_settings_screen.dart';
+import '../../features/vault/presentation/screens/settings/secret_entry_settings_screen.dart';
 import '../../features/vault/presentation/screens/settings/settings_screen.dart';
 import '../../features/backup/presentation/backup_screen.dart';
 import '../../features/vault/presentation/screens/trash/trash_screen.dart';
@@ -72,13 +73,29 @@ GoRouter buildAppRouter({
         path: '/',
         builder: (context, state) => UtilityShell(
           title: 'Calculator',
-          child: CalculatorFeature(
-            onVaultTriggerRequested: () {
-              final returnTo = deps.importManager.hasPendingShareFiles
-                  ? '/import/share-intent'
-                  : '/chat';
-              context.go('/lock?returnTo=${Uri.encodeComponent(returnTo)}');
-            },
+          child: ListenableBuilder(
+            listenable: session,
+            builder: (context, _) => CalculatorFeature(
+              secretEntryConfig: session.secretEntryConfig,
+              onVaultTriggerRequested: () {
+                final returnTo = deps.importManager.hasPendingShareFiles
+                    ? '/import/share-intent'
+                    : '/chat';
+                context.go('/lock?returnTo=${Uri.encodeComponent(returnTo)}');
+              },
+              onStealthPinSubmitted: (pin) async {
+                final ok = await deps.unlockVaultUseCase.execute(pin);
+                if (!ok) return false;
+                session.unlock();
+                final target = deps.importManager.hasPendingShareFiles
+                    ? '/import/share-intent'
+                    : '/chat';
+                if (context.mounted) {
+                  context.go(target);
+                }
+                return true;
+              },
+            ),
           ),
         ),
       ),
@@ -608,6 +625,13 @@ GoRoute _settingsRoute(
             ),
           ),
         ],
+      ),
+      GoRoute(
+        path: 'secret-entry',
+        builder: (context, state) => SecretEntrySettingsScreen(
+          settingsRepository: deps.settingsRepository,
+          onSettingsChanged: onSettingsChanged,
+        ),
       ),
       GoRoute(
         path: 'change-pin',

@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 
+import '../../features/calculator/domain/models/secret_entry_config.dart';
 import '../../features/vault/domain/entities/user_mode.dart';
 
 /// Mutable, observable session state shared between the app root and the
@@ -19,11 +20,13 @@ class AppSessionState extends ChangeNotifier {
   bool _calculatorOnboardingCompleted = false;
   bool _photoSyncEnabled = false;
   bool _unlocked = false;
+  SecretEntryConfig _secretEntryConfig = const SecretEntryConfig();
 
   UserMode get mode => _mode;
   bool get calculatorOnboardingCompleted => _calculatorOnboardingCompleted;
   bool get photoSyncEnabled => _photoSyncEnabled;
   bool get isUnlocked => _unlocked;
+  SecretEntryConfig get secretEntryConfig => _secretEntryConfig;
 
   set mode(UserMode value) {
     if (_mode == value) return;
@@ -40,6 +43,12 @@ class AppSessionState extends ChangeNotifier {
   set photoSyncEnabled(bool value) {
     if (_photoSyncEnabled == value) return;
     _photoSyncEnabled = value;
+    notifyListeners();
+  }
+
+  set secretEntryConfig(SecretEntryConfig value) {
+    if (_secretEntryConfig == value) return;
+    _secretEntryConfig = value;
     notifyListeners();
   }
 

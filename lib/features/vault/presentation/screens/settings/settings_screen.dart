@@ -6,6 +6,7 @@ import 'package:package_info_plus/package_info_plus.dart';
 
 import 'package:photo_vault/core/media/animated_media.dart';
 import 'package:photo_vault/core/platform/hdr_preview_capability.dart';
+import 'package:photo_vault/features/calculator/domain/models/secret_entry_config.dart';
 import 'package:photo_vault/features/vault/application/services/pin_validator.dart';
 import 'package:photo_vault/features/vault/application/usecases/unlock_vault_usecase.dart';
 import 'package:photo_vault/core/widgets/app_surfaces.dart';
@@ -71,6 +72,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   AppThemePalette _themePalette = AppThemePalette.royalIndigo;
   String _themeMode = 'system';
+  SecretEntryConfig _secretEntryConfig = const SecretEntryConfig();
   String? _version;
 
   @override
@@ -116,6 +118,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
         .isScreenshotProtectionEnabled();
     final paletteId = await widget.settingsRepository.getThemePaletteId();
     final themeMode = await widget.settingsRepository.getThemeMode();
+    final secretEntryConfig = await widget.settingsRepository
+        .getSecretEntryConfig();
     if (!mounted) return;
     setState(() {
       _autoLockOnBackground = autoLock;
@@ -127,6 +131,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         'light' || 'dark' => themeMode!,
         _ => 'system',
       };
+      _secretEntryConfig = secretEntryConfig;
       _loaded = true;
     });
   }
@@ -393,6 +398,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       )
                       .toList(growable: false),
                 ),
+              ),
+              ListTile(
+                key: const Key('secret-entry-settings-tile'),
+                leading: const Icon(Icons.touch_app_outlined),
+                title: const Text('Secret entry'),
+                subtitle: Text(
+                  _secretEntryConfig.oneHandedEnabled
+                      ? '${labelForCalcKeyId(_secretEntryConfig.defaultPrimaryKeyId)} & ${labelForCalcKeyId(_secretEntryConfig.defaultSecondaryKeyId)} + ${_secretEntryConfig.method.shortSummary}'
+                      : 'Default: Hold ${labelForCalcKeyId(_secretEntryConfig.defaultPrimaryKeyId)} and ${labelForCalcKeyId(_secretEntryConfig.defaultSecondaryKeyId)} together',
+                ),
+                trailing: const Icon(Icons.chevron_right_rounded),
+                onTap: () async {
+                  await context.push('/settings/secret-entry');
+                  if (mounted) unawaited(_loadSettings());
+                },
               ),
               ListTile(
                 leading: const Icon(Icons.password_rounded),

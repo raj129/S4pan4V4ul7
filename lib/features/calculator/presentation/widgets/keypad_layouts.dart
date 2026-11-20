@@ -43,6 +43,10 @@ class CalcKey {
 /// Key identifiers that participate in the hidden vault trigger.
 const String kSevenKeyId = 'digit-7';
 const String kEqualsKeyId = 'equals';
+const String kMemoryClearKeyId = 'memory-clear';
+const String kMemoryRecallKeyId = 'memory-recall';
+const String kMemoryAddKeyId = 'memory-add';
+const String kMemorySubtractKeyId = 'memory-subtract';
 
 /// The always-visible 4-column keypad.
 List<List<CalcKey>> basicKeypadRows() {
