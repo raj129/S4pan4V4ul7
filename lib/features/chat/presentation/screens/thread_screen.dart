@@ -58,10 +58,11 @@ import 'package:photo_vault/core/presentation/theme/app_colors.dart';
 import 'package:photo_vault/core/presentation/theme/app_spacing.dart';
 import '../widgets/chat_day_divider.dart';
 import '../widgets/chat_media_preview.dart';
+import '../widgets/media_editor/media_editor_models.dart';
+import 'chat_media_editor_screen.dart';
 import '../widgets/chat_scrollbar.dart';
 import '../widgets/chat_wallpaper.dart';
-import '../widgets/image_quality_sheet.dart';
-import '../widgets/video_quality_sheet.dart';
+
 import '../widgets/contact_info_sheet.dart';
 import '../widgets/data_sms_number_dialog.dart';
 import '../widgets/message_bubble.dart';
@@ -587,9 +588,27 @@ class _ThreadScreenState extends State<ThreadScreen>
 
     final images = shared.where((f) => !isVideo(f)).toList();
     final videos = shared.where(isVideo).toList();
-    if (images.isNotEmpty) await _sendImages(cubit, images, messenger);
+    final editorItems = <MediaEditorItem>[];
+    for (final image in images) {
+      if (await image.length() > ActiveThreadCubit.maxAttachmentBytes) {
+        messenger.showSnackBar(
+          const SnackBar(
+            content: Text('Attachments must be smaller than 64 MB.'),
+          ),
+        );
+        continue;
+      }
+      editorItems.add(
+        MediaEditorItem(
+          id: _uuid.v4(),
+          originalBytes: Uint8List.fromList(await image.readAsBytes()),
+          isVideo: false,
+          filename: image.name,
+          sourceUri: _originalSourceUri(image),
+        ),
+      );
+    }
     for (final video in videos) {
-      if (!mounted) return;
       if (await video.length() > ActiveThreadCubit.maxAttachmentBytes) {
         messenger.showSnackBar(
           const SnackBar(
@@ -598,17 +617,57 @@ class _ThreadScreenState extends State<ThreadScreen>
         );
         continue;
       }
-      final bytes = Uint8List.fromList(await video.readAsBytes());
-      try {
-        if (!mounted) return;
-        await cubit.sendMedia(
-          messageId: _uuid.v4(),
-          rawBytes: bytes,
-          type: MessageType.video,
+      editorItems.add(
+        MediaEditorItem(
+          id: _uuid.v4(),
+          originalBytes: Uint8List.fromList(await video.readAsBytes()),
+          isVideo: true,
+          filename: video.name,
           sourceUri: _originalSourceUri(video),
+        ),
+      );
+    }
+    if (editorItems.isEmpty || !mounted) return;
+    try {
+      final result = await _openMediaEditor(cubit, editorItems);
+      if (result == null || !mounted) return;
+      final editedImages = result.items.where((i) => !i.isVideo).toList();
+      final editedVideos = result.items.where((i) => i.isVideo).toList();
+      if (editedImages.isNotEmpty) {
+        await cubit.sendMultipleImages(
+          items: editedImages
+              .map(
+                (i) => OutgoingImageItem(
+                  messageId: i.id,
+                  bytes: i.bytes,
+                  filename: i.filename,
+                  sourceUri: i.sourceUri,
+                  sourceFlags: i.sourceFlags,
+                ),
+              )
+              .toList(growable: false),
+          quality: result.imageQuality,
         );
-      } finally {
-        bytes.fillRange(0, bytes.length, 0);
+      }
+      if (editedVideos.isNotEmpty) {
+        await cubit.sendMultipleVideos(
+          items: editedVideos
+              .map(
+                (i) => OutgoingVideoItem(
+                  messageId: i.id,
+                  bytes: i.bytes,
+                  filename: i.filename,
+                  sourceUri: i.sourceUri,
+                  sourceFlags: i.sourceFlags,
+                ),
+              )
+              .toList(growable: false),
+          quality: result.videoQuality,
+        );
+      }
+    } finally {
+      for (final item in editorItems) {
+        item.originalBytes.fillRange(0, item.originalBytes.length, 0);
       }
     }
   }
@@ -3278,18 +3337,28 @@ class _ThreadScreenState extends State<ThreadScreen>
           if (attach == false) {
             await recovery.remove(uid, thread, id);
           } else if (attach == true) {
-            final quality = await _askImageQuality(
-              bytes.length,
-              imageBytes: bytes,
+            final result = await _openMediaEditor(
+              cubit,
+              [
+                MediaEditorItem(
+                  id: id,
+                  originalBytes: bytes,
+                  isVideo: false,
+                ),
+              ],
             );
-            if (quality == null || !mounted || !widget.vaultBridge.isUnlocked) {
+            if (result == null ||
+                result.items.isEmpty ||
+                !mounted ||
+                !widget.vaultBridge.isUnlocked) {
               continue;
             }
+            final edited = result.items.first;
             await cubit.sendMedia(
               messageId: id,
-              rawBytes: bytes,
+              rawBytes: edited.bytes,
               type: MessageType.image,
-              quality: quality,
+              quality: result.imageQuality,
               propagateFailure: true,
             );
             await recovery.remove(uid, thread, id);
@@ -3890,18 +3959,27 @@ class _ThreadScreenState extends State<ThreadScreen>
         }
         bytes = Uint8List.fromList(await file.readAsBytes());
         if (!mounted || !context.mounted) return;
-        final quality = await VideoQualitySheet.show(
-          context,
-          originalBytes: bytes.length,
-          selected: VideoQuality.high,
-          videoBytes: bytes,
+        final result = await _openMediaEditor(
+          cubit,
+          [
+            MediaEditorItem(
+              id: _uuid.v4(),
+              originalBytes: bytes,
+              isVideo: true,
+              filename: file.name,
+            ),
+          ],
         );
-        if (quality == null || !mounted || !context.mounted) return;
+        if (result == null || result.items.isEmpty || !mounted || !context.mounted) {
+          return;
+        }
+        final edited = result.items.first;
         await cubit.sendMedia(
-          messageId: _uuid.v4(),
-          rawBytes: bytes,
+          messageId: edited.id,
+          rawBytes: edited.bytes,
           type: MessageType.video,
-          videoQuality: quality,
+          videoQuality: result.videoQuality,
+          filename: edited.filename,
         );
       } catch (error) {
         if (mounted) {
@@ -3942,25 +4020,39 @@ class _ThreadScreenState extends State<ThreadScreen>
               ),
             );
           }
-          final quality = await _askImageQuality(
-            photos.first.bytes.length,
-            imageBytes: photos.first.bytes,
+          final result = await _openMediaEditor(
+            cubit,
+            photos
+                .map(
+                  (att) => MediaEditorItem(
+                    id: _uuid.v4(),
+                    originalBytes: att.bytes,
+                    isVideo: false,
+                    filename: att.fileName,
+                    sourceUri: att.sourceUri,
+                    sourceFlags: att.sourceFlags,
+                  ),
+                )
+                .toList(growable: false),
           );
-          if (quality == null || !mounted) return;
+          if (result == null || !mounted) return;
 
-          final items = photos
+          final items = result.items
               .map(
                 (att) => OutgoingImageItem(
-                  messageId: _uuid.v4(),
+                  messageId: att.id,
                   bytes: att.bytes,
                   sourceUri: att.sourceUri,
                   sourceFlags: att.sourceFlags,
-                  filename: att.fileName,
+                  filename: att.filename,
                 ),
               )
               .toList(growable: false);
 
-          await cubit.sendMultipleImages(items: items, quality: quality);
+          await cubit.sendMultipleImages(
+            items: items,
+            quality: result.imageQuality,
+          );
           return;
         }
 
@@ -3976,27 +4068,35 @@ class _ThreadScreenState extends State<ThreadScreen>
         }
 
         if (choice == 'video') {
-          final selectedQuality = await VideoQualitySheet.show(
-            context,
-            originalBytes: selected.first.bytes.length,
-            selected: VideoQuality.high,
-            videoBytes: selected.length == 1 ? selected.first.bytes : null,
-            showEstimates: selected.length == 1,
-          );
-          if (selectedQuality == null || !mounted || !context.mounted) return;
-          await cubit.sendMultipleVideos(
-            items: selected
+          final result = await _openMediaEditor(
+            cubit,
+            selected
                 .map(
-                  (attachment) => OutgoingVideoItem(
-                    messageId: _uuid.v4(),
-                    bytes: attachment.bytes,
+                  (attachment) => MediaEditorItem(
+                    id: _uuid.v4(),
+                    originalBytes: attachment.bytes,
+                    isVideo: true,
                     filename: attachment.fileName,
                     sourceUri: attachment.sourceUri,
                     sourceFlags: attachment.sourceFlags,
                   ),
                 )
                 .toList(growable: false),
-            quality: selectedQuality,
+          );
+          if (result == null || !mounted || !context.mounted) return;
+          await cubit.sendMultipleVideos(
+            items: result.items
+                .map(
+                  (attachment) => OutgoingVideoItem(
+                    messageId: attachment.id,
+                    bytes: attachment.bytes,
+                    filename: attachment.filename,
+                    sourceUri: attachment.sourceUri,
+                    sourceFlags: attachment.sourceFlags,
+                  ),
+                )
+                .toList(growable: false),
+            quality: result.videoQuality,
           );
           return;
         }
@@ -4074,19 +4174,32 @@ class _ThreadScreenState extends State<ThreadScreen>
       final bytes = Uint8List.fromList(await file.readAsBytes());
       try {
         if (!mounted || !context.mounted) return;
-        final quality = await VideoQualitySheet.show(
-          context,
-          originalBytes: bytes.length,
-          selected: VideoQuality.high,
-          videoBytes: bytes,
+        final result = await _openMediaEditor(
+          cubit,
+          [
+            MediaEditorItem(
+              id: _uuid.v4(),
+              originalBytes: bytes,
+              isVideo: true,
+              filename: file.name,
+              sourceUri: _originalSourceUri(file),
+            ),
+          ],
         );
-        if (quality == null || !mounted || !context.mounted) return;
+        if (result == null ||
+            result.items.isEmpty ||
+            !mounted ||
+            !context.mounted) {
+          return;
+        }
+        final edited = result.items.first;
         await cubit.sendMedia(
-          messageId: _uuid.v4(),
-          rawBytes: bytes,
+          messageId: edited.id,
+          rawBytes: edited.bytes,
           type: MessageType.video,
-          videoQuality: quality,
-          sourceUri: _originalSourceUri(file),
+          videoQuality: result.videoQuality,
+          filename: edited.filename,
+          sourceUri: edited.sourceUri,
         );
       } finally {
         bytes.fillRange(0, bytes.length, 0);
@@ -4433,7 +4546,32 @@ class _ThreadScreenState extends State<ThreadScreen>
   /// than queueing an unbounded amount of compression work.
   static const _maxPhotosPerSend = 10;
 
-  /// Asks for a quality once, then sends every picked photo.
+  /// Opens the Signal-style media editor for [items] and persists the chosen
+  /// image quality if updated.
+  Future<MediaEditorResult?> _openMediaEditor(
+    ActiveThreadCubit cubit,
+    List<MediaEditorItem> items,
+  ) async {
+    final settings = widget.settingsRepository;
+    final remembered = ImageQualityX.parse(
+      await settings?.getChatImageQuality(),
+    );
+    if (!mounted) return null;
+    final result = await ChatMediaEditorScreen.open(
+      context,
+      items: items,
+      initialImageQuality: remembered,
+      initialVideoQuality: VideoQuality.high,
+      stickerPack: _stickerPackFor(cubit.myUid),
+    );
+    if (result == null) return null;
+    if (result.imageQuality != remembered) {
+      await settings?.setChatImageQuality(result.imageQuality.name);
+    }
+    return result;
+  }
+
+  /// Opens the media editor for picked photos, then sends every edited photo.
   Future<void> _sendImages(
     ActiveThreadCubit cubit,
     List<XFile> files,
@@ -4448,74 +4586,65 @@ class _ThreadScreenState extends State<ThreadScreen>
       );
     }
 
-    // The sheet is sized from the first photo and applies to the whole batch,
-    // so picking ten photos is still one decision.
-    final firstBytes = Uint8List.fromList(await picked.first.readAsBytes());
-    if (!mounted) return;
-    final quality = await _askImageQuality(
-      firstBytes.length,
-      imageBytes: firstBytes,
-    );
-    if (quality == null || !mounted) return;
-
-    final items = <OutgoingImageItem>[];
-    for (var i = 0; i < picked.length; i++) {
-      final bytes = i == 0
-          ? firstBytes
-          : Uint8List.fromList(await picked[i].readAsBytes());
-      items.add(
-        OutgoingImageItem(
-          messageId: _uuid.v4(),
-          bytes: bytes,
-          sourceUri: retainSource ? _originalSourceUri(picked[i]) : null,
-          filename: picked[i].name,
+    final editorItems = <MediaEditorItem>[];
+    for (final file in picked) {
+      editorItems.add(
+        MediaEditorItem(
+          id: _uuid.v4(),
+          originalBytes: Uint8List.fromList(await file.readAsBytes()),
+          isVideo: false,
+          sourceUri: retainSource ? _originalSourceUri(file) : null,
+          filename: file.name,
         ),
       );
     }
+    if (!mounted) return;
+    final result = await _openMediaEditor(cubit, editorItems);
+    if (result == null || !mounted) return;
 
-    await cubit.sendMultipleImages(items: items, quality: quality);
+    final items = result.items
+        .map(
+          (i) => OutgoingImageItem(
+            messageId: i.id,
+            bytes: i.bytes,
+            sourceUri: i.sourceUri,
+            sourceFlags: i.sourceFlags,
+            filename: i.filename,
+          ),
+        )
+        .toList(growable: false);
+
+    await cubit.sendMultipleImages(items: items, quality: result.imageQuality);
   }
 
-  /// Shows the quality sheet, seeded with the last choice and remembering a
-  /// new one. Returns null if the sheet was dismissed.
-  Future<ImageQuality?> _askImageQuality(
-    int originalBytes, {
-    Uint8List? imageBytes,
-  }) async {
-    final settings = widget.settingsRepository;
-    final remembered = ImageQualityX.parse(
-      await settings?.getChatImageQuality(),
-    );
-    if (!mounted) return null;
-    final chosen = await ImageQualitySheet.show(
-      context,
-      originalBytes: originalBytes,
-      selected: remembered,
-      imageBytes: imageBytes,
-    );
-    if (chosen == null) return null;
-    if (chosen != remembered) {
-      await settings?.setChatImageQuality(chosen.name);
-    }
-    return chosen;
-  }
-
-  /// Asks which quality to send a single photo at, then sends it.
+  /// Opens the media editor for a single photo, then sends it.
   Future<void> _sendImageWithQuality(
     ActiveThreadCubit cubit,
     Uint8List bytes, {
     String? sourceUri,
     int sourceFlags = 0,
   }) async {
-    final quality = await _askImageQuality(bytes.length, imageBytes: bytes);
-    if (quality == null || !mounted) return;
+    final result = await _openMediaEditor(
+      cubit,
+      [
+        MediaEditorItem(
+          id: _uuid.v4(),
+          originalBytes: bytes,
+          isVideo: false,
+          sourceUri: sourceUri,
+          sourceFlags: sourceFlags,
+        ),
+      ],
+    );
+    if (result == null || result.items.isEmpty || !mounted) return;
+    final edited = result.items.first;
     await cubit.sendMedia(
-      messageId: _uuid.v4(),
-      rawBytes: bytes,
+      messageId: edited.id,
+      rawBytes: edited.bytes,
       type: MessageType.image,
-      quality: quality,
-      sourceUri: sourceUri,
-      sourceFlags: sourceFlags,
+      quality: result.imageQuality,
+      sourceUri: edited.sourceUri,
+      sourceFlags: edited.sourceFlags,
     );
   }
 
@@ -4563,22 +4692,36 @@ class _ThreadScreenState extends State<ThreadScreen>
         return;
       }
       if (videoExtensions.contains(extension)) {
-        final quality = isHdrVideo(bytes)
-            ? VideoQuality.original
-            : await VideoQualitySheet.show(
-                context,
-                originalBytes: bytes.length,
-                selected: VideoQuality.high,
-                videoBytes: bytes,
-              );
-        if (quality == null || !mounted) return;
-        await cubit.sendMedia(
-          messageId: _uuid.v4(),
-          rawBytes: bytes,
-          type: MessageType.video,
-          videoQuality: quality,
-          filename: picked.name,
-        );
+        if (isHdrVideo(bytes)) {
+          await cubit.sendMedia(
+            messageId: _uuid.v4(),
+            rawBytes: bytes,
+            type: MessageType.video,
+            videoQuality: VideoQuality.original,
+            filename: picked.name,
+          );
+        } else {
+          final result = await _openMediaEditor(
+            cubit,
+            [
+              MediaEditorItem(
+                id: _uuid.v4(),
+                originalBytes: bytes,
+                isVideo: true,
+                filename: picked.name,
+              ),
+            ],
+          );
+          if (result == null || result.items.isEmpty || !mounted) return;
+          final edited = result.items.first;
+          await cubit.sendMedia(
+            messageId: edited.id,
+            rawBytes: edited.bytes,
+            type: MessageType.video,
+            videoQuality: result.videoQuality,
+            filename: edited.filename,
+          );
+        }
         return;
       }
       await cubit.sendMedia(
@@ -4612,22 +4755,36 @@ class _ThreadScreenState extends State<ThreadScreen>
       );
       if (!mounted) return;
       if (photo.mimeType.startsWith('video/')) {
-        final quality = isHdrVideo(bytes)
-            ? VideoQuality.original
-            : await VideoQualitySheet.show(
-                context,
-                originalBytes: bytes.length,
-                selected: VideoQuality.high,
-                videoBytes: bytes,
-              );
-        if (quality == null || !mounted) return;
-        await cubit.sendMedia(
-          messageId: _uuid.v4(),
-          rawBytes: bytes,
-          type: MessageType.video,
-          videoQuality: quality,
-          filename: photo.originalFilename,
-        );
+        if (isHdrVideo(bytes)) {
+          await cubit.sendMedia(
+            messageId: _uuid.v4(),
+            rawBytes: bytes,
+            type: MessageType.video,
+            videoQuality: VideoQuality.original,
+            filename: photo.originalFilename,
+          );
+        } else {
+          final result = await _openMediaEditor(
+            cubit,
+            [
+              MediaEditorItem(
+                id: _uuid.v4(),
+                originalBytes: bytes,
+                isVideo: true,
+                filename: photo.originalFilename,
+              ),
+            ],
+          );
+          if (result == null || result.items.isEmpty || !mounted) return;
+          final edited = result.items.first;
+          await cubit.sendMedia(
+            messageId: edited.id,
+            rawBytes: edited.bytes,
+            type: MessageType.video,
+            videoQuality: result.videoQuality,
+            filename: edited.filename,
+          );
+        }
       } else if (isGif(bytes) || isHdrOrMotionPhoto(bytes)) {
         await cubit.sendMedia(
           messageId: _uuid.v4(),

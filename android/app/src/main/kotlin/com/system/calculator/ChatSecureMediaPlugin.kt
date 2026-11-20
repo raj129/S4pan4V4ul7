@@ -185,6 +185,28 @@ class ChatSecureMediaPlugin : FlutterPlugin, ActivityAware, MethodChannel.Method
                         compressVideo(bytes, targetHeight, targetBitrate)
                     }
                 }
+                "exportEditedVideo" -> {
+                    val bytes = call.argument<ByteArray>("bytes") ?: throw IllegalArgumentException()
+                    val overlayPng = call.argument<ByteArray>("overlayPng")
+                    val rotationQuarterTurns = call.argument<Number>("rotationQuarterTurns")?.toInt() ?: 0
+                    val cropLeft = call.argument<Number>("cropLeft")?.toFloat() ?: 0f
+                    val cropTop = call.argument<Number>("cropTop")?.toFloat() ?: 0f
+                    val cropRight = call.argument<Number>("cropRight")?.toFloat() ?: 1f
+                    val cropBottom = call.argument<Number>("cropBottom")?.toFloat() ?: 1f
+                    val targetHeight = call.argument<Number>("targetHeight")?.toInt() ?: 0
+                    background(result) {
+                        exportEditedVideo(
+                            bytes = bytes,
+                            overlayPng = overlayPng,
+                            rotationQuarterTurns = rotationQuarterTurns,
+                            cropLeft = cropLeft,
+                            cropTop = cropTop,
+                            cropRight = cropRight,
+                            cropBottom = cropBottom,
+                            targetHeight = targetHeight,
+                        )
+                    }
+                }
                 "showAudio", "showVideo", "showPdf" -> {
                     val bytes = call.argument<ByteArray>("bytes") ?: throw IllegalArgumentException()
                     if (bytes.isEmpty() || bytes.size > ChatMemoryDataSource.MAX_BYTES) {
@@ -743,6 +765,132 @@ class ChatSecureMediaPlugin : FlutterPlugin, ActivityAware, MethodChannel.Method
         } catch (_: Exception) {
             // Fallback to original bytes
         } finally {
+            if (inputFile.exists()) inputFile.delete()
+            if (outputFile.exists()) outputFile.delete()
+        }
+
+        return meta + mapOf("bytes" to bytes)
+    }
+
+    @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
+    private fun exportEditedVideo(
+        bytes: ByteArray,
+        overlayPng: ByteArray?,
+        rotationQuarterTurns: Int,
+        cropLeft: Float,
+        cropTop: Float,
+        cropRight: Float,
+        cropBottom: Float,
+        targetHeight: Int,
+    ): Map<String, Any?> {
+        val meta = extractVideoMetadata(bytes)
+        val origW = (meta["width"] as? Number)?.toInt() ?: 0
+        val origH = (meta["height"] as? Number)?.toInt() ?: 0
+
+        val inputFile = java.io.File.createTempFile("chat_vid_edit_in", ".mp4", context.cacheDir)
+        val outputFile = java.io.File.createTempFile("chat_vid_edit_out", ".mp4", context.cacheDir)
+        var overlayBitmap: android.graphics.Bitmap? = null
+        try {
+            inputFile.writeBytes(bytes)
+            if (overlayPng != null && overlayPng.isNotEmpty()) {
+                overlayBitmap = android.graphics.BitmapFactory.decodeByteArray(overlayPng, 0, overlayPng.size)
+            }
+
+            val videoEffects = mutableListOf<androidx.media3.common.Effect>()
+            val turns = ((rotationQuarterTurns % 4) + 4) % 4
+            if (turns != 0) {
+                val ccwDegrees = ((4 - turns) % 4) * 90f
+                videoEffects.add(
+                    androidx.media3.effect.ScaleAndRotateTransformation.Builder()
+                        .setRotationDegrees(ccwDegrees)
+                        .build()
+                )
+            }
+
+            val cLeft = cropLeft.coerceIn(0f, 0.98f)
+            val cTop = cropTop.coerceIn(0f, 0.98f)
+            val cRight = cropRight.coerceIn(cLeft + 0.02f, 1f)
+            val cBottom = cropBottom.coerceIn(cTop + 0.02f, 1f)
+            val isCropped = cLeft > 0.002f || cTop > 0.002f || cRight < 0.998f || cBottom < 0.998f
+            if (isCropped) {
+                val ndcLeft = cLeft * 2f - 1f
+                val ndcRight = cRight * 2f - 1f
+                val ndcTop = 1f - cTop * 2f
+                val ndcBottom = 1f - cBottom * 2f
+                videoEffects.add(androidx.media3.effect.Crop(ndcLeft, ndcRight, ndcBottom, ndcTop))
+            }
+
+            if (overlayBitmap != null) {
+                val bitmapOverlay = androidx.media3.effect.BitmapOverlay.createStaticBitmapOverlay(overlayBitmap)
+                videoEffects.add(androidx.media3.effect.OverlayEffect(listOf(bitmapOverlay)))
+            }
+
+            val rotW = if (turns % 2 == 1) origH else origW
+            val rotH = if (turns % 2 == 1) origW else origH
+            val croppedW = maxOf(2, (rotW * (cRight - cLeft)).toInt())
+            val croppedH = maxOf(2, (rotH * (cBottom - cTop)).toInt())
+            if (targetHeight > 0 && croppedH > targetHeight) {
+                val scale = targetHeight.toFloat() / croppedH.toFloat()
+                val outW = (maxOf(2, (croppedW * scale).toInt()) / 2) * 2
+                val outH = (maxOf(2, (croppedH * scale).toInt()) / 2) * 2
+                videoEffects.add(
+                    androidx.media3.effect.Presentation.createForWidthAndHeight(
+                        outW,
+                        outH,
+                        androidx.media3.effect.Presentation.LAYOUT_SCALE_TO_FIT
+                    )
+                )
+            }
+
+            val latch = java.util.concurrent.CountDownLatch(1)
+            var errorOccurred: Throwable? = null
+
+            main.post {
+                try {
+                    val mediaItem = androidx.media3.common.MediaItem.fromUri(android.net.Uri.fromFile(inputFile))
+                    val editedItem = androidx.media3.transformer.EditedMediaItem.Builder(mediaItem)
+                        .setEffects(androidx.media3.transformer.Effects(emptyList(), videoEffects))
+                        .build()
+
+                    val transformer = androidx.media3.transformer.Transformer.Builder(context)
+                        .setVideoMimeType(androidx.media3.common.MimeTypes.VIDEO_H264)
+                        .addListener(object : androidx.media3.transformer.Transformer.Listener {
+                            override fun onCompleted(
+                                composition: androidx.media3.transformer.Composition,
+                                result: androidx.media3.transformer.ExportResult
+                            ) {
+                                latch.countDown()
+                            }
+
+                            override fun onError(
+                                composition: androidx.media3.transformer.Composition,
+                                result: androidx.media3.transformer.ExportResult,
+                                exception: androidx.media3.transformer.ExportException
+                            ) {
+                                errorOccurred = exception
+                                latch.countDown()
+                            }
+                        })
+                        .build()
+
+                    outputFile.delete()
+                    transformer.start(editedItem, outputFile.absolutePath)
+                } catch (t: Throwable) {
+                    errorOccurred = t
+                    latch.countDown()
+                }
+            }
+
+            val completed = latch.await(120, java.util.concurrent.TimeUnit.SECONDS)
+            if (completed && errorOccurred == null && outputFile.exists() && outputFile.length() > 0) {
+                val exportedBytes = outputFile.readBytes()
+                val updatedMeta = extractVideoMetadata(exportedBytes)
+                return updatedMeta + mapOf("bytes" to exportedBytes)
+            }
+        } catch (_: Exception) {
+            // Fallback to original bytes
+        } finally {
+            overlayBitmap?.recycle()
             if (inputFile.exists()) inputFile.delete()
             if (outputFile.exists()) outputFile.delete()
         }
