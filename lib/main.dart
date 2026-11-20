@@ -13,6 +13,7 @@ import './features/chat/application/services/push_notification_service.dart';
 import 'firebase_options.dart';
 import './core/app/vault_app.dart';
 import './features/chat/presentation/widgets/animated_emoji.dart';
+import './core/storage/shared_preferences_readiness.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -27,6 +28,12 @@ Future<void> main() async {
     FirebaseCrashlytics.instance.recordError(error, stack, fatal: true);
     return true;
   };
+
+  try {
+    await SharedPreferencesReadiness.instance.ensureInitialized();
+  } catch (e, stack) {
+    unawaited(FirebaseCrashlytics.instance.recordError(e, stack));
+  }
 
   // Guarded so a platform failure or a slow Play Services call can never keep
   // the first frame from rendering; sign-in surfaces its own error later.

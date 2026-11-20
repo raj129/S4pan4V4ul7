@@ -13,6 +13,7 @@ import 'package:photo_vault/features/chat/presentation/widgets/chat_media_previe
 import 'package:photo_vault/features/chat/presentation/widgets/animated_emoji.dart';
 import 'package:photo_vault/features/chat/presentation/widgets/chat_bubble_shape.dart';
 import 'package:photo_vault/features/chat/presentation/widgets/message_bubble.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class _NoMediaRepository implements MediaRepository {
   @override
@@ -62,6 +63,10 @@ ChatMessage _message({
 ).withDecryptedText(text);
 
 void main() {
+  setUp(() {
+    SharedPreferences.setMockInitialValues({});
+  });
+
   Future<List<String>> pumpBubble(
     WidgetTester tester, {
     Map<String, String> reactions = const {},

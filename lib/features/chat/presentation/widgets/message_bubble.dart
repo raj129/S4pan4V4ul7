@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:intl/intl.dart';
 
+import 'package:photo_vault/core/storage/shared_preferences_readiness.dart';
 import '../../domain/entities/chat_message.dart';
 import '../../application/media/android_chat_local_media.dart';
 import '../../domain/entities/message_metadata.dart';
@@ -991,6 +992,7 @@ class ThemedEmojiPicker extends StatefulWidget {
     this.showBackspace = true,
     this.showSearchButton = true,
     this.columns = 8,
+    this.preferencesReadiness,
   });
 
   final OnEmojiSelected onEmojiSelected;
@@ -1001,6 +1003,7 @@ class ThemedEmojiPicker extends StatefulWidget {
   final bool showBackspace;
   final bool showSearchButton;
   final int columns;
+  final SharedPreferencesReadiness? preferencesReadiness;
 
   @override
   State<ThemedEmojiPicker> createState() => _ThemedEmojiPickerState();
@@ -1008,6 +1011,16 @@ class ThemedEmojiPicker extends StatefulWidget {
 
 class _ThemedEmojiPickerState extends State<ThemedEmojiPicker> {
   final _searching = ValueNotifier<bool>(false);
+  late SharedPreferencesReadiness _preferencesReadiness;
+  late Future<void> _preferencesReady;
+
+  @override
+  void initState() {
+    super.initState();
+    _preferencesReadiness =
+        widget.preferencesReadiness ?? SharedPreferencesReadiness.instance;
+    _preferencesReady = _preferencesReadiness.ensureInitialized();
+  }
 
   @override
   void dispose() {
@@ -1059,6 +1072,44 @@ class _ThemedEmojiPickerState extends State<ThemedEmojiPicker> {
 
   @override
   Widget build(BuildContext context) {
+    return FutureBuilder<void>(
+      future: _preferencesReady,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState != ConnectionState.done) {
+          return SizedBox(
+            height: widget.height,
+            child: const Center(child: Text('Loading emoji...')),
+          );
+        }
+        if (snapshot.hasError) {
+          return SizedBox(
+            height: widget.height,
+            child: Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text('Emoji history is unavailable.'),
+                  const SizedBox(height: 8),
+                  FilledButton(
+                    onPressed: () {
+                      setState(() {
+                        _preferencesReady = _preferencesReadiness
+                            .ensureInitialized();
+                      });
+                    },
+                    child: const Text('Retry'),
+                  ),
+                ],
+              ),
+            ),
+          );
+        }
+        return _buildPicker();
+      },
+    );
+  }
+
+  Widget _buildPicker() {
     return ValueListenableBuilder<bool>(
       valueListenable: _searching,
       builder: (context, searching, _) {
