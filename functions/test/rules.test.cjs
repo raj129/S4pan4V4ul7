@@ -6,7 +6,13 @@ const {
   assertSucceeds,
   initializeTestEnvironment,
 } = require('@firebase/rules-unit-testing');
-const { doc, getDoc, setDoc } = require('firebase/firestore');
+const {
+  arrayUnion,
+  doc,
+  getDoc,
+  setDoc,
+  updateDoc,
+} = require('firebase/firestore');
 const { getBytes, ref, uploadBytes } = require('firebase/storage');
 
 const projectId = 'demo-shadow4726262';
@@ -148,6 +154,48 @@ test('Firestore denies writing another participant’s live location', async () 
       expiresAt: now + 15 * 60 * 1000,
       lastUpdatedAt: now,
       encryptedPayload: 'opaque-ciphertext',
+    }),
+  );
+});
+
+test('Firestore lets recipients timestamp only their own message receipts', async () => {
+  const messagePath = 'threads/alice_bob/messages/message-1';
+  const original = {
+    messageId: 'message-1',
+    threadId: 'alice_bob',
+    senderId: 'alice',
+    encryptedText: 'ciphertext',
+    sentAt: Date.now() - 1_000,
+    deletedFor: [],
+    deliveredTo: [],
+    readBy: [],
+  };
+  await testEnvironment.withSecurityRulesDisabled(async (context) => {
+    await setDoc(doc(context.firestore(), messagePath), original);
+  });
+
+  const aliceDb = testEnvironment.authenticatedContext('alice').firestore();
+  const bobDb = testEnvironment.authenticatedContext('bob').firestore();
+  const aliceMessage = doc(aliceDb, messagePath);
+  const bobMessage = doc(bobDb, messagePath);
+  const now = Date.now();
+
+  await assertSucceeds(
+    updateDoc(bobMessage, {
+      deliveredTo: arrayUnion('bob'),
+      'deliveredAtBy.bob': now,
+      readBy: arrayUnion('bob'),
+      'readAtBy.bob': now + 1,
+    }),
+  );
+  await assertFails(
+    updateDoc(bobMessage, {
+      'deliveredAtBy.alice': now + 10,
+    }),
+  );
+  await assertFails(
+    updateDoc(aliceMessage, {
+      'readAtBy.bob': now + 20,
     }),
   );
 });

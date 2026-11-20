@@ -618,6 +618,15 @@ class MessageBubble extends StatelessWidget {
                     onForward!();
                   },
                 ),
+              if (isMine && !message.isDataSms)
+                ListTile(
+                  leading: const Icon(Icons.info_outline_rounded),
+                  title: const Text('Message info'),
+                  onTap: () {
+                    Navigator.pop(sheetContext);
+                    _showMessageInfoSheet(context);
+                  },
+                ),
               if (onSaveToVault != null)
                 ListTile(
                   leading: const Icon(Icons.archive_outlined),
@@ -667,6 +676,117 @@ class MessageBubble extends StatelessWidget {
                 ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+
+  void _showMessageInfoSheet(BuildContext context) {
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) => SafeArea(
+        child: SingleChildScrollView(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(
+              AppSpacing.md,
+              0,
+              AppSpacing.md,
+              AppSpacing.lg,
+            ),
+            child: _MessageInfoContent(message: message, otherUid: otherUid),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _MessageInfoContent extends StatelessWidget {
+  const _MessageInfoContent({required this.message, required this.otherUid});
+
+  final ChatMessage message;
+  final String otherUid;
+
+  @override
+  Widget build(BuildContext context) {
+    final status =
+        message.status ??
+        MessageStatusX.forOneToOne(
+          readByRecipient: message.isReadBy(otherUid),
+          deliveredToRecipient: message.deliveredTo.contains(otherUid),
+        );
+    final sentValue = switch (status) {
+      MessageStatus.sending => 'Sending',
+      MessageStatus.failed => 'Not sent',
+      _ => _messageInfoTimeFormat.format(message.sentAt.toLocal()),
+    };
+    final deliveredAt = message.deliveredAtBy[otherUid];
+    final readAt = message.readAtBy[otherUid];
+    final deliveredValue = deliveredAt != null
+        ? _messageInfoTimeFormat.format(deliveredAt.toLocal())
+        : message.deliveredTo.contains(otherUid)
+        ? 'Delivered (time unavailable)'
+        : 'Not delivered yet';
+    final readValue = readAt != null
+        ? _messageInfoTimeFormat.format(readAt.toLocal())
+        : message.isReadBy(otherUid)
+        ? 'Read (time unavailable)'
+        : 'Not read yet';
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(bottom: AppSpacing.sm),
+          child: Text(
+            'Message info',
+            style: Theme.of(context).textTheme.titleLarge,
+          ),
+        ),
+        _MessageInfoRow(
+          icon: Icons.done_rounded,
+          label: 'Sent',
+          value: sentValue,
+        ),
+        _MessageInfoRow(
+          icon: Icons.done_all_rounded,
+          label: 'Delivered',
+          value: deliveredValue,
+        ),
+        _MessageInfoRow(
+          icon: Icons.done_all_rounded,
+          iconColor: context.chatColors.readTick,
+          label: 'Read',
+          value: readValue,
+        ),
+      ],
+    );
+  }
+}
+
+class _MessageInfoRow extends StatelessWidget {
+  const _MessageInfoRow({
+    required this.icon,
+    required this.label,
+    required this.value,
+    this.iconColor,
+  });
+
+  final IconData icon;
+  final String label;
+  final String value;
+  final Color? iconColor;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      leading: Icon(icon, color: iconColor),
+      title: Text(label),
+      subtitle: Text(
+        value,
+        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+          color: Theme.of(context).colorScheme.onSurfaceVariant,
         ),
       ),
     );
@@ -1676,6 +1796,7 @@ class _TombstoneBubble extends StatelessWidget {
 /// Shared across rows: building a [DateFormat] parses its pattern, which is
 /// measurable when hundreds of bubbles build during a fast scroll.
 final DateFormat _bubbleTimeFormat = DateFormat.jm();
+final DateFormat _messageInfoTimeFormat = DateFormat.yMMMd().add_jm();
 
 /// Compiled once; matching every row's text against a fresh [RegExp] showed
 /// up in scroll profiles.

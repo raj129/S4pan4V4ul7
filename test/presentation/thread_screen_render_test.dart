@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:intl/intl.dart';
 import 'package:photo_vault/features/chat/data/repositories/local_sticker_pack_repository.dart';
 import 'package:photo_vault/core/integrations/chat_vault_bridge.dart';
 import 'package:photo_vault/features/chat/application/crypto/chat_crypto_service.dart';
@@ -338,6 +339,60 @@ ChatMessage _msg(
 );
 
 void main() {
+  testWidgets('message info shows sent, delivered, and read times', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1080, 2400);
+    tester.view.devicePixelRatio = 3;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final unused = _Unused();
+    final sentAt = DateTime.utc(2026, 1, 1, 9, 30);
+    final deliveredAt = DateTime.utc(2026, 1, 1, 9, 31);
+    final readAt = DateTime.utc(2026, 1, 1, 9, 32);
+    final format = DateFormat.yMMMd().add_jm();
+    final message =
+        _msg(
+          'receipt-message',
+          'receipt body',
+          sender: 'me',
+          sentAt: sentAt,
+        ).copyWith(
+          localDecryptedText: 'receipt body',
+          deliveredTo: const ['other'],
+          readBy: const ['other'],
+          deliveredAtBy: {'other': deliveredAt},
+          readAtBy: {'other': readAt},
+        );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: MessageBubble(
+            message: message,
+            isMine: true,
+            myUid: 'me',
+            otherUid: 'other',
+            mediaLoader: ChatMediaLoader(
+              mediaRepository: unused,
+              cryptoService: _Crypto(),
+            ),
+            onDeleteForMe: () {},
+          ),
+        ),
+      ),
+    );
+    await tester.longPress(find.text('receipt body'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Message info'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Message info'), findsOneWidget);
+    expect(find.text(format.format(sentAt.toLocal())), findsOneWidget);
+    expect(find.text(format.format(deliveredAt.toLocal())), findsOneWidget);
+    expect(find.text(format.format(readAt.toLocal())), findsOneWidget);
+  });
+
   testWidgets(
     'SMS mode keeps the chat, counts segments, blocks oversize and retains failed drafts',
     (tester) async {

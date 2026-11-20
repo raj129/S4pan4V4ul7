@@ -94,22 +94,59 @@ service cloud.firestore {
 
     // Fields a non-sender may touch on someone else's message: their own
     // reaction/receipts and hiding it for themselves.
+    function isValidOwnReceiptMapChange(oldTimes, newTimes) {
+      let changedKeys = newTimes.diff(oldTimes).affectedKeys();
+      return newTimes is map
+             && changedKeys.hasOnly([request.auth.uid])
+             && (
+               !changedKeys.hasAny([request.auth.uid])
+               || (
+                 newTimes[request.auth.uid] is int
+                 && newTimes[request.auth.uid] > 0
+                 && newTimes[request.auth.uid]
+                    <= request.time.toMillis() + 60000
+               )
+             );
+    }
+
     function onlyRecipientFieldsChanged() {
       let oldDelivered = resource.data.get('deliveredTo', []);
       let newDelivered = request.resource.data.get('deliveredTo', []);
+      let oldRead = resource.data.get('readBy', []);
+      let newRead = request.resource.data.get('readBy', []);
+      let oldDeliveredTimes = resource.data.get('deliveredAtBy', {});
+      let newDeliveredTimes = request.resource.data.get('deliveredAtBy', {});
+      let oldReadTimes = resource.data.get('readAtBy', {});
+      let newReadTimes = request.resource.data.get('readAtBy', {});
       return request.resource.data.diff(resource.data)
                  .affectedKeys()
                  .hasOnly([
                    'reactions',
                    'readBy',
                    'deliveredTo',
+                   'readAtBy',
+                   'deliveredAtBy',
                    'deletedFor'
                  ])
+             && oldDelivered is list
              && newDelivered is list
              && newDelivered.toSet().hasAll(oldDelivered.toSet())
              && newDelivered.toSet()
                    .difference(oldDelivered.toSet())
-                   .hasOnly([request.auth.uid]);
+                   .hasOnly([request.auth.uid])
+             && oldRead is list
+             && newRead is list
+             && newRead.toSet().hasAll(oldRead.toSet())
+             && newRead.toSet()
+                   .difference(oldRead.toSet())
+                   .hasOnly([request.auth.uid])
+             && oldDeliveredTimes is map
+             && oldReadTimes is map
+             && isValidOwnReceiptMapChange(
+                  oldDeliveredTimes,
+                  newDeliveredTimes
+                )
+             && isValidOwnReceiptMapChange(oldReadTimes, newReadTimes);
     }
 
     // ── Users ────────────────────────────────────────────────────────────────
@@ -198,6 +235,8 @@ service cloud.firestore {
                       && request.resource.data.senderId == request.auth.uid
                       && request.resource.data.threadId == threadId
                       && request.resource.data.get('deliveredTo', []).size() == 0
+                      && request.resource.data.get('deliveredAtBy', {}).size() == 0
+                      && request.resource.data.get('readAtBy', {}).size() == 0
                       && exists(/databases/$(database)/documents/threads/$(threadId))
                       && request.auth.uid in
                          get(/databases/$(database)/documents/threads/$(threadId))
@@ -212,6 +251,12 @@ service cloud.firestore {
                           resource.data.senderId == request.auth.uid
                           && request.resource.data.get('deliveredTo', []) ==
                              resource.data.get('deliveredTo', [])
+                          && request.resource.data.get('readBy', []) ==
+                             resource.data.get('readBy', [])
+                          && request.resource.data.get('deliveredAtBy', {}) ==
+                             resource.data.get('deliveredAtBy', {})
+                          && request.resource.data.get('readAtBy', {}) ==
+                             resource.data.get('readAtBy', {})
                         )
                         || onlyRecipientFieldsChanged()
                       )

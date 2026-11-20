@@ -1348,7 +1348,10 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
       final nextMessages = latest.messages
           .map(
             (m) => unread.contains(m.messageId)
-                ? m.copyWith(readBy: [...m.readBy, myUid])
+                ? m.copyWith(
+                    readBy: [...m.readBy, myUid],
+                    readAtBy: {...m.readAtBy, myUid: DateTime.now().toUtc()},
+                  )
                 : m,
           )
           .toList();
