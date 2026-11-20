@@ -561,7 +561,7 @@ class _ChatDocumentTileState extends State<ChatDocumentTile> {
       );
       if (!mounted || generation != _generation) return;
       final name = message.documentName ?? '';
-      var mimeType = !kIsWeb && defaultTargetPlatform == TargetPlatform.android
+      var mimeType = defaultTargetPlatform == TargetPlatform.android
           ? lookupMimeType(name, headerBytes: bytes)
           : name.toLowerCase().endsWith('.pdf')
           ? 'application/pdf'

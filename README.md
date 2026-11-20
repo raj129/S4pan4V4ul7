@@ -1,6 +1,6 @@
 # photo_vault
 
-Local-first encrypted photo vault (Android-first; Windows desktop planned).
+Local-first encrypted photo vault supporting Android and Windows.
 Web and Chrome are not supported.
 
 This is a **private APK build, not prepared for Google Play publication**.
