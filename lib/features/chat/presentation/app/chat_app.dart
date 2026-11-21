@@ -256,6 +256,16 @@ class _ChatAppState extends State<ChatApp> with WidgetsBindingObserver {
               _deps.dataSms?.stop();
               _deps.mediaLoader.setAccount('');
               _deps.notificationService.stop();
+              final locationService = _deps.liveLocationService;
+              if (locationService?.isSharing == true) {
+                unawaited(
+                  locationService!.stopSharing().catchError((Object error) {
+                    debugPrint(
+                      'Could not stop live location on sign-out: $error',
+                    );
+                  }),
+                );
+              }
             }
             if (widget.userMode != UserMode.localOnly) return;
             if (authState is ChatAuthAuthenticated) {

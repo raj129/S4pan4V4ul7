@@ -53,6 +53,6 @@ object ArrivalQueue {
 
     private fun write(context: Context, array: JSONArray) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .edit().putString(KEY_PENDING, array.toString()).apply()
+            .edit().putString(KEY_PENDING, array.toString()).commit()
     }
 }

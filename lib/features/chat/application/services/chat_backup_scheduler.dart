@@ -135,9 +135,26 @@ Future<void> _ensureFirebase() async {
 }
 
 /// Sends queued arrival messages without the UI, so no unlock is needed.
+/// Also re-arms OS geofences (used after reboot or app update).
 /// Returns false to let WorkManager retry (no session yet, network down).
 Future<bool> runBackgroundArrivalSend() async {
   WidgetsFlutterBinding.ensureInitialized();
+  final geofences = ChannelArrivalGeofences();
+  final store = FlutterSecureStringKv(const FlutterSecureStorage());
+  if ((await geofences.peekPending()).isEmpty) {
+    final resyncService = ArrivalAlertService(
+      store: store,
+      sender: (_) async {},
+      geofences: geofences,
+    );
+    try {
+      await resyncService.restore();
+    } finally {
+      resyncService.dispose();
+    }
+    return true;
+  }
+
   await _ensureFirebase();
   final uid = FirebaseAuth.instance.currentUser?.uid;
   if (uid == null) {
@@ -150,7 +167,7 @@ Future<bool> runBackgroundArrivalSend() async {
   final messages = FirestoreMessageRepository();
   final threads = FirestoreThreadRepository();
   final service = ArrivalAlertService(
-    store: FlutterSecureStringKv(const FlutterSecureStorage()),
+    store: store,
     sender: (alert) => sendGeoShareMessage(
       crypto: crypto,
       messages: messages,
@@ -160,10 +177,8 @@ Future<bool> runBackgroundArrivalSend() async {
       recipientUid: alert.recipientUid,
       share: GeoShare.arrival(point: alert.point, label: alert.label),
     ),
-    geofences: ChannelArrivalGeofences(),
-    places: SavedPlacesService(
-      store: FlutterSecureStringKv(const FlutterSecureStorage()),
-    ),
+    geofences: geofences,
+    places: SavedPlacesService(store: store),
   );
   final errors = service.errors.listen((error) {
     debugPrint(

@@ -42,6 +42,8 @@ class ArrivalAlertService {
   bool _loaded = false;
   bool _disposed = false;
   String? _fenceError;
+  Future<bool>? _pendingProcessing;
+  Future<void> _syncChain = Future.value();
 
   final _changes = StreamController<List<ArrivalAlert>>.broadcast();
   final _errors = StreamController<Object>.broadcast();
@@ -139,7 +141,17 @@ class ArrivalAlertService {
   /// Handles every queued enter event. An event is acked once it is handled:
   /// sent, obsolete, or too old. A failed send stays queued for the next run.
   /// Returns false when some event is still pending after a failure.
-  Future<bool> processPendingArrivals() async {
+  Future<bool> processPendingArrivals() {
+    final active = _pendingProcessing;
+    if (active != null) return active;
+    final run = _processPendingArrivalsInternal().whenComplete(() {
+      _pendingProcessing = null;
+    });
+    _pendingProcessing = run;
+    return run;
+  }
+
+  Future<bool> _processPendingArrivalsInternal() async {
     final geofences = _geofences;
     if (geofences == null || _disposed) return true;
     // Another isolate (the background worker) may have changed the alerts.
@@ -257,7 +269,13 @@ class ArrivalAlertService {
 
   /// Registers one geofence per armed alert. A failed registration is kept in
   /// [fenceError] and republished so the UI can show it.
-  Future<void> _syncFences() async {
+  Future<void> _syncFences() {
+    final next = _syncChain.then((_) => _syncFencesInternal());
+    _syncChain = next.catchError((Object _) {});
+    return next;
+  }
+
+  Future<void> _syncFencesInternal() async {
     final geofences = _geofences;
     if (geofences == null || _disposed) return;
     final fences = [
