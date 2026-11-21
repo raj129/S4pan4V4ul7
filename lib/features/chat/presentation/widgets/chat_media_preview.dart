@@ -49,6 +49,13 @@ bool chatMediaRequiresAction(Object? error) {
   }.contains(code);
 }
 
+bool isVisualChatAttachment(MessageType? type) => const {
+  MessageType.image,
+  MessageType.video,
+  MessageType.gif,
+  MessageType.sticker,
+}.contains(type);
+
 /// Renders decrypted image/video attachments inside a bubble.
 class ChatMediaPreview extends StatefulWidget {
   const ChatMediaPreview({
@@ -100,9 +107,8 @@ class _ChatMediaPreviewState extends State<ChatMediaPreview> {
 
   Timer? _retryTimer;
 
-  bool get _isPhotoOrVideo =>
-      widget.message.mediaType == MessageType.image ||
-      widget.message.mediaType == MessageType.video;
+  bool get _isVisualAttachment =>
+      isVisualChatAttachment(widget.message.mediaType);
 
   MediaUploadLifecycle? _lastDownloadState;
 
@@ -403,7 +409,7 @@ class _ChatMediaPreviewState extends State<ChatMediaPreview> {
   }
 
   Widget? _buildUploadOverlay() {
-    if (!_isPhotoOrVideo) return null;
+    if (!_isVisualAttachment) return null;
     final status = widget.sendStatus;
     if (status != null) return _buildCircularTransferOverlay(status);
     if (widget.message.status == MessageStatus.failed &&
@@ -445,7 +451,7 @@ class _ChatMediaPreviewState extends State<ChatMediaPreview> {
     final ref = widget.message.previewRef;
     final downloadJob = ref == null ? null : widget.loader.downloads?.job(ref);
     if (_loading) {
-      if (_isPhotoOrVideo &&
+      if (_isVisualAttachment &&
           widget.loader.downloads != null &&
           ref != null &&
           downloadJob != null) {
@@ -500,7 +506,7 @@ class _ChatMediaPreviewState extends State<ChatMediaPreview> {
           downloadJob != null &&
           (downloadJob.state == MediaUploadLifecycle.failed ||
               downloadJob.state == MediaUploadLifecycle.cancelled)) {
-        if (_isPhotoOrVideo) {
+        if (_isVisualAttachment) {
           return ColoredBox(
             color: Colors.black26,
             child: _buildCircularTransferOverlay(downloadJob.progress),

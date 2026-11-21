@@ -7,6 +7,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:provider/provider.dart';
 import 'package:image/image.dart' as img;
 import 'package:photo_vault/features/chat/application/crypto/chat_crypto_service.dart';
+import 'package:photo_vault/features/chat/application/media/android_chat_downloads.dart';
 import 'package:photo_vault/features/chat/application/media/android_chat_local_media.dart';
 import 'package:photo_vault/features/chat/application/media/media_send_status.dart';
 import 'package:photo_vault/features/chat/domain/entities/chat_message.dart';
@@ -29,7 +30,7 @@ class _UnusedCrypto implements ChatCryptoService {
 }
 
 class _Loader extends ChatMediaLoader {
-  _Loader()
+  _Loader({super.downloads})
     : super(mediaRepository: _UnusedMedia(), cryptoService: _UnusedCrypto());
   int calls = 0;
   final List<String?> senders = [];
@@ -50,6 +51,21 @@ class _Loader extends ChatMediaLoader {
       ownedResults.add(owned);
       return owned;
     });
+  }
+}
+
+class _Downloads extends AndroidChatDownloads {
+  _Downloads() : super(currentUid: () => 'me', pollInterval: Duration.zero);
+
+  AndroidDownloadJob? currentJob;
+
+  @override
+  AndroidDownloadJob? job(String path) =>
+      currentJob?.storagePath == path ? currentJob : null;
+
+  void update(AndroidDownloadJob job) {
+    currentJob = job;
+    notifyListeners();
   }
 }
 
@@ -208,6 +224,118 @@ void main() {
       loader.dispose();
     },
   );
+
+  for (final mediaType in [MessageType.gif, MessageType.sticker]) {
+    testWidgets('$mediaType upload uses the visual attachment controls', (
+      tester,
+    ) async {
+      final loader = _Loader();
+      const pausedUpload = MediaSendStatus(
+        phase: MediaSendPhase.uploading,
+        progress: .4,
+        lifecycle: MediaUploadLifecycle.paused,
+        processedBytes: 400,
+        totalBytes: 1000,
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: AppTheme.light,
+          home: Scaffold(
+            body: MessageBubble(
+              message: message.copyWith(
+                mediaType: mediaType,
+                status: MessageStatus.sending,
+              ),
+              isMine: true,
+              myUid: 'me',
+              otherUid: 'alice',
+              mediaLoader: loader,
+              onDeleteForMe: () {},
+              sendStatus: pausedUpload,
+              onResumeUpload: () {},
+              onCancelUpload: () {},
+            ),
+          ),
+        ),
+      );
+
+      expect(find.byType(LinearProgressIndicator), findsNothing);
+      expect(
+        find.descendant(
+          of: find.byType(ChatMediaPreview),
+          matching: find.byType(CircularProgressIndicator),
+        ),
+        findsOneWidget,
+      );
+      expect(find.byType(AttachmentTransferActions), findsOneWidget);
+      expect(find.text('Sending'), findsOneWidget);
+      expect(find.text('Paused'), findsOneWidget);
+      expect(find.byIcon(Icons.pause_circle_outline_rounded), findsOneWidget);
+
+      final sending = tester.getTopLeft(find.text('Sending'));
+      final paused = tester.getTopLeft(find.text('Paused'));
+      final metaRow = find
+          .ancestor(of: find.text('Sending'), matching: find.byType(Row))
+          .first;
+      final timestamp = tester
+          .widget<Row>(metaRow)
+          .children
+          .whereType<Text>()
+          .first;
+      final gap = sending.dx - tester.getTopRight(find.byWidget(timestamp)).dx;
+      expect(gap, greaterThanOrEqualTo(4));
+      expect(paused.dx, greaterThan(sending.dx));
+      await tester.pumpWidget(const SizedBox.shrink());
+      loader.dispose();
+    });
+  }
+
+  testWidgets('paused visual download appears after message status', (
+    tester,
+  ) async {
+    final downloads = _Downloads();
+    final loader = _Loader(downloads: downloads);
+    downloads.update(
+      const AndroidDownloadJob(
+        uid: 'me',
+        storagePath: 'preview',
+        threadId: 't',
+        state: MediaUploadLifecycle.paused,
+        processedBytes: 250,
+        totalBytes: 1000,
+      ),
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light,
+        home: Scaffold(
+          body: MessageBubble(
+            message: message.copyWith(
+              mediaType: MessageType.gif,
+              status: MessageStatus.sending,
+              mediaMeta: const MediaMeta(thumbRef: 'preview'),
+            ),
+            isMine: true,
+            myUid: 'me',
+            otherUid: 'alice',
+            mediaLoader: loader,
+            onDeleteForMe: () {},
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('Sending'), findsOneWidget);
+    expect(find.text('Paused'), findsOneWidget);
+    final sending = tester.getTopLeft(find.text('Sending'));
+    final paused = tester.getTopLeft(find.text('Paused'));
+    expect(paused.dx, greaterThan(sending.dx));
+    expect(find.byType(AttachmentTransferActions), findsOneWidget);
+    await tester.pumpWidget(const SizedBox.shrink());
+    loader.dispose();
+    downloads.dispose();
+  });
 
   testWidgets('document upload renders only one AttachmentUploadProgress', (
     tester,

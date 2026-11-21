@@ -263,11 +263,7 @@ class MessageBubble extends StatelessWidget {
     // render bare without an outer bubble border/background for both sent and
     // received messages.
     final bare = message.isEmojiOnly && !message.isDataSms;
-    final bareAttachment =
-        message.mediaType == MessageType.image ||
-        message.mediaType == MessageType.video ||
-        message.mediaType == MessageType.gif ||
-        message.mediaType == MessageType.sticker;
+    final bareAttachment = isVisualChatAttachment(message.mediaType);
 
     final shape = ChatBubbleShape(
       isMine: isMine,
@@ -472,8 +468,7 @@ class MessageBubble extends StatelessWidget {
                   child: messageRow,
                 ),
               ),
-              if (message.mediaType == MessageType.image ||
-                  message.mediaType == MessageType.video) ...[
+              if (isVisualChatAttachment(message.mediaType)) ...[
                 if (sendStatus != null)
                   AttachmentTransferActions(
                     status: sendStatus!,
@@ -971,6 +966,8 @@ class _BubbleContent extends StatelessWidget {
                 otherUid: otherUid,
                 isOffline: isOffline,
                 textColor: metaColor,
+                mediaLoader: mediaLoader,
+                sendStatus: sendStatus,
               ),
             ],
           ),
@@ -1129,6 +1126,8 @@ class _BubbleContent extends StatelessWidget {
               otherUid: otherUid,
               isOffline: isOffline,
               textColor: metaColor,
+              mediaLoader: mediaLoader,
+              sendStatus: sendStatus,
             ),
           ],
         ),
@@ -1545,6 +1544,8 @@ class _MetaRow extends StatelessWidget {
     required this.otherUid,
     required this.isOffline,
     required this.textColor,
+    required this.mediaLoader,
+    this.sendStatus,
   });
 
   final ChatMessage message;
@@ -1552,6 +1553,8 @@ class _MetaRow extends StatelessWidget {
   final String otherUid;
   final bool isOffline;
   final Color textColor;
+  final ChatMediaLoader mediaLoader;
+  final MediaSendStatus? sendStatus;
 
   @override
   Widget build(BuildContext context) {
@@ -1569,8 +1572,35 @@ class _MetaRow extends StatelessWidget {
         ],
       );
     }
-    // Prefer the locally-supplied status (outbox: sending/failed); otherwise
-    // derive it from whether the recipient has actually read the message.
+    if (!isVisualChatAttachment(message.mediaType)) {
+      return _buildRow(context, paused: false);
+    }
+    final downloads = mediaLoader.downloads;
+    if (downloads == null) {
+      return _buildRow(
+        context,
+        paused: sendStatus?.lifecycle == MediaUploadLifecycle.paused,
+      );
+    }
+    return AnimatedBuilder(
+      animation: downloads,
+      builder: (context, _) {
+        final ref = message.previewRef;
+        final downloadPaused =
+            ref != null &&
+            downloads.job(ref)?.state == MediaUploadLifecycle.paused;
+        return _buildRow(
+          context,
+          paused:
+              sendStatus?.lifecycle == MediaUploadLifecycle.paused ||
+              downloadPaused,
+        );
+      },
+    );
+  }
+
+  Widget _buildRow(BuildContext context, {required bool paused}) {
+    final faded = textColor.withValues(alpha: 0.65);
     final status =
         message.status ??
         MessageStatusX.forOneToOne(
@@ -1596,27 +1626,32 @@ class _MetaRow extends StatelessWidget {
           style: AppTypography.bubbleMeta(faded),
         ),
         if (isMine) ...[
+          const SizedBox(width: AppSpacing.xs),
           if (waitingForConnection ||
               status == MessageStatus.sending ||
-              status == MessageStatus.failed)
-            Padding(
-              padding: const EdgeInsets.only(right: AppSpacing.xs),
-              child: Text(
-                statusLabel ??
-                    (status == MessageStatus.sending ? 'Sending' : 'Not sent'),
-                style: AppTypography.bubbleMeta(
-                  status == MessageStatus.failed && !waitingForConnection
-                      ? Theme.of(context).colorScheme.error
-                      : faded,
-                ),
+              status == MessageStatus.failed) ...[
+            Text(
+              statusLabel ??
+                  (status == MessageStatus.sending ? 'Sending' : 'Not sent'),
+              style: AppTypography.bubbleMeta(
+                status == MessageStatus.failed && !waitingForConnection
+                    ? Theme.of(context).colorScheme.error
+                    : faded,
               ),
             ),
-          const SizedBox(width: AppSpacing.xs),
+            const SizedBox(width: AppSpacing.xs),
+          ],
           _StatusTicks(
             status: visibleStatus,
             color: textColor,
             labelOverride: statusLabel,
           ),
+        ],
+        if (paused) ...[
+          const SizedBox(width: AppSpacing.xs),
+          Icon(Icons.pause_circle_outline_rounded, size: 13, color: faded),
+          const SizedBox(width: 2),
+          Text('Paused', style: AppTypography.bubbleMeta(faded)),
         ],
       ],
     );
