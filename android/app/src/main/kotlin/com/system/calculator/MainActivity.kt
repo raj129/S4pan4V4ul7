@@ -1,5 +1,6 @@
 package com.system.calculator
 
+import android.hardware.display.DisplayManager
 import android.os.Bundle
 import android.os.Build
 import androidx.annotation.NonNull
@@ -8,6 +9,8 @@ import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterFragmentActivity() {
+    private var displayListener: DisplayManager.DisplayListener? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // Keep screenshots blocked until Flutter applies the persisted preference.
@@ -15,10 +18,33 @@ class MainActivity : FlutterFragmentActivity() {
         HighRefreshRate.apply(this)
     }
 
+    override fun onStart() {
+        super.onStart()
+        displayListener = HighRefreshRate.registerDisplayListener(this)
+    }
+
+    override fun onStop() {
+        HighRefreshRate.unregisterDisplayListener(this, displayListener)
+        displayListener = null
+        super.onStop()
+    }
+
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        HighRefreshRate.apply(this)
+    }
+
     override fun onResume() {
         super.onResume()
         // Some OEMs reset the preferred mode when the window loses focus.
         HighRefreshRate.apply(this)
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) {
+            HighRefreshRate.apply(this)
+        }
     }
 
     override fun configureFlutterEngine(@NonNull flutterEngine: FlutterEngine) {
