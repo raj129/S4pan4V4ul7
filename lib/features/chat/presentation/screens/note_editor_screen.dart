@@ -67,12 +67,6 @@ class _NoteEditorScreenState extends State<NoteEditorScreen>
           .where((item) => item.text.trim().isNotEmpty)
           .toList(),
     );
-    if (_currentNote.isChecklist &&
-        !_currentNote.items.any((item) => item.text.trim().isEmpty)) {
-      _currentNote = _currentNote.copyWith(
-        items: [..._currentNote.items, _emptyChecklistItem()],
-      );
-    }
     _titleCtrl = TextEditingController(text: _currentNote.title);
     _contentCtrl = TextEditingController(text: _currentNote.content);
 
@@ -137,20 +131,16 @@ class _NoteEditorScreenState extends State<NoteEditorScreen>
   }
 
   void _applyMergedNoteToState(AppNote merged) {
-    final trailingEmpty = merged.isChecklist
+    final localEmptyItems = merged.isChecklist
         ? _currentNote.items
               .where((item) => item.text.trim().isEmpty)
-              .firstOrNull
-        : null;
+              .toList()
+        : const <ChecklistItem>[];
     final nextItems = merged.isChecklist
         ? [
             ...merged.items,
-            if (trailingEmpty != null &&
-                !merged.items.any((i) => i.id == trailingEmpty.id))
-              trailingEmpty,
-            if (trailingEmpty == null &&
-                !merged.items.any((item) => item.text.trim().isEmpty))
-              _emptyChecklistItem(),
+            for (final empty in localEmptyItems)
+              if (!merged.items.any((i) => i.id == empty.id)) empty,
           ]
         : merged.items;
 
@@ -575,10 +565,13 @@ class _NoteEditorScreenState extends State<NoteEditorScreen>
     _triggerSave(immediate: true);
   }
 
-  void _toggleType() {
-    final nextType = _currentNote.type == NoteType.checklist
-        ? NoteType.textNote
-        : NoteType.checklist;
+  void _toggleType([NoteType? targetType]) {
+    final nextType =
+        targetType ??
+        (_currentNote.type == NoteType.checklist
+            ? NoteType.textNote
+            : NoteType.checklist);
+    if (nextType == _currentNote.type) return;
 
     List<ChecklistItem> nextItems = _currentNote.items;
     if (nextType == NoteType.checklist && nextItems.isEmpty) {
@@ -595,10 +588,6 @@ class _NoteEditorScreenState extends State<NoteEditorScreen>
       if (textFromItems.isNotEmpty) {
         _contentCtrl.text = textFromItems;
       }
-    }
-    if (nextType == NoteType.checklist &&
-        !nextItems.any((item) => item.text.trim().isEmpty)) {
-      nextItems = [...nextItems, _emptyChecklistItem()];
     }
 
     setState(() {
@@ -745,6 +734,42 @@ class _NoteEditorScreenState extends State<NoteEditorScreen>
                           _EditingBadge(theme: theme, label: 'Editing'),
                       ],
                     ),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(
+                    AppSpacing.lg,
+                    AppSpacing.xs,
+                    AppSpacing.lg,
+                    AppSpacing.sm,
+                  ),
+                  child: Row(
+                    children: [
+                      SegmentedButton<NoteType>(
+                        segments: const [
+                          ButtonSegment<NoteType>(
+                            value: NoteType.textNote,
+                            icon: Icon(Icons.notes_rounded, size: 18),
+                            label: Text('Note'),
+                          ),
+                          ButtonSegment<NoteType>(
+                            value: NoteType.checklist,
+                            icon: Icon(Icons.check_box_outlined, size: 18),
+                            label: Text('Checklist'),
+                          ),
+                        ],
+                        selected: {_currentNote.type},
+                        onSelectionChanged: (selection) {
+                          if (selection.isNotEmpty) {
+                            _toggleType(selection.first);
+                          }
+                        },
+                        showSelectedIcon: false,
+                        style: SegmentedButton.styleFrom(
+                          visualDensity: VisualDensity.compact,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
                 Divider(
@@ -917,14 +942,19 @@ class _NoteEditorScreenState extends State<NoteEditorScreen>
     List<ChecklistItem> completed,
     Set<String> remotelyEditedItemIds,
   ) {
-    Widget reorderableItems(List<ChecklistItem> items, bool isCompleted) {
-      return ReorderableListView.builder(
-        shrinkWrap: true,
-        physics: const NeverScrollableScrollPhysics(),
-        buildDefaultDragHandles: false,
+    Widget reorderableSliver(List<ChecklistItem> items, bool isCompleted) {
+      return SliverReorderableList(
         itemCount: items.length,
         onReorderItem: (oldIndex, newIndex) =>
             _reorderChecklistItems(items, isCompleted, oldIndex, newIndex),
+        proxyDecorator: (child, index, animation) {
+          return Material(
+            elevation: 6,
+            color: Colors.transparent,
+            borderRadius: BorderRadius.circular(14),
+            child: child,
+          );
+        },
         itemBuilder: (context, index) {
           final item = items[index];
           return _ChecklistItemRow(
@@ -945,69 +975,82 @@ class _NoteEditorScreenState extends State<NoteEditorScreen>
       );
     }
 
-    return ListView(
-      padding: const EdgeInsets.symmetric(vertical: AppSpacing.sm),
-      children: [
+    return CustomScrollView(
+      slivers: [
+        const SliverPadding(padding: EdgeInsets.only(top: AppSpacing.sm)),
         // Active uncompleted items
-        reorderableItems(uncompleted, false),
-        Padding(
-          padding: const EdgeInsets.only(
-            left: AppSpacing.lg,
-            top: AppSpacing.xs,
-          ),
-          child: Align(
-            alignment: Alignment.centerLeft,
-            child: TextButton.icon(
-              onPressed: _addChecklistItem,
-              icon: const Icon(Icons.add_rounded),
-              label: const Text('Add item'),
+        reorderableSliver(uncompleted, false),
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(
+              AppSpacing.md,
+              AppSpacing.sm,
+              AppSpacing.md,
+              AppSpacing.xs,
+            ),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: FilledButton.tonalIcon(
+                onPressed: _addChecklistItem,
+                icon: const Icon(Icons.add_rounded, size: 18),
+                label: const Text('Add item'),
+              ),
             ),
           ),
         ),
 
         // Completed / checked items section (Google Keep style)
         if (completed.isNotEmpty) ...[
-          const SizedBox(height: AppSpacing.md),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
-            child: Divider(
-              color: theme.colorScheme.outlineVariant.withValues(alpha: 0.4),
-            ),
-          ),
-          InkWell(
-            onTap: () {
-              setState(() {
-                _showCompletedSection = !_showCompletedSection;
-              });
-            },
-            child: Padding(
-              padding: const EdgeInsets.symmetric(
-                horizontal: AppSpacing.lg,
-                vertical: AppSpacing.sm,
-              ),
-              child: Row(
-                children: [
-                  Icon(
-                    _showCompletedSection
-                        ? Icons.keyboard_arrow_down_rounded
-                        : Icons.keyboard_arrow_right_rounded,
-                    size: 20,
-                    color: theme.colorScheme.onSurfaceVariant,
-                  ),
-                  const SizedBox(width: AppSpacing.sm),
-                  Text(
-                    '${completed.length} completed items',
-                    style: theme.textTheme.labelLarge?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant,
-                      fontWeight: FontWeight.w600,
+          SliverToBoxAdapter(
+            child: Column(
+              children: [
+                const SizedBox(height: AppSpacing.md),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
+                  child: Divider(
+                    color: theme.colorScheme.outlineVariant.withValues(
+                      alpha: 0.4,
                     ),
                   ),
-                ],
-              ),
+                ),
+                InkWell(
+                  onTap: () {
+                    setState(() {
+                      _showCompletedSection = !_showCompletedSection;
+                    });
+                  },
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: AppSpacing.lg,
+                      vertical: AppSpacing.sm,
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(
+                          _showCompletedSection
+                              ? Icons.keyboard_arrow_down_rounded
+                              : Icons.keyboard_arrow_right_rounded,
+                          size: 20,
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
+                        const SizedBox(width: AppSpacing.sm),
+                        Text(
+                          '${completed.length} completed items',
+                          style: theme.textTheme.labelLarge?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
-          if (_showCompletedSection) reorderableItems(completed, true),
+          if (_showCompletedSection) reorderableSliver(completed, true),
         ],
+        const SliverPadding(padding: EdgeInsets.only(bottom: AppSpacing.lg)),
       ],
     );
   }
@@ -1125,25 +1168,30 @@ class _ChecklistItemRowState extends State<_ChecklistItemRow> {
 
     return Container(
       margin: const EdgeInsets.symmetric(
-        horizontal: AppSpacing.sm,
-        vertical: 2,
+        horizontal: AppSpacing.md,
+        vertical: 4,
       ),
-      decoration: widget.isRemotelyEdited
-          ? BoxDecoration(
-              color: theme.colorScheme.primaryContainer.withValues(alpha: 0.28),
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(
-                color: theme.colorScheme.primary.withValues(alpha: 0.55),
-              ),
-            )
-          : null,
+      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xs, vertical: 2),
+      decoration: BoxDecoration(
+        color: widget.isRemotelyEdited
+            ? theme.colorScheme.primaryContainer.withValues(alpha: 0.32)
+            : (isDone
+                  ? theme.colorScheme.surfaceContainerLowest
+                  : theme.colorScheme.surfaceContainerLow),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: widget.isRemotelyEdited
+              ? theme.colorScheme.primary.withValues(alpha: 0.6)
+              : theme.colorScheme.outlineVariant.withValues(alpha: 0.35),
+        ),
+      ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           Checkbox(
             value: isDone,
             shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(4),
+              borderRadius: BorderRadius.circular(5),
             ),
             onChanged: (_) => widget.onToggle(),
           ),
@@ -1168,7 +1216,7 @@ class _ChecklistItemRowState extends State<_ChecklistItemRow> {
                   decoration: isDone ? TextDecoration.lineThrough : null,
                   color: isDone
                       ? theme.colorScheme.onSurfaceVariant.withValues(
-                          alpha: 0.6,
+                          alpha: 0.65,
                         )
                       : theme.colorScheme.onSurface,
                 ),
@@ -1178,7 +1226,7 @@ class _ChecklistItemRowState extends State<_ChecklistItemRow> {
                   enabledBorder: InputBorder.none,
                   focusedBorder: InputBorder.none,
                   filled: false,
-                  contentPadding: EdgeInsets.zero,
+                  contentPadding: EdgeInsets.symmetric(vertical: 10),
                 ),
                 onChanged: widget.onChanged,
               ),
@@ -1189,16 +1237,23 @@ class _ChecklistItemRowState extends State<_ChecklistItemRow> {
               padding: const EdgeInsets.only(right: 4),
               child: _EditingBadge(theme: theme, label: 'Editing'),
             ),
-          ReorderableDelayedDragStartListener(
+          ReorderableDragStartListener(
             key: ValueKey('drag-handle-${widget.item.id}'),
             index: widget.index,
-            child: Padding(
-              padding: const EdgeInsets.all(8),
-              child: Icon(
-                Icons.drag_handle_rounded,
-                color: theme.colorScheme.onSurfaceVariant.withValues(
-                  alpha: 0.45,
+            child: Container(
+              width: 40,
+              height: 40,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: theme.colorScheme.surfaceContainerHighest.withValues(
+                  alpha: 0.55,
                 ),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Icon(
+                Icons.drag_indicator_rounded,
+                size: 20,
+                color: theme.colorScheme.onSurfaceVariant,
               ),
             ),
           ),
@@ -1206,7 +1261,7 @@ class _ChecklistItemRowState extends State<_ChecklistItemRow> {
             icon: Icon(
               Icons.close_rounded,
               size: 18,
-              color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.5),
+              color: theme.colorScheme.onSurfaceVariant,
             ),
             tooltip: 'Remove item',
             onPressed: widget.onDelete,

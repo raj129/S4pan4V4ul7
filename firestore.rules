@@ -393,7 +393,7 @@ service cloud.firestore {
                                 && request.resource.data.expiresAt <=
                                    request.resource.data.heartbeatAt + 60000
                                 && request.resource.data.expiresAt >
-                                   request.time.toMillis()
+                                   request.time.toMillis() - 60000
                                 && (!('editingTarget' in request.resource.data)
                                     || request.resource.data.editingTarget in [
                                       'title', 'content', 'item'

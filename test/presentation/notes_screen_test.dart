@@ -355,6 +355,10 @@ void main() {
     expect(repository.private.single.items, isEmpty);
     expect(find.byType(NoteEditorScreen), findsOneWidget);
     expect(find.text('First item'), findsNothing);
+    expect(find.text('List item'), findsNothing);
+
+    await tester.tap(find.text('Add item'));
+    await tester.pump();
     expect(find.text('List item'), findsOneWidget);
 
     await tester.enterText(_emptyChecklistFields(), 'First real item');
@@ -594,7 +598,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    final addItemButton = find.widgetWithText(TextButton, 'Add item');
+    final addItemButton = find.widgetWithText(FilledButton, 'Add item');
     expect(addItemButton, findsOneWidget);
     await tester.tap(addItemButton);
     await tester.pump();
@@ -617,11 +621,11 @@ void main() {
     final first = tester.getCenter(
       find.byKey(const ValueKey('drag-handle-Reorder-1')),
     );
-    final gesture = await tester.startGesture(first);
-    await tester.pump(const Duration(milliseconds: 600));
-    await gesture.moveBy(const Offset(0, 100));
-    await tester.pump(const Duration(milliseconds: 300));
-    await gesture.up();
+    await tester.timedDragFrom(
+      first,
+      const Offset(0, 120),
+      const Duration(milliseconds: 300),
+    );
     await tester.pumpAndSettle();
     await tester.tap(find.byTooltip('Save'));
     await tester.pumpAndSettle();
