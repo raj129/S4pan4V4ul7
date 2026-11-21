@@ -42,8 +42,20 @@ class FirestoreUserRepository implements UserRepository {
   }
 
   @override
-  Future<ChatUser?> getUserById(String uid) async {
-    final doc = await _users.doc(uid).get();
+  Future<ChatUser?> getUserById(String uid, {bool preferCache = false}) async {
+    if (preferCache) {
+      try {
+        final cached = await _users
+            .doc(uid)
+            .get(const GetOptions(source: Source.cache));
+        if (cached.exists && cached.data() != null) {
+          return ChatUser.fromFirestore(cached.data()!);
+        }
+      } catch (_) {
+        // Cache miss or unavailable; fall through to server.
+      }
+    }
+    final doc = await _users.doc(uid).get().timeout(const Duration(seconds: 8));
     if (!doc.exists || doc.data() == null) return null;
     return ChatUser.fromFirestore(doc.data()!);
   }

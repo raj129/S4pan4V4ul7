@@ -473,7 +473,6 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
   /// composer and retry affordances are still reachable.
   Timer? _openTimeoutTimer;
   StreamSubscription<List<ConnectivityResult>>? _connectivitySub;
-  bool _wasOffline = false;
   bool _isOffline = false;
   String? _currentThreadId;
   ChatThread? _thread;
@@ -513,6 +512,7 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
   int _openGeneration = 0;
 
   static const _pageSize = 30;
+  static const _networkWriteTimeout = Duration(seconds: 15);
 
   static const _uuid = Uuid();
   static final Set<String> _inFlightMessageIds = {};
@@ -816,7 +816,7 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
         waitForDelivery: waitForDelivery,
         scrollToLatest: scrollToLatest,
       );
-      await setTyping(false);
+      _fireAndForget(() => setTyping(false));
       return true;
     } catch (e) {
       // Encryption failed, so there is nothing worth queueing. Keep the
@@ -1071,27 +1071,35 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
       if (await _uploadCoordinator.tryRecoverAndroidOutboxItem(item)) {
         return;
       }
-      final msg = await messageRepository.sendMessage(
-        threadId: item.threadId,
-        senderId: item.senderId,
-        encryptedText: item.encryptedText,
-        messageId: item.messageId,
-        sentAt: item.queuedAt,
-        mediaRef: item.mediaRef,
-        mediaType: item.mediaType,
-        mediaMeta: item.mediaMeta,
-        replyTo: item.replyTo,
-      );
+      final msg = await messageRepository
+          .sendMessage(
+            threadId: item.threadId,
+            senderId: item.senderId,
+            encryptedText: item.encryptedText,
+            messageId: item.messageId,
+            sentAt: item.queuedAt,
+            mediaRef: item.mediaRef,
+            mediaType: item.mediaType,
+            mediaMeta: item.mediaMeta,
+            replyTo: item.replyTo,
+          )
+          .timeout(_networkWriteTimeout);
       await outbox.remove(item.messageId);
-      await threadRepository.updateLastMessage(
-        threadId: item.threadId,
-        preview: item.preview,
-        sentAt: msg.sentAt,
-      );
-      await threadRepository.incrementUnread(
-        threadId: item.threadId,
-        recipientUid: item.recipientUid,
-      );
+      try {
+        await Future.wait([
+          threadRepository.updateLastMessage(
+            threadId: item.threadId,
+            preview: item.preview,
+            sentAt: msg.sentAt,
+          ),
+          threadRepository.incrementUnread(
+            threadId: item.threadId,
+            recipientUid: item.recipientUid,
+          ),
+        ]).timeout(_networkWriteTimeout);
+      } catch (e) {
+        debugPrint('Thread preview update deferred for ${item.messageId}: $e');
+      }
       // Keep a sent local copy until the matching Firestore snapshot arrives.
       // Removing it here could make a successful message disappear briefly
       // while the listener is still catching up.
@@ -2246,15 +2254,13 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
   void _updateConnectivity(List<ConnectivityResult> results) {
     final isOffline =
         results.isEmpty || results.every((r) => r == ConnectivityResult.none);
-    final wasOffline = _wasOffline;
-    _wasOffline = isOffline;
     _isOffline = isOffline;
 
     final current = state;
     if (current is ActiveThreadLoaded && current.isOffline != isOffline) {
       emit(current.copyWith(isOffline: isOffline));
     }
-    if (wasOffline && !isOffline) {
+    if (!isOffline) {
       unawaited(drainOutbox());
     }
   }

@@ -10,7 +10,10 @@ abstract class UserRepository {
   Future<void> upsertProfile(ChatUser user, {bool includeProfile = true});
 
   /// Fetch a user by their UID.
-  Future<ChatUser?> getUserById(String uid);
+  ///
+  /// When [preferCache] is true, implementations backed by a local cache
+  /// return the cached profile immediately without waiting on the network.
+  Future<ChatUser?> getUserById(String uid, {bool preferCache = false});
 
   /// Look up a user by exact Gmail address.
   /// Returns null if not registered.

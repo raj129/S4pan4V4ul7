@@ -1161,6 +1161,28 @@ void main() {
       },
     );
 
+    test(
+      'online connectivity event flushes queued messages even without prior none event',
+      () async {
+        await cubit.close();
+        cubit = build(connectivityStream: connectivity.stream);
+        await open();
+        messages.emitLive(const []);
+        await Future<void>.delayed(Duration.zero);
+
+        messages.failNextSend = StateError('offline');
+        await cubit.sendText('queued without prior none');
+        expect(outbox.items, hasLength(1));
+
+        connectivity.add(const [ConnectivityResult.wifi]);
+        await Future<void>.delayed(Duration.zero);
+        await Future<void>.delayed(Duration.zero);
+
+        expect(outbox.items, isEmpty);
+        expect(messages.sent.single.encryptedText, 'queued without prior none');
+      },
+    );
+
     test('reconnect drains messages for threads that are not open', () async {
       await cubit.close();
       cubit = build(connectivityStream: connectivity.stream);

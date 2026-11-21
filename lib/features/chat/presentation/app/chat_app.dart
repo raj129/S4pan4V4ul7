@@ -60,8 +60,9 @@ class _ChatAppState extends State<ChatApp> with WidgetsBindingObserver {
     if (_sessionPrepared || _preparing) return;
     _preparing = true;
     try {
-      // Check for a saved Drive connection without requesting consent.
-      await _deps.authRepository.warmUpDriveAuthorization();
+      // Only run the local fresh-install check before showing chat; Drive
+      // authorization is a network call and must never block opening chat
+      // offline or on slow internet.
       await _deps.backupService.prepareForSession();
     } catch (_) {
       // A failed check must never lock the user out of chat.
@@ -69,6 +70,9 @@ class _ChatAppState extends State<ChatApp> with WidgetsBindingObserver {
     if (!mounted) return;
     setState(() => _sessionPrepared = true);
     _preparing = false;
+    unawaited(
+      _deps.authRepository.warmUpDriveAuthorization().catchError((_) {}),
+    );
     final state = _chatAuthCubit.state;
     if (state is ChatAuthAuthenticated) unawaited(_maybeOfferRestore(state));
   }
@@ -86,6 +90,11 @@ class _ChatAppState extends State<ChatApp> with WidgetsBindingObserver {
         return;
       }
       if (auth.historyLocked) return;
+      try {
+        await _deps.authRepository
+            .warmUpDriveAuthorization()
+            .timeout(const Duration(seconds: 10));
+      } catch (_) {}
       final snapshot = await backup.findLatestBackup();
       if (snapshot == null) {
         // Identity synced and still nothing readable: there is no backup.

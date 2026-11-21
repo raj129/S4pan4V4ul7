@@ -116,29 +116,33 @@ class ThreadListCubit extends Cubit<ThreadListState> {
         .watchThreadsForUser(myUid)
         .listen(
           (threads) async {
-            final items = <ThreadListItem>[];
-            for (final t in threads) {
-              final otherUid = t.otherParticipantId(myUid);
-              // A lookup that throws (offline, profile never cached) must not
-              // escape this async listener: that left the list loading forever.
-              ChatUser? user;
-              try {
-                user = await userRepository.getUserById(otherUid);
-              } catch (_) {
-                user = null;
-              }
-              user ??= _userCache[otherUid];
-              if (user == null) continue;
-              _userCache[otherUid] = user;
-              items.add(
-                ThreadListItem(
+            final resolved = await Future.wait(
+              threads.map((t) async {
+                final otherUid = t.otherParticipantId(myUid);
+                // Prefer already-cached partner profiles first, then cache-first
+                // repository lookup so slow/offline networks never stall the
+                // thread list on sequential server round-trips.
+                ChatUser? user = _userCache[otherUid];
+                if (user == null) {
+                  try {
+                    user = await userRepository.getUserById(
+                      otherUid,
+                      preferCache: true,
+                    );
+                  } catch (_) {
+                    user = null;
+                  }
+                }
+                if (user == null) return null;
+                _userCache[otherUid] = user;
+                return ThreadListItem(
                   thread: await _maskHiddenPreview(t),
                   otherUser: user,
-                ),
-              );
-            }
+                );
+              }),
+            );
             if (isClosed) return;
-            _serverItems = items;
+            _serverItems = resolved.whereType<ThreadListItem>().toList();
             await _refreshSms();
           },
           onError: (Object error) {
