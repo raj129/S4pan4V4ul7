@@ -4,22 +4,27 @@ import 'package:flutter/material.dart';
 
 import '../../application/media/media_send_status.dart';
 
-/// One transfer surface shared by image, video, audio and document bubbles.
-class AttachmentUploadProgress extends StatefulWidget {
-  const AttachmentUploadProgress({
+String formatTransferSize(int bytes) => bytes >= 1024 * 1024
+    ? '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB'
+    : bytes >= 1024
+    ? '${(bytes / 1024).toStringAsFixed(1)} KB'
+    : '$bytes B';
+
+/// Action buttons (Pause / Resume / Retry / Cancel) shared by below-bubble
+/// photo/video controls and [AttachmentUploadProgress].
+class AttachmentTransferActions extends StatefulWidget {
+  const AttachmentTransferActions({
     super.key,
     required this.status,
     this.onPause,
     this.onResume,
     this.onRetry,
     this.onCancel,
-    this.label,
     this.actionError = 'Upload action failed. Please retry.',
     this.retryCancelled = false,
   });
 
   final MediaSendStatus status;
-  final String? label;
   final String actionError;
   final bool retryCancelled;
   final FutureOr<void> Function()? onPause;
@@ -28,11 +33,11 @@ class AttachmentUploadProgress extends StatefulWidget {
   final FutureOr<void> Function()? onCancel;
 
   @override
-  State<AttachmentUploadProgress> createState() =>
-      _AttachmentUploadProgressState();
+  State<AttachmentTransferActions> createState() =>
+      _AttachmentTransferActionsState();
 }
 
-class _AttachmentUploadProgressState extends State<AttachmentUploadProgress> {
+class _AttachmentTransferActionsState extends State<AttachmentTransferActions> {
   bool _busy = false;
 
   Future<void> _act(FutureOr<void> Function() action) async {
@@ -50,12 +55,6 @@ class _AttachmentUploadProgressState extends State<AttachmentUploadProgress> {
       if (mounted) setState(() => _busy = false);
     }
   }
-
-  String _size(int bytes) => bytes >= 1024 * 1024
-      ? '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB'
-      : bytes >= 1024
-      ? '${(bytes / 1024).toStringAsFixed(1)} KB'
-      : '$bytes B';
 
   Widget _action(
     String label,
@@ -83,14 +82,65 @@ class _AttachmentUploadProgressState extends State<AttachmentUploadProgress> {
 
   @override
   Widget build(BuildContext context) {
-    final status = widget.status;
+    final state = widget.status.lifecycle;
+    final terminal =
+        state == MediaUploadLifecycle.completed ||
+        state == MediaUploadLifecycle.cancelled;
+
+    if (state == MediaUploadLifecycle.cancelled && widget.retryCancelled) {
+      return Padding(
+        padding: const EdgeInsets.only(top: 4),
+        child: _action('Retry download', Icons.refresh, widget.onRetry),
+      );
+    }
+    if (terminal) return const SizedBox.shrink();
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 4),
+      child: Wrap(
+        children: [
+          if (state == MediaUploadLifecycle.paused)
+            _action('Resume', Icons.play_arrow, widget.onResume)
+          else if (state == MediaUploadLifecycle.failed)
+            _action('Retry', Icons.refresh, widget.onRetry)
+          else if (state != null)
+            _action('Pause', Icons.pause, widget.onPause),
+          _action('Cancel', Icons.close, widget.onCancel),
+        ],
+      ),
+    );
+  }
+}
+
+/// One transfer surface shared by image, video, audio and document bubbles.
+class AttachmentUploadProgress extends StatelessWidget {
+  const AttachmentUploadProgress({
+    super.key,
+    required this.status,
+    this.onPause,
+    this.onResume,
+    this.onRetry,
+    this.onCancel,
+    this.label,
+    this.actionError = 'Upload action failed. Please retry.',
+    this.retryCancelled = false,
+  });
+
+  final MediaSendStatus status;
+  final String? label;
+  final String actionError;
+  final bool retryCancelled;
+  final FutureOr<void> Function()? onPause;
+  final FutureOr<void> Function()? onResume;
+  final FutureOr<void> Function()? onRetry;
+  final FutureOr<void> Function()? onCancel;
+
+  @override
+  Widget build(BuildContext context) {
     final state = status.lifecycle;
     final total = status.totalBytes;
     final measured =
         total != null && total > 0 && status.processedBytes != null;
-    final terminal =
-        state == MediaUploadLifecycle.completed ||
-        state == MediaUploadLifecycle.cancelled;
     final cs = Theme.of(context).colorScheme;
 
     final progressColor = state == MediaUploadLifecycle.failed
@@ -129,7 +179,7 @@ class _AttachmentUploadProgressState extends State<AttachmentUploadProgress> {
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  widget.label ?? status.label,
+                  label ?? status.label,
                   style: Theme.of(
                     context,
                   ).textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w600),
@@ -145,7 +195,7 @@ class _AttachmentUploadProgressState extends State<AttachmentUploadProgress> {
             child: LinearProgressIndicator(
               minHeight: 6,
               value: status.isIndeterminate ? null : status.progress,
-              semanticsLabel: widget.label ?? status.label,
+              semanticsLabel: label ?? status.label,
               color: progressColor,
               backgroundColor: progressColor.withValues(alpha: 0.18),
             ),
@@ -153,7 +203,7 @@ class _AttachmentUploadProgressState extends State<AttachmentUploadProgress> {
           if (measured) ...[
             const SizedBox(height: 6),
             Text(
-              '${_size(status.processedBytes!)} / ${_size(total)}'
+              '${formatTransferSize(status.processedBytes!)} / ${formatTransferSize(total)}'
               ' · ${(status.progress * 100).clamp(0, 100).toStringAsFixed(0)}%',
               style: Theme.of(context).textTheme.bodySmall?.copyWith(
                 color: cs.onSurfaceVariant,
@@ -161,25 +211,15 @@ class _AttachmentUploadProgressState extends State<AttachmentUploadProgress> {
               ),
             ),
           ],
-          if (!terminal) ...[
-            const SizedBox(height: 4),
-            Wrap(
-              children: [
-                if (state == MediaUploadLifecycle.paused)
-                  _action('Resume', Icons.play_arrow, widget.onResume)
-                else if (state == MediaUploadLifecycle.failed)
-                  _action('Retry', Icons.refresh, widget.onRetry)
-                else if (state != null)
-                  _action('Pause', Icons.pause, widget.onPause),
-                _action('Cancel', Icons.close, widget.onCancel),
-              ],
-            ),
-          ],
-          if (state == MediaUploadLifecycle.cancelled &&
-              widget.retryCancelled) ...[
-            const SizedBox(height: 4),
-            _action('Retry download', Icons.refresh, widget.onRetry),
-          ],
+          AttachmentTransferActions(
+            status: status,
+            onPause: onPause,
+            onResume: onResume,
+            onRetry: onRetry,
+            onCancel: onCancel,
+            actionError: actionError,
+            retryCancelled: retryCancelled,
+          ),
         ],
       ),
     );

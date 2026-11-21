@@ -1658,7 +1658,9 @@ class _ThreadScreenState extends State<ThreadScreen>
                           msg.isGeoShare
                       ? null
                       : () => _promptForward(msg),
-                  onRetry: msg.status == MessageStatus.failed
+                  onRetry:
+                      msg.status == MessageStatus.failed ||
+                          sendStatus?.lifecycle == MediaUploadLifecycle.failed
                       ? () => cubit.retryMessage(msg.messageId)
                       : null,
                   onDiscard: msg.status == MessageStatus.failed

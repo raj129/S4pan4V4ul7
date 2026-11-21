@@ -11,6 +11,7 @@ import '../../application/media/android_chat_downloads.dart'
 import '../../application/media/android_chat_local_media.dart';
 import '../../application/media/android_chat_secure_media_service.dart';
 import '../../domain/entities/chat_message.dart';
+import '../../domain/entities/message_metadata.dart';
 import '../../application/media/media_send_status.dart';
 import 'package:photo_vault/core/widgets/animated_media_image.dart';
 import '../screens/chat_image_viewer_screen.dart';
@@ -56,7 +57,11 @@ class ChatMediaPreview extends StatefulWidget {
     required this.loader,
     this.onTap,
     this.sendStatus,
+    this.onPause,
+    this.onResume,
+    this.onRetry,
     this.onCancel,
+    this.onDiscard,
     this.loadLinkedVaultThumbnail,
   });
 
@@ -67,8 +72,13 @@ class ChatMediaPreview extends StatefulWidget {
   /// Progress of this attachment while it is being sent, null once it is sent.
   final MediaSendStatus? sendStatus;
 
+  final FutureOr<void> Function()? onPause;
+  final FutureOr<void> Function()? onResume;
+  final FutureOr<void> Function()? onRetry;
+
   /// Stops the send while [sendStatus] is showing.
-  final VoidCallback? onCancel;
+  final FutureOr<void> Function()? onCancel;
+  final VoidCallback? onDiscard;
   final LinkedChatMediaBytesLoader? loadLinkedVaultThumbnail;
 
   @override
@@ -90,10 +100,17 @@ class _ChatMediaPreviewState extends State<ChatMediaPreview> {
 
   Timer? _retryTimer;
 
+  bool get _isPhotoOrVideo =>
+      widget.message.mediaType == MessageType.image ||
+      widget.message.mediaType == MessageType.video;
+
+  MediaUploadLifecycle? _lastDownloadState;
+
   @override
   void initState() {
     super.initState();
     widget.loader.addListener(_onLoaderChanged);
+    widget.loader.downloads?.addListener(_onDownloadsChanged);
     _start();
   }
 
@@ -102,7 +119,9 @@ class _ChatMediaPreviewState extends State<ChatMediaPreview> {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.loader != widget.loader) {
       oldWidget.loader.removeListener(_onLoaderChanged);
+      oldWidget.loader.downloads?.removeListener(_onDownloadsChanged);
       widget.loader.addListener(_onLoaderChanged);
+      widget.loader.downloads?.addListener(_onDownloadsChanged);
     }
     if (oldWidget.message.previewRef != widget.message.previewRef ||
         oldWidget.message.threadId != widget.message.threadId ||
@@ -110,11 +129,32 @@ class _ChatMediaPreviewState extends State<ChatMediaPreview> {
         oldWidget.message.senderId != widget.message.senderId ||
         oldWidget.loader != widget.loader) {
       _attempt = 0;
+      _lastDownloadState = null;
       _retryTimer?.cancel();
       _releaseBytes();
       _start();
     } else if (oldWidget.sendStatus != null && widget.sendStatus == null) {
       _start();
+    }
+  }
+
+  void _onDownloadsChanged() {
+    if (!mounted) return;
+    final ref = widget.message.previewRef;
+    final state = ref == null ? null : widget.loader.downloads?.job(ref)?.state;
+    final wasTerminal =
+        _lastDownloadState == MediaUploadLifecycle.failed ||
+        _lastDownloadState == MediaUploadLifecycle.cancelled;
+    final nowRunnable =
+        state == MediaUploadLifecycle.queued ||
+        state == MediaUploadLifecycle.uploading ||
+        state == MediaUploadLifecycle.resumed ||
+        state == MediaUploadLifecycle.retrying;
+    _lastDownloadState = state;
+    if (wasTerminal && nowRunnable && _failed && _bytes == null) {
+      _retryNow();
+    } else if (_loading || _failed) {
+      setState(() {});
     }
   }
 
@@ -135,6 +175,7 @@ class _ChatMediaPreviewState extends State<ChatMediaPreview> {
   @override
   void dispose() {
     widget.loader.removeListener(_onLoaderChanged);
+    widget.loader.downloads?.removeListener(_onDownloadsChanged);
     _retryTimer?.cancel();
     _token?.cancel();
     _generation++;
@@ -184,7 +225,10 @@ class _ChatMediaPreviewState extends State<ChatMediaPreview> {
       _bytes = Uint8List.fromList(cached);
       return;
     }
-    if (widget.sendStatus != null) return;
+    if (widget.sendStatus != null ||
+        widget.message.status == MessageStatus.failed) {
+      return;
+    }
     // Without a poster thumbnail the only blob is the whole video, which
     // cannot be drawn as an image; don't download it just to fail decoding.
     if (message.mediaType == MessageType.video &&
@@ -221,9 +265,9 @@ class _ChatMediaPreviewState extends State<ChatMediaPreview> {
       }
       if (!mounted || generation != _generation || _bytes != null) return;
       if (error is ChatMediaLoadCancelled || error is ChatDownloadCancelled) {
-        // A cache reset, not a failure: keep the spinner up through the gap
-        // so the tile never flashes an idle placeholder, then re-request.
-        if (_cancelledRetries >= _maxCancelledRetries) {
+        final jobState = widget.loader.downloads?.job(ref)?.state;
+        if (jobState == MediaUploadLifecycle.cancelled ||
+            _cancelledRetries >= _maxCancelledRetries) {
           setState(() {
             _loading = false;
             _failed = true;
@@ -231,6 +275,8 @@ class _ChatMediaPreviewState extends State<ChatMediaPreview> {
           });
           return;
         }
+        // A cache reset, not a failure: keep the spinner up through the gap
+        // so the tile never flashes an idle placeholder, then re-request.
         final delay = Duration(
           milliseconds: (300 * (1 << _cancelledRetries.clamp(0, 4))).clamp(
             300,
@@ -291,60 +337,63 @@ class _ChatMediaPreviewState extends State<ChatMediaPreview> {
     );
   }
 
-  Widget _buildUploadOverlay() {
-    final status = widget.sendStatus;
-    if (status == null) return const SizedBox.shrink();
-    final progress = status.isIndeterminate ? null : status.progress;
+  Widget _buildCircularTransferOverlay(MediaSendStatus status) {
+    final state = status.lifecycle;
+    final total = status.totalBytes;
+    final measured =
+        total != null && total > 0 && status.processedBytes != null;
     final percent = (status.progress * 100).clamp(0, 100).toInt();
+    final ringColor = state == MediaUploadLifecycle.failed
+        ? Theme.of(context).colorScheme.error
+        : state == MediaUploadLifecycle.paused
+        ? Theme.of(context).colorScheme.tertiary
+        : Colors.white;
 
     return Center(
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
         decoration: BoxDecoration(
-          color: Colors.black.withValues(alpha: 0.65),
-          borderRadius: BorderRadius.circular(20),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.25),
-              blurRadius: 8,
-              offset: const Offset(0, 2),
-            ),
-          ],
+          color: Colors.black.withValues(alpha: 0.72),
+          borderRadius: BorderRadius.circular(16),
         ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             SizedBox.square(
-              dimension: 36,
+              dimension: 56,
               child: Stack(
                 alignment: Alignment.center,
                 children: [
-                  CircularProgressIndicator(
-                    value: progress,
-                    strokeWidth: 3.5,
-                    color: Colors.white,
-                    backgroundColor: Colors.white24,
-                  ),
-                  if (widget.onCancel != null)
-                    GestureDetector(
-                      onTap: widget.onCancel,
-                      child: const Icon(
-                        Icons.close_rounded,
-                        color: Colors.white,
-                        size: 18,
-                      ),
+                  SizedBox.square(
+                    dimension: 56,
+                    child: CircularProgressIndicator(
+                      value: status.isIndeterminate ? null : status.progress,
+                      strokeWidth: 4,
+                      color: ringColor,
+                      backgroundColor: Colors.white24,
                     ),
+                  ),
+                  Text(
+                    status.isIndeterminate ? '…' : '$percent%',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
                 ],
               ),
             ),
             const SizedBox(height: 6),
             Text(
-              status.isIndeterminate ? status.label : '$percent%',
+              measured
+                  ? '${formatTransferSize(status.processedBytes!)} / ${formatTransferSize(total)}'
+                  : status.label,
+              textAlign: TextAlign.center,
               style: const TextStyle(
                 color: Colors.white,
-                fontSize: 12,
+                fontSize: 11,
                 fontWeight: FontWeight.w600,
-                letterSpacing: 0.2,
               ),
             ),
           ],
@@ -353,16 +402,35 @@ class _ChatMediaPreviewState extends State<ChatMediaPreview> {
     );
   }
 
+  Widget? _buildUploadOverlay() {
+    if (!_isPhotoOrVideo) return null;
+    final status = widget.sendStatus;
+    if (status != null) return _buildCircularTransferOverlay(status);
+    if (widget.message.status == MessageStatus.failed &&
+        (widget.onRetry != null || widget.onDiscard != null)) {
+      return _buildCircularTransferOverlay(
+        MediaSendStatus(
+          phase: MediaSendPhase.uploading,
+          progress: 0,
+          lifecycle: MediaUploadLifecycle.failed,
+          totalBytes: widget.message.mediaMeta?.sizeBytes,
+        ),
+      );
+    }
+    return null;
+  }
+
   Widget _buildImage(double width, double height) {
-    // Still uploading: no object exists yet, so show a neutral tile that the
-    // progress overlay sits on.
+    final uploadOverlay = _buildUploadOverlay();
+    // Still uploading: no object exists yet, so show a neutral tile with the
+    // upload progress overlay on top.
     if (_bytes == null && !_loading && !_failed) {
       return Stack(
         fit: StackFit.expand,
         children: [
           const ColoredBox(color: Colors.black26),
-          if (widget.sendStatus != null)
-            _buildUploadOverlay()
+          if (uploadOverlay != null)
+            uploadOverlay
           else if (widget.message.mediaType == MessageType.video &&
               widget.message.mediaRef != null)
             const Center(
@@ -374,8 +442,34 @@ class _ChatMediaPreviewState extends State<ChatMediaPreview> {
         ],
       );
     }
+    final ref = widget.message.previewRef;
+    final downloadJob = ref == null ? null : widget.loader.downloads?.job(ref);
     if (_loading) {
-      final stage = widget.loader.stage(widget.message.previewRef ?? '');
+      if (_isPhotoOrVideo &&
+          widget.loader.downloads != null &&
+          ref != null &&
+          downloadJob != null) {
+        return ColoredBox(
+          color: Colors.black26,
+          child: _buildCircularTransferOverlay(downloadJob.progress),
+        );
+      }
+      if (widget.loader.downloads != null && ref != null) {
+        return ColoredBox(
+          color: Colors.black26,
+          child: Center(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(8),
+              child: AttachmentDownloadProgress(
+                loader: widget.loader,
+                storagePath: ref,
+                onRetry: _retryNow,
+              ),
+            ),
+          ),
+        );
+      }
+      final stage = widget.loader.stage(ref ?? '');
       final queued = stage == null;
       return ColoredBox(
         color: Colors.black26,
@@ -402,6 +496,30 @@ class _ChatMediaPreviewState extends State<ChatMediaPreview> {
       );
     }
     if (_failed || _bytes == null || _bytes!.isEmpty) {
+      if (ref != null &&
+          downloadJob != null &&
+          (downloadJob.state == MediaUploadLifecycle.failed ||
+              downloadJob.state == MediaUploadLifecycle.cancelled)) {
+        if (_isPhotoOrVideo) {
+          return ColoredBox(
+            color: Colors.black26,
+            child: _buildCircularTransferOverlay(downloadJob.progress),
+          );
+        }
+        return ColoredBox(
+          color: Colors.black26,
+          child: Center(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(8),
+              child: AttachmentDownloadProgress(
+                loader: widget.loader,
+                storagePath: ref,
+                onRetry: _retryNow,
+              ),
+            ),
+          ),
+        );
+      }
       _scheduleRetry();
       return GestureDetector(
         behavior: HitTestBehavior.opaque,
@@ -464,9 +582,10 @@ class _ChatMediaPreviewState extends State<ChatMediaPreview> {
             ),
           ),
         ),
-        if (widget.sendStatus != null) _buildUploadOverlay(),
+        ?uploadOverlay,
         if (widget.message.mediaType == MessageType.video &&
-            widget.sendStatus == null)
+            widget.sendStatus == null &&
+            uploadOverlay == null)
           const Center(
             child: CircleAvatar(
               backgroundColor: Colors.black54,
@@ -703,15 +822,13 @@ class _ChatDocumentTileState extends State<ChatDocumentTile> {
       mainAxisSize: MainAxisSize.min,
       children: [
         tile,
-        if (widget.sendStatus != null)
-          AttachmentUploadProgress(
-            status: widget.sendStatus!,
-            onCancel: widget.onCancel,
-          )
-        else if (_opening && widget.message.mediaRef != null)
+        if (widget.sendStatus == null &&
+            _opening &&
+            widget.message.mediaRef != null)
           AttachmentDownloadProgress(
             loader: widget.loader,
             storagePath: widget.message.mediaRef!,
+            onRetry: _open,
           ),
       ],
     );

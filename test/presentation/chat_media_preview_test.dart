@@ -10,6 +10,7 @@ import 'package:photo_vault/features/chat/application/crypto/chat_crypto_service
 import 'package:photo_vault/features/chat/application/media/android_chat_local_media.dart';
 import 'package:photo_vault/features/chat/application/media/media_send_status.dart';
 import 'package:photo_vault/features/chat/domain/entities/chat_message.dart';
+import 'package:photo_vault/features/chat/domain/entities/message_metadata.dart';
 import 'package:photo_vault/features/chat/domain/repositories/message_repository.dart';
 import 'package:photo_vault/features/chat/presentation/screens/chat_image_viewer_screen.dart';
 import 'package:photo_vault/features/chat/presentation/widgets/attachment_upload_progress.dart';
@@ -142,7 +143,73 @@ void main() {
     loader.dispose();
   });
 
-  testWidgets('other attachment upload progress remains outside the bubble', (
+  testWidgets(
+    'image upload renders circular progress overlay and below-bubble actions',
+    (tester) async {
+      final loader = _Loader();
+      var pauses = 0;
+      var cancels = 0;
+      const measuredUpload = MediaSendStatus(
+        phase: MediaSendPhase.uploading,
+        progress: .25,
+        lifecycle: MediaUploadLifecycle.uploading,
+        processedBytes: 256,
+        totalBytes: 1024,
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: AppTheme.light,
+          home: Scaffold(
+            body: MessageBubble(
+              message: message,
+              isMine: true,
+              myUid: 'me',
+              otherUid: 'alice',
+              mediaLoader: loader,
+              onDeleteForMe: () {},
+              sendStatus: measuredUpload,
+              onPauseUpload: () => pauses++,
+              onCancelUpload: () => cancels++,
+            ),
+          ),
+        ),
+      );
+
+      expect(find.byType(LinearProgressIndicator), findsNothing);
+      expect(
+        find.descendant(
+          of: find.byType(ChatMediaPreview),
+          matching: find.byType(CircularProgressIndicator),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: find.byType(ChatMediaPreview),
+          matching: find.text('25%'),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: find.byType(ChatMediaPreview),
+          matching: find.text('256 B / 1.0 KB'),
+        ),
+        findsOneWidget,
+      );
+      expect(find.byType(AttachmentTransferActions), findsOneWidget);
+      await tester.tap(find.text('Pause'));
+      await tester.pump();
+      expect(pauses, 1);
+      await tester.tap(find.text('Cancel'));
+      await tester.pump();
+      expect(cancels, 1);
+      await tester.pumpWidget(const SizedBox.shrink());
+      loader.dispose();
+    },
+  );
+
+  testWidgets('document upload renders only one AttachmentUploadProgress', (
     tester,
   ) async {
     final loader = _Loader();
@@ -151,7 +218,10 @@ void main() {
         theme: AppTheme.light,
         home: Scaffold(
           body: MessageBubble(
-            message: message,
+            message: message.copyWith(
+              mediaType: MessageType.file,
+              localDecryptedText: 'report.pdf',
+            ),
             isMine: true,
             myUid: 'me',
             otherUid: 'alice',
@@ -164,6 +234,48 @@ void main() {
     );
 
     expect(find.byType(AttachmentUploadProgress), findsOneWidget);
+    await tester.pumpWidget(const SizedBox.shrink());
+    loader.dispose();
+  });
+
+  testWidgets('failed media attachment exposes retry and cancel actions', (
+    tester,
+  ) async {
+    final loader = _Loader();
+    var retries = 0;
+    var discards = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light,
+        home: Scaffold(
+          body: MessageBubble(
+            message: message.copyWith(status: MessageStatus.failed),
+            isMine: true,
+            myUid: 'me',
+            otherUid: 'alice',
+            mediaLoader: loader,
+            onDeleteForMe: () {},
+            onRetry: () => retries++,
+            onDiscard: () => discards++,
+          ),
+        ),
+      ),
+    );
+
+    expect(find.byType(AttachmentTransferActions), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byType(ChatMediaPreview),
+        matching: find.byType(CircularProgressIndicator),
+      ),
+      findsOneWidget,
+    );
+    await tester.tap(find.text('Retry'));
+    await tester.pump();
+    expect(retries, 1);
+    await tester.tap(find.text('Cancel'));
+    await tester.pump();
+    expect(discards, 1);
     await tester.pumpWidget(const SizedBox.shrink());
     loader.dispose();
   });

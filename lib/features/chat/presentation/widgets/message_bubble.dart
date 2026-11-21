@@ -340,6 +340,7 @@ class MessageBubble extends StatelessWidget {
               onPauseUpload: onPauseUpload,
               onResumeUpload: onResumeUpload,
               onRetry: onRetry,
+              onDiscard: onDiscard,
               onTapQuote: onTapQuote,
               textColor: cs.onSurface,
               metaColor: cs.onSurfaceVariant,
@@ -375,6 +376,7 @@ class MessageBubble extends StatelessWidget {
                 onPauseUpload: onPauseUpload,
                 onResumeUpload: onResumeUpload,
                 onRetry: onRetry,
+                onDiscard: onDiscard,
                 onTapQuote: onTapQuote,
                 textColor: highlighted ? cs.onTertiaryContainer : textColor,
                 metaColor: highlighted ? cs.onTertiaryContainer : textColor,
@@ -470,13 +472,75 @@ class MessageBubble extends StatelessWidget {
                   child: messageRow,
                 ),
               ),
-              if (sendStatus != null && message.mediaType != MessageType.audio)
+              if (message.mediaType == MessageType.image ||
+                  message.mediaType == MessageType.video) ...[
+                if (sendStatus != null)
+                  AttachmentTransferActions(
+                    status: sendStatus!,
+                    onPause: onPauseUpload,
+                    onResume: onResumeUpload,
+                    onRetry: onRetry,
+                    onCancel: onCancelUpload,
+                  )
+                else if (message.status == MessageStatus.failed &&
+                    (onRetry != null || onDiscard != null))
+                  AttachmentTransferActions(
+                    status: MediaSendStatus(
+                      phase: MediaSendPhase.uploading,
+                      progress: 0,
+                      lifecycle: MediaUploadLifecycle.failed,
+                      totalBytes: message.mediaMeta?.sizeBytes,
+                    ),
+                    onRetry: onRetry,
+                    onCancel: onDiscard,
+                  )
+                else if (mediaLoader.downloads != null &&
+                    message.previewRef != null)
+                  AnimatedBuilder(
+                    animation: mediaLoader.downloads!,
+                    builder: (context, _) {
+                      final ref = message.previewRef!;
+                      final downloads = mediaLoader.downloads!;
+                      final job = downloads.job(ref);
+                      if (job == null ||
+                          job.state == MediaUploadLifecycle.completed ||
+                          mediaLoader.cached(ref) != null) {
+                        return const SizedBox.shrink();
+                      }
+                      return AttachmentTransferActions(
+                        status: job.progress,
+                        actionError: 'Download action failed. Please retry.',
+                        retryCancelled: true,
+                        onPause: () => downloads.command(ref, 'pause'),
+                        onResume: () => downloads.command(ref, 'resume'),
+                        onRetry: () => downloads.command(ref, 'retry'),
+                        onCancel: () => downloads.command(ref, 'cancel'),
+                      );
+                    },
+                  ),
+              ] else if (sendStatus != null &&
+                  message.mediaType != MessageType.audio)
                 AttachmentUploadProgress(
                   status: sendStatus!,
                   onPause: onPauseUpload,
                   onResume: onResumeUpload,
                   onRetry: onRetry,
                   onCancel: onCancelUpload,
+                )
+              else if (sendStatus == null &&
+                  message.status == MessageStatus.failed &&
+                  message.isMedia &&
+                  message.mediaType != MessageType.audio &&
+                  (onRetry != null || onDiscard != null))
+                AttachmentUploadProgress(
+                  status: MediaSendStatus(
+                    phase: MediaSendPhase.uploading,
+                    progress: 0,
+                    lifecycle: MediaUploadLifecycle.failed,
+                    totalBytes: message.mediaMeta?.sizeBytes,
+                  ),
+                  onRetry: onRetry,
+                  onCancel: onDiscard,
                 ),
               if (grouped.isNotEmpty && !message.isDataSms)
                 _ReactionRow(grouped: grouped, myUid: myUid, onTap: onReact),
@@ -817,6 +881,7 @@ class _BubbleContent extends StatelessWidget {
     this.onPauseUpload,
     this.onResumeUpload,
     this.onRetry,
+    this.onDiscard,
     this.loadLinkedVaultMedia,
     this.loadLinkedVaultThumbnail,
   });
@@ -839,10 +904,11 @@ class _BubbleContent extends StatelessWidget {
 
   /// Send progress of this attachment, null once it is sent.
   final MediaSendStatus? sendStatus;
-  final VoidCallback? onCancelUpload;
-  final VoidCallback? onPauseUpload;
-  final VoidCallback? onResumeUpload;
+  final FutureOr<void> Function()? onCancelUpload;
+  final FutureOr<void> Function()? onPauseUpload;
+  final FutureOr<void> Function()? onResumeUpload;
   final FutureOr<void> Function()? onRetry;
+  final VoidCallback? onDiscard;
 
   @override
   Widget build(BuildContext context) {
@@ -998,7 +1064,11 @@ class _BubbleContent extends StatelessWidget {
               message: message,
               loader: mediaLoader,
               sendStatus: sendStatus,
+              onPause: onPauseUpload,
+              onResume: onResumeUpload,
+              onRetry: onRetry,
               onCancel: onCancelUpload,
+              onDiscard: onDiscard,
               loadLinkedVaultThumbnail: loadLinkedVaultThumbnail,
               onTap:
                   isSelectionMode ||

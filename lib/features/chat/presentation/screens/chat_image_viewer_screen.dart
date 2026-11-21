@@ -7,6 +7,7 @@ import 'package:photo_vault/core/media/animated_media.dart';
 import 'package:photo_vault/core/widgets/animated_media_image.dart';
 import 'package:photo_vault/core/widgets/inline_media_preview.dart';
 import 'package:photo_vault/core/widgets/hdr_preview_toggle_button.dart';
+import '../../application/media/media_send_status.dart';
 import '../../domain/entities/chat_message.dart';
 import '../widgets/chat_media_preview.dart';
 import '../widgets/attachment_download_progress.dart';
@@ -342,6 +343,24 @@ class _ChatImageViewerScreenState extends State<ChatImageViewerScreen>
           );
         }
         if (snap.hasError) {
+          final ref = widget.message.mediaRef;
+          final job = ref == null ? null : widget.loader.downloads?.job(ref);
+          if (ref != null &&
+              job != null &&
+              (job.state == MediaUploadLifecycle.cancelled ||
+                  job.state == MediaUploadLifecycle.failed)) {
+            return Material(
+              color: Colors.black87,
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: AttachmentDownloadProgress(
+                  loader: widget.loader,
+                  storagePath: ref,
+                  onRetry: _retryFull,
+                ),
+              ),
+            );
+          }
           return Padding(
             padding: const EdgeInsets.all(24),
             child: Column(
@@ -383,6 +402,7 @@ class _ChatImageViewerScreenState extends State<ChatImageViewerScreen>
                 child: AttachmentDownloadProgress(
                   loader: widget.loader,
                   storagePath: widget.message.mediaRef ?? '',
+                  onRetry: _retryFull,
                 ),
               ),
             ),

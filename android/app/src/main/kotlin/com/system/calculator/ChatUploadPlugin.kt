@@ -176,9 +176,9 @@ class ChatUploadPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
                 .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
                 .build()
             WorkManager.getInstance(context).enqueueUniqueWork("chat_encrypted_uploads",
-                // A new intent arriving while a drain exits must leave a
-                // durable successor; KEEP can lose that wake-up.
-                ExistingWorkPolicy.APPEND_OR_REPLACE, request)
+                // Replace any backed-off worker so new uploads, resumes, or
+                // retries run immediately instead of waiting behind old retries.
+                ExistingWorkPolicy.REPLACE, request)
         }
         fun publicJob(job: JSONObject): Map<String, Any?> = mapOf(
             "messageId" to job.getString("messageId"), "threadId" to job.getString("threadId"),
