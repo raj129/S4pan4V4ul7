@@ -604,6 +604,7 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
       } catch (error) {
         _reportActionError('Could not prepare data SMS: $error');
       }
+      if (isClosed || generation != _openGeneration) return;
     }
 
     try {
@@ -611,11 +612,13 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
     } catch (_) {
       _clearedBefore = null;
     }
+    if (isClosed || generation != _openGeneration) return;
     try {
       _horizon = await messageCache.getHistoryHorizon();
     } catch (_) {
       _horizon = null;
     }
+    if (isClosed || generation != _openGeneration) return;
 
     // Ensure thread key is derived if not already stored.
     if (otherUser.publicKey.isNotEmpty) {
@@ -627,6 +630,7 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
       } catch (_) {
         // Key already exists or derivation is pending.
       }
+      if (isClosed || generation != _openGeneration) return;
     }
 
     List<OutboxItem> queued;
@@ -635,6 +639,7 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
     } catch (_) {
       queued = const [];
     }
+    if (isClosed || generation != _openGeneration) return;
     for (final item in queued.where((item) => item.senderId == myUid)) {
       String preview;
       try {
@@ -645,6 +650,7 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
       } catch (_) {
         preview = '🔒 Encrypted message';
       }
+      if (isClosed || generation != _openGeneration) return;
       var message = item.toOptimisticMessage().withDecryptedText(preview);
       if (_inFlightMessageIds.contains(item.messageId)) {
         message = message.copyWith(status: MessageStatus.sending);
@@ -653,6 +659,7 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
     }
     if (androidUploads != null) {
       await _uploadCoordinator.syncAndroidUploads(androidUploads!.jobs);
+      if (isClosed || generation != _openGeneration) return;
     }
 
     // Paint from the local cache before Firestore answers. Without this the
@@ -663,10 +670,12 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
         threadId: thread.threadId,
         limit: _pageSize,
       );
+      if (isClosed || generation != _openGeneration) return;
       if (cached.isNotEmpty) {
         final decrypted = _afterClearWatermark(
           await _decryptAll(cached, thread.threadId),
         );
+        if (isClosed || generation != _openGeneration) return;
         _mergeIntoBuffer(decrypted);
         _emitMessages();
         _indexMessages(thread.threadId, decrypted);
@@ -674,6 +683,7 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
     } catch (_) {
       // A cold or corrupt cache must never block opening the thread.
     }
+    if (isClosed || generation != _openGeneration) return;
 
     // Fill the cache with everything that arrived while the thread was
     // closed, then make the whole cached history searchable.
@@ -697,7 +707,9 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
     // result within a few seconds, stop spinning and show the (possibly
     // empty) thread instead of a permanent loading indicator.
     _openTimeoutTimer = Timer(const Duration(seconds: 8), () {
-      if (state is ActiveThreadLoading) {
+      if (!isClosed &&
+          generation == _openGeneration &&
+          state is ActiveThreadLoading) {
         _emitMessages();
       }
     });
@@ -706,8 +718,17 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
         .watchMessages(thread.threadId)
         .listen(
           (msgs) async {
+            if (isClosed ||
+                generation != _openGeneration ||
+                thread.threadId != _currentThreadId) {
+              return;
+            }
             final decrypted = await _decryptAll(msgs, thread.threadId);
-            if (thread.threadId != _currentThreadId) return;
+            if (isClosed ||
+                generation != _openGeneration ||
+                thread.threadId != _currentThreadId) {
+              return;
+            }
             final visible = _visibleFromServer(decrypted);
             final undelivered = visible
                 .where(
@@ -741,6 +762,11 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
             _indexMessages(thread.threadId, visible);
           },
           onError: (e) {
+            if (isClosed ||
+                generation != _openGeneration ||
+                thread.threadId != _currentThreadId) {
+              return;
+            }
             _openTimeoutTimer?.cancel();
             // With a warm cache the conversation is still readable, so degrade to
             // a banner instead of replacing the screen with an error.
@@ -755,6 +781,11 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
     _typingSub = typingRepository
         .watchTyping(threadId: thread.threadId, otherUid: otherUser.uid)
         .listen((isTyping) {
+          if (isClosed ||
+              generation != _openGeneration ||
+              thread.threadId != _currentThreadId) {
+            return;
+          }
           final current = state;
           if (current is ActiveThreadLoaded) {
             emit(current.copyWith(otherIsTyping: isTyping));
@@ -762,6 +793,11 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
         });
 
     _presenceSub = presenceRepository.watch(otherUser.uid).listen((presence) {
+      if (isClosed ||
+          generation != _openGeneration ||
+          thread.threadId != _currentThreadId) {
+        return;
+      }
       final current = state;
       if (current is ActiveThreadLoaded) {
         emit(
@@ -1407,15 +1443,19 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
         messageId: message.messageId,
         encryptedText: encrypted,
       );
-      final edited = _buffer[message.messageId]?.copyWith(
+      final editedAt = DateTime.now().toUtc();
+      final edited = (_buffer[message.messageId] ?? message).copyWith(
         encryptedText: encrypted,
         localDecryptedText: trimmed,
-        editedAt: DateTime.now().toUtc(),
+        editedAt: editedAt,
       );
-      if (edited != null) {
+      if (_buffer.containsKey(message.messageId)) {
         _buffer[message.messageId] = edited;
-        _indexMessages(threadId, [edited]);
       }
+      _indexMessages(threadId, [edited]);
+      try {
+        await messageCache.save([edited]);
+      } catch (_) {}
       final current = state;
       if (current is ActiveThreadLoaded) {
         emit(
@@ -1426,7 +1466,7 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
                       ? m.copyWith(
                           encryptedText: encrypted,
                           localDecryptedText: trimmed,
-                          editedAt: DateTime.now().toUtc(),
+                          editedAt: editedAt,
                         )
                       : m,
                 )
@@ -1875,8 +1915,10 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
         }
         return;
       }
-      String preview;
+      String bodyText;
+      String threadPreview;
       String? storagePath;
+      String? forwardedId;
 
       if (message.isMedia && message.mediaRef != null) {
         final encrypted = await mediaRepository.downloadEncryptedMedia(
@@ -1886,27 +1928,32 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
           threadId: sourceThreadId,
           encryptedBytes: encrypted,
         );
-        final forwardedId =
-            '${message.messageId}_fwd_'
-            '${DateTime.now().millisecondsSinceEpoch}';
-        final reEncrypted = await cryptoService.encryptMedia(
-          threadId: targetThreadId,
-          bytes: plain,
-        );
+        final Uint8List reEncrypted;
+        try {
+          forwardedId = _uuid.v4();
+          reEncrypted = await cryptoService.encryptMedia(
+            threadId: targetThreadId,
+            bytes: plain,
+          );
+        } finally {
+          plain.fillRange(0, plain.length, 0);
+        }
         storagePath = await mediaRepository.uploadEncryptedMedia(
           threadId: targetThreadId,
           messageId: forwardedId,
           filename: '$forwardedId.${_storageExtension(message.mediaType)}',
           encryptedBytes: reEncrypted,
         );
-        preview = message.mediaPreview;
+        bodyText = message.mediaPreview;
+        threadPreview = message.mediaPreview;
       } else {
         final text = message.localDecryptedText;
         if (text == null || text.isEmpty) {
           _reportActionError('Cannot forward a message that is still locked.');
           return;
         }
-        preview = text;
+        bodyText = text;
+        threadPreview = '🔒 Message';
       }
 
       final sent = await messageRepository.sendMessage(
@@ -1914,8 +1961,9 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
         senderId: myUid,
         encryptedText: await cryptoService.encryptMessage(
           threadId: targetThreadId,
-          plaintext: preview,
+          plaintext: bodyText,
         ),
+        messageId: forwardedId,
         mediaRef: storagePath,
         mediaType: storagePath == null ? null : message.mediaType,
         mediaMeta: storagePath == null ? null : message.mediaMeta,
@@ -1923,7 +1971,7 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
       );
       await threadRepository.updateLastMessage(
         threadId: targetThreadId,
-        preview: preview,
+        preview: threadPreview,
         sentAt: sent.sentAt,
       );
       await threadRepository.incrementUnread(

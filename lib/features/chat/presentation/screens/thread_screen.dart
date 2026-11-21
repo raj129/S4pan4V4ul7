@@ -932,7 +932,10 @@ class _ThreadScreenState extends State<ThreadScreen>
     widget.vaultBridge.vaultSessionChanges.removeListener(
       _recoverOnVaultUnlock,
     );
-    widget.notificationService?.setActiveThread(null);
+    if (widget.notificationService?.isActiveThread(widget.thread.threadId) ==
+        true) {
+      widget.notificationService!.setActiveThread(null);
+    }
     _textCtrl.removeListener(_onTextControllerChanged);
     _itemPositions.itemPositions.removeListener(_onScroll);
     _scrollbarHide?.cancel();

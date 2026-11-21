@@ -120,9 +120,9 @@ class ChatMediaLoader extends ChangeNotifier {
     }
     final hit = cached(storagePath);
     if (hit != null) return Future.value(hit);
-    final key = '$threadId:$storagePath:$senderId';
+    final key = '$_accountId:$threadId:$storagePath:$senderId';
     final running = _inFlight[key];
-    if (running != null) {
+    if (running != null && running.generation == _generation) {
       // A re-request (tile scrolled back into view) moves it to the front.
       _scheduler.promote(running.task);
       return _own(running, token);

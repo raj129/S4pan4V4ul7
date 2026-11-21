@@ -256,7 +256,11 @@ class ThreadListCubit extends Cubit<ThreadListState> {
       await messageCache.clearThread(threadId);
       await _refreshSms();
     } catch (e) {
-      emit(ThreadListError('Clear failed: $e'));
+      if (state is! ThreadListLoaded) {
+        emit(ThreadListError('Clear failed: $e'));
+      } else {
+        debugPrint('Clear thread failed: ${e.runtimeType}');
+      }
     }
   }
 
@@ -269,7 +273,11 @@ class ThreadListCubit extends Cubit<ThreadListState> {
       await dataSms?.forget(threadId);
       await _refreshSms();
     } catch (e) {
-      emit(ThreadListError('Delete failed: $e'));
+      if (state is! ThreadListLoaded) {
+        emit(ThreadListError('Delete failed: $e'));
+      } else {
+        debugPrint('Delete thread failed: ${e.runtimeType}');
+      }
     }
   }
 

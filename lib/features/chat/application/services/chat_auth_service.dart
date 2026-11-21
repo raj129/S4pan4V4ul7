@@ -217,6 +217,7 @@ class ChatAuthService {
     } catch (_) {
       // Never block sign-out on cleanup.
     }
+    cryptoService.clearKeyCache();
     await presenceRepository.setOffline(uid);
     await authRepository.signOut();
   }
