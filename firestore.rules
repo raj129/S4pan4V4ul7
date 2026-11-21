@@ -370,8 +370,17 @@ service cloud.firestore {
           allow read: if isExistingThreadParticipant(threadId);
           allow create, update: if isExistingThreadParticipant(threadId)
                                 && isSelf(uid)
-                                && request.resource.data.keys().hasOnly([
+                                && request.resource.data.keys().hasAll([
                                   'userId', 'heartbeatAt', 'expiresAt'
+                                ])
+                                && request.resource.data.keys().hasOnly([
+                                  'userId',
+                                  'heartbeatAt',
+                                  'expiresAt',
+                                  'editingTarget',
+                                  'editingItemId',
+                                  'editingLine',
+                                  'cursorOffset'
                                 ])
                                 && request.resource.data.userId == uid
                                 && request.resource.data.heartbeatAt is int
@@ -384,7 +393,19 @@ service cloud.firestore {
                                 && request.resource.data.expiresAt <=
                                    request.resource.data.heartbeatAt + 60000
                                 && request.resource.data.expiresAt >
-                                   request.time.toMillis();
+                                   request.time.toMillis()
+                                && (!('editingTarget' in request.resource.data)
+                                    || request.resource.data.editingTarget in [
+                                      'title', 'content', 'item'
+                                    ])
+                                && (!('editingItemId' in request.resource.data)
+                                    || request.resource.data.editingItemId is string)
+                                && (!('editingLine' in request.resource.data)
+                                    || (request.resource.data.editingLine is int
+                                        && request.resource.data.editingLine >= 0))
+                                && (!('cursorOffset' in request.resource.data)
+                                    || (request.resource.data.cursorOffset is int
+                                        && request.resource.data.cursorOffset >= 0));
           allow delete: if isExistingThreadParticipant(threadId) && isSelf(uid);
         }
       }

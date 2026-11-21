@@ -6,9 +6,12 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:intl/intl.dart';
 import 'package:photo_vault/core/widgets/app_navigation_drawer.dart';
 import 'package:photo_vault/features/chat/domain/entities/app_note.dart';
+import 'package:photo_vault/features/chat/domain/entities/chat_message.dart';
+import 'package:photo_vault/features/chat/domain/entities/note_merge.dart';
 import 'package:photo_vault/features/chat/domain/repositories/notes_repository.dart';
 import 'package:photo_vault/features/chat/presentation/screens/note_editor_screen.dart';
 import 'package:photo_vault/features/chat/presentation/screens/notes_screen.dart';
+import 'package:photo_vault/features/chat/presentation/widgets/shared_note_bubble.dart';
 
 class _NotesRepository implements NotesRepository {
   final private = <AppNote>[];
@@ -18,8 +21,9 @@ class _NotesRepository implements NotesRepository {
   bool failSave = false;
   String? watchedThread;
   Completer<void>? nextPrivateSaveGate;
-  final Map<String, Set<String>> editors = {};
-  final Map<String, StreamController<List<String>>> editorUpdates = {};
+  final Map<String, Map<String, NoteEditorPresence>> editors = {};
+  final Map<String, StreamController<List<NoteEditorPresence>>> editorUpdates =
+      {};
 
   String _editorKey(String threadId, String noteId) => '$threadId/$noteId';
 
@@ -37,13 +41,38 @@ class _NotesRepository implements NotesRepository {
   }
 
   @override
+  Stream<AppNote?> watchThreadNote({
+    required String threadId,
+    required String noteId,
+  }) async* {
+    yield shared
+        .where((n) => n.id == noteId && n.threadId == threadId)
+        .firstOrNull;
+    yield* sharedUpdates.stream.map(
+      (notes) => notes
+          .where((n) => n.id == noteId && n.threadId == threadId)
+          .firstOrNull,
+    );
+  }
+
+  @override
   Stream<List<String>> watchThreadNoteEditors({
+    required String threadId,
+    required String noteId,
+  }) => watchThreadNoteEditorPresences(
+    threadId: threadId,
+    noteId: noteId,
+  ).map((presences) => presences.map((p) => p.userId).toList(growable: false));
+
+  @override
+  Stream<List<NoteEditorPresence>> watchThreadNoteEditorPresences({
     required String threadId,
     required String noteId,
   }) async* {
     final key = _editorKey(threadId, noteId);
-    yield List.of(editors[key] ?? const {});
-    yield* (editorUpdates[key] ??= StreamController<List<String>>.broadcast())
+    yield List.of(editors[key]?.values ?? const <NoteEditorPresence>[]);
+    yield* (editorUpdates[key] ??=
+            StreamController<List<NoteEditorPresence>>.broadcast())
         .stream;
   }
 
@@ -53,15 +82,28 @@ class _NotesRepository implements NotesRepository {
     required String noteId,
     required String uid,
     required bool isEditing,
+    String? editingTarget,
+    String? editingItemId,
+    int? editingLine,
+    int? cursorOffset,
   }) async {
     final key = _editorKey(threadId, noteId);
-    final active = editors.putIfAbsent(key, () => <String>{});
+    final active = editors.putIfAbsent(
+      key,
+      () => <String, NoteEditorPresence>{},
+    );
     if (isEditing) {
-      active.add(uid);
+      active[uid] = NoteEditorPresence(
+        userId: uid,
+        editingTarget: editingTarget,
+        editingItemId: editingItemId,
+        editingLine: editingLine,
+        cursorOffset: cursorOffset,
+      );
     } else {
       active.remove(uid);
     }
-    editorUpdates[key]?.add(List.of(active));
+    editorUpdates[key]?.add(List.of(active.values));
   }
 
   @override
@@ -76,11 +118,19 @@ class _NotesRepository implements NotesRepository {
   }
 
   @override
-  Future<void> saveThreadNote(AppNote note) async {
+  Future<AppNote> saveThreadNote(AppNote note, {AppNote? baseNote}) async {
     if (failSave) throw StateError('network unavailable');
+    final existingIndex = shared.indexWhere((item) => item.id == note.id);
+    if (baseNote != null && existingIndex < 0) {
+      throw NoteDeletedException(note.id);
+    }
+    final saved = existingIndex >= 0
+        ? mergeAppNotes(base: baseNote, remote: shared[existingIndex], local: note)
+        : note;
     shared.removeWhere((item) => item.id == note.id);
-    shared.add(note);
+    shared.add(saved);
     sharedUpdates.add(List.of(shared));
+    return saved;
   }
 
   @override
@@ -278,11 +328,11 @@ void main() {
     await tester.pump();
 
     expect(find.text('Someone else is editing this note'), findsOneWidget);
-    expect(repository.editors['chat-1/Shared'], contains('me'));
+    expect(repository.editors['chat-1/Shared']?.keys, contains('me'));
 
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pump();
-    expect(repository.editors['chat-1/Shared'], isNot(contains('me')));
+    expect(repository.editors['chat-1/Shared']?.keys, isNot(contains('me')));
   });
 
   testWidgets('private create starts empty and saves before opening editor', (
@@ -580,5 +630,154 @@ void main() {
       'Second',
       'First',
     ]);
+  });
+
+  testWidgets('line and item presence clues highlight active collaborator position', (
+    tester,
+  ) async {
+    final checklist = AppNote(
+      id: 'shared-cl',
+      threadId: 'chat-1',
+      creatorId: 'me',
+      type: NoteType.checklist,
+      title: 'Groceries',
+      items: const [ChecklistItem(id: 'item-1', text: 'Milk')],
+      createdAt: DateTime.utc(2024, 1, 1),
+      updatedAt: DateTime.utc(2024, 1, 2),
+    );
+    repository.shared.add(checklist);
+    await repository.setThreadNoteEditing(
+      threadId: 'chat-1',
+      noteId: 'shared-cl',
+      uid: 'other-user',
+      isEditing: true,
+      editingTarget: 'item',
+      editingItemId: 'item-1',
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: NoteEditorScreen(
+          note: checklist,
+          notesRepository: repository,
+          currentUserId: 'me',
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(
+      find.text('Someone else is editing this note • "Milk"'),
+      findsOneWidget,
+    );
+    expect(find.text('Editing'), findsOneWidget);
+  });
+
+  testWidgets('deleting an actively edited note warns the deleter first', (
+    tester,
+  ) async {
+    final note = _note('Active', threadId: 'chat-1');
+    repository.shared.add(note);
+    await repository.setThreadNoteEditing(
+      threadId: 'chat-1',
+      noteId: note.id,
+      uid: 'other-user',
+      isEditing: true,
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: NotesScreen(
+          notesRepository: repository,
+          currentUserId: 'me',
+          threadId: 'chat-1',
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byType(PopupMenuButton<String>));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Delete'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Note is being edited'), findsOneWidget);
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+    expect(repository.shared, hasLength(1));
+
+    await tester.tap(find.byType(PopupMenuButton<String>));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Delete'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, 'Delete'));
+    await tester.pumpAndSettle();
+    expect(repository.shared, isEmpty);
+  });
+
+  testWidgets('editor shows recovery banner when note is deleted remotely', (
+    tester,
+  ) async {
+    final note = _note('Shared', threadId: 'chat-1');
+    repository.shared.add(note);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: NoteEditorScreen(
+          note: note,
+          notesRepository: repository,
+          currentUserId: 'me',
+        ),
+      ),
+    );
+    await tester.pump();
+
+    await repository.deleteThreadNote(threadId: 'chat-1', noteId: note.id);
+    await tester.pump();
+
+    expect(
+      find.textContaining('This note was deleted by the other participant'),
+      findsOneWidget,
+    );
+    expect(find.text('Save copy'), findsOneWidget);
+  });
+
+  testWidgets('SharedNoteBubble updates live when remote note changes', (
+    tester,
+  ) async {
+    final note = _note('Initial title', threadId: 'chat-1');
+    repository.shared.add(note);
+    final message = ChatMessage(
+      messageId: 'm1',
+      threadId: 'chat-1',
+      senderId: 'other',
+      encryptedText: '',
+      localDecryptedText: 'Shared a note',
+      sentAt: DateTime.utc(2024, 1, 2),
+      deletedFor: const [],
+      mediaType: MessageType.sharedNote,
+      sharedNoteId: note.id,
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SharedNoteBubble(
+            message: message,
+            isMine: false,
+            currentUserId: 'me',
+            notesRepository: repository,
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(find.text('Initial title'), findsOneWidget);
+
+    await repository.saveThreadNote(
+      note.copyWith(title: 'Updated live title', updatedAt: DateTime.utc(2024, 1, 3)),
+    );
+    await tester.pump();
+    expect(find.text('Updated live title'), findsOneWidget);
   });
 }

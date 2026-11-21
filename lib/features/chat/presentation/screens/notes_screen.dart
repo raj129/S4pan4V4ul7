@@ -106,6 +106,45 @@ class _NotesScreenState extends State<NotesScreen> {
   }
 
   Future<void> _deleteNote(AppNote note) async {
+    if (note.isShared) {
+      var activeOtherEditors = false;
+      try {
+        final editors = await widget.notesRepository
+            .watchThreadNoteEditors(
+              threadId: note.threadId!,
+              noteId: note.id,
+            )
+            .first
+            .timeout(const Duration(seconds: 2));
+        activeOtherEditors = editors.any((uid) => uid != widget.currentUserId);
+      } catch (_) {
+        // Proceed if presence check times out or fails.
+      }
+
+      if (activeOtherEditors && mounted) {
+        final confirmed = await showDialog<bool>(
+          context: context,
+          builder: (dialogContext) => AlertDialog(
+            title: const Text('Note is being edited'),
+            content: const Text(
+              'Someone else is currently editing this note. Deleting it will remove it for them too. Delete anyway?',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(false),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(dialogContext).pop(true),
+                child: const Text('Delete'),
+              ),
+            ],
+          ),
+        );
+        if (confirmed != true) return;
+      }
+    }
+
     try {
       if (note.isShared) {
         await widget.notesRepository.deleteThreadNote(
@@ -128,7 +167,7 @@ class _NotesScreenState extends State<NotesScreen> {
     final updated = note.copyWith(isPinned: !note.isPinned);
     try {
       if (updated.isShared) {
-        await widget.notesRepository.saveThreadNote(updated);
+        await widget.notesRepository.saveThreadNote(updated, baseNote: note);
       } else {
         await widget.notesRepository.savePrivateNote(updated);
       }
@@ -274,6 +313,13 @@ class _NotesScreenState extends State<NotesScreen> {
             final note = notes[index];
             return _NoteGridCard(
               note: note,
+              currentUserId: widget.currentUserId,
+              editorsStream: note.isShared
+                  ? widget.notesRepository.watchThreadNoteEditors(
+                      threadId: note.threadId!,
+                      noteId: note.id,
+                    )
+                  : null,
               onTap: () => _openNote(note),
               onPinToggle: () => _togglePin(note),
               onDelete:
@@ -320,12 +366,16 @@ int _compareNotes(AppNote a, AppNote b) {
 class _NoteGridCard extends StatelessWidget {
   const _NoteGridCard({
     required this.note,
+    required this.currentUserId,
+    this.editorsStream,
     required this.onTap,
     required this.onPinToggle,
     required this.onDelete,
   });
 
   final AppNote note;
+  final String currentUserId;
+  final Stream<List<String>>? editorsStream;
   final VoidCallback onTap;
   final VoidCallback onPinToggle;
   final VoidCallback? onDelete;
@@ -476,6 +526,36 @@ class _NoteGridCard extends StatelessWidget {
                       ),
               ),
               const SizedBox(height: AppSpacing.xs),
+              if (editorsStream != null)
+                StreamBuilder<List<String>>(
+                  stream: editorsStream,
+                  builder: (context, snapshot) {
+                    final hasOtherEditor =
+                        snapshot.data?.any((uid) => uid != currentUserId) ??
+                        false;
+                    if (!hasOtherEditor) return const SizedBox.shrink();
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 4),
+                      child: Row(
+                        children: [
+                          Icon(
+                            Icons.edit_outlined,
+                            size: 12,
+                            color: theme.colorScheme.primary,
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            'Editing now',
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              color: theme.colorScheme.primary,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
               Text(
                 'Edited ${DateFormat('d MMM yyyy, h:mm a').format(note.updatedAt.toLocal())}',
                 style: theme.textTheme.labelSmall?.copyWith(
