@@ -731,62 +731,74 @@ class _ChatMediaPickerPanelState extends State<ChatMediaPickerPanel> {
                   if (_tab == ChatMediaPickerTab.stickers)
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 10),
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: ConstrainedBox(
-                              constraints: const BoxConstraints(maxWidth: 340),
-                              child: SegmentedButton<_StickerSource>(
-                                showSelectedIcon: false,
-                                style: const ButtonStyle(
-                                  tapTargetSize:
-                                      MaterialTapTargetSize.shrinkWrap,
-                                  visualDensity: VisualDensity.compact,
-                                  minimumSize: WidgetStatePropertyAll(
-                                    Size(0, 32),
+                      child: SizedBox(
+                        height: 32,
+                        child: Stack(
+                          children: [
+                            Center(
+                              child: SizedBox(
+                                width: 200,
+                                height: 28,
+                                child: SegmentedButton<_StickerSource>(
+                                  key: const ValueKey(
+                                    'sticker-source-selector',
                                   ),
-                                  padding: WidgetStatePropertyAll(
-                                    EdgeInsets.symmetric(
-                                      horizontal: 8,
-                                      vertical: 4,
+                                  showSelectedIcon: false,
+                                  style: const ButtonStyle(
+                                    tapTargetSize:
+                                        MaterialTapTargetSize.shrinkWrap,
+                                    visualDensity: VisualDensity.compact,
+                                    minimumSize: WidgetStatePropertyAll(
+                                      Size(0, 28),
+                                    ),
+                                    padding: WidgetStatePropertyAll(
+                                      EdgeInsets.symmetric(
+                                        horizontal: 6,
+                                        vertical: 2,
+                                      ),
+                                    ),
+                                    textStyle: WidgetStatePropertyAll(
+                                      TextStyle(fontSize: 11, height: 0.8),
                                     ),
                                   ),
-                                  textStyle: WidgetStatePropertyAll(
-                                    TextStyle(fontSize: 12),
+                                  segments: const [
+                                    ButtonSegment(
+                                      value: _StickerSource.giphy,
+                                      label: Text('Explore'),
+                                    ),
+                                    ButtonSegment(
+                                      value: _StickerSource.personal,
+                                      label: Text('My stickers'),
+                                    ),
+                                  ],
+                                  selected: {_stickerSource},
+                                  onSelectionChanged: (selection) =>
+                                      _selectStickerSource(selection.first),
+                                ),
+                              ),
+                            ),
+                            if (showPersonalStickers)
+                              Positioned(
+                                right: 0,
+                                top: 0,
+                                bottom: 0,
+                                child: IconButton(
+                                  tooltip: 'Add sticker from device',
+                                  visualDensity: VisualDensity.compact,
+                                  constraints: const BoxConstraints.tightFor(
+                                    width: 32,
+                                    height: 32,
+                                  ),
+                                  padding: EdgeInsets.zero,
+                                  onPressed: _importSticker,
+                                  icon: const Icon(
+                                    Icons.add_photo_alternate_outlined,
+                                    size: 18,
                                   ),
                                 ),
-                                segments: const [
-                                  ButtonSegment(
-                                    value: _StickerSource.giphy,
-                                    label: Text('Explore'),
-                                  ),
-                                  ButtonSegment(
-                                    value: _StickerSource.personal,
-                                    label: Text('My stickers'),
-                                  ),
-                                ],
-                                selected: {_stickerSource},
-                                onSelectionChanged: (selection) =>
-                                    _selectStickerSource(selection.first),
                               ),
-                            ),
-                          ),
-                          if (showPersonalStickers)
-                            IconButton(
-                              tooltip: 'Add sticker from device',
-                              visualDensity: VisualDensity.compact,
-                              constraints: const BoxConstraints.tightFor(
-                                width: 32,
-                                height: 32,
-                              ),
-                              padding: EdgeInsets.zero,
-                              onPressed: _importSticker,
-                              icon: const Icon(
-                                Icons.add_photo_alternate_outlined,
-                                size: 18,
-                              ),
-                            ),
-                        ],
+                          ],
+                        ),
                       ),
                     ),
                   Expanded(
