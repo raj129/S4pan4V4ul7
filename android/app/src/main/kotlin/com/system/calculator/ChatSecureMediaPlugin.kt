@@ -57,6 +57,24 @@ class ChatSecureMediaPlugin : FlutterPlugin, ActivityAware, MethodChannel.Method
     private var viewer: Dialog? = null
     private var viewerCleanup: (() -> Unit)? = null
     private val inlineMediaViews = linkedSetOf<InlineMediaPreview>()
+    private var audioPlayer: androidx.media3.exoplayer.ExoPlayer? = null
+    private var audioSource: ChatMemoryDataSource? = null
+    private var audioSessionId: String? = null
+    private var audioSpeed: Float = 1.0f
+    private val audioTicker = object : Runnable {
+        override fun run() {
+            val current = audioPlayer ?: return
+            val id = audioSessionId ?: return
+            emitAudioState(
+                sessionId = id,
+                state = if (current.isPlaying) "playing" else "paused",
+                player = current,
+            )
+            if (current.isPlaying) {
+                main.postDelayed(this, 150L)
+            }
+        }
+    }
     private var recorder: ChatEncryptedRecorder? = null
     private var recordingBusy = false
     private var recordingEpoch = 0
@@ -80,7 +98,12 @@ class ChatSecureMediaPlugin : FlutterPlugin, ActivityAware, MethodChannel.Method
             INLINE_MEDIA_VIEW_TYPE,
             InlineMediaPreviewFactory(
                 binding.binaryMessenger,
-                { view -> inlineMediaViews.add(view) },
+                { view ->
+                    if (view.isVideo) {
+                        inlineMediaViews.filter { it.isVideo && it !== view }.forEach { it.close() }
+                    }
+                    inlineMediaViews.add(view)
+                },
                 { view -> inlineMediaViews.remove(view) },
             ),
         )
@@ -226,6 +249,78 @@ class ChatSecureMediaPlugin : FlutterPlugin, ActivityAware, MethodChannel.Method
                         )
                         else showAudioPlayer(bytes, result)
                     }
+                }
+                "startAudio" -> {
+                    val bytes = call.argument<ByteArray>("bytes") ?: throw IllegalArgumentException()
+                    val sessionId = call.argument<String>("sessionId") ?: throw IllegalArgumentException()
+                    if (bytes.isEmpty() || bytes.size > ChatMemoryDataSource.MAX_BYTES) {
+                        bytes.fill(0)
+                        result.error("size_limit", "Attachment must be nonempty and below 64 MB.", null)
+                    } else if (!active || activity == null) {
+                        bytes.fill(0)
+                        result.error("interrupted", "Open media while the app is active.", null)
+                    } else {
+                        startInMemoryAudio(bytes, sessionId, result)
+                    }
+                }
+                "pauseAudio" -> {
+                    val sessionId = call.argument<String>("sessionId")
+                    if (sessionId == null || sessionId == audioSessionId) {
+                        audioPlayer?.pause()
+                    }
+                    result.success(null)
+                }
+                "resumeAudio" -> {
+                    val sessionId = call.argument<String>("sessionId")
+                    val current = audioPlayer
+                    if (current != null && (sessionId == null || sessionId == audioSessionId)) {
+                        if (current.playbackState == androidx.media3.common.Player.STATE_ENDED) {
+                            current.seekTo(0)
+                        }
+                        current.play()
+                    }
+                    result.success(null)
+                }
+                "seekAudio" -> {
+                    val sessionId = call.argument<String>("sessionId")
+                    val positionMs = call.argument<Number>("positionMs")?.toLong() ?: 0L
+                    val current = audioPlayer
+                    if (current != null && (sessionId == null || sessionId == audioSessionId)) {
+                        val duration = current.duration.takeIf { it > 0L } ?: Long.MAX_VALUE
+                        current.seekTo(positionMs.coerceIn(0L, duration))
+                        audioSessionId?.let { id ->
+                            emitAudioState(
+                                sessionId = id,
+                                state = if (current.isPlaying) "playing" else "paused",
+                                player = current,
+                            )
+                        }
+                    }
+                    result.success(null)
+                }
+                "setAudioSpeed" -> {
+                    val sessionId = call.argument<String>("sessionId")
+                    val speed = (call.argument<Number>("speed")?.toFloat() ?: 1.0f).coerceIn(0.5f, 3.0f)
+                    val current = audioPlayer
+                    if (current != null && (sessionId == null || sessionId == audioSessionId)) {
+                        audioSpeed = speed
+                        current.playbackParameters = androidx.media3.common.PlaybackParameters(speed)
+                        audioSessionId?.let { id ->
+                            emitAudioState(
+                                sessionId = id,
+                                state = if (current.isPlaying) "playing" else "paused",
+                                player = current,
+                            )
+                        }
+                    }
+                    result.success(null)
+                }
+                "stopAudio" -> {
+                    val sessionId = call.argument<String>("sessionId")
+                    if (sessionId == null || sessionId == audioSessionId) {
+                        stopInMemoryAudio()
+                    }
+                    result.success(null)
                 }
                 "close" -> { close(); result.success(null) }
                 else -> result.notImplemented()
@@ -1406,6 +1501,7 @@ class ChatSecureMediaPlugin : FlutterPlugin, ActivityAware, MethodChannel.Method
         generation++
         viewer?.dismiss()
         releaseViewer()
+        stopInMemoryAudio()
         inlineMediaViews.toList().forEach { it.close() }
         camera?.close()
         camera = null
@@ -1413,6 +1509,136 @@ class ChatSecureMediaPlugin : FlutterPlugin, ActivityAware, MethodChannel.Method
         permissionResult?.error("interrupted", "Media interrupted.", null)
         permissionResult = null
         permissionAction = null
+    }
+
+    @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
+    private fun startInMemoryAudio(
+        bytes: ByteArray,
+        sessionId: String,
+        result: MethodChannel.Result,
+    ) {
+        val host = activity
+        if (host == null) {
+            bytes.fill(0)
+            result.error("interrupted", "Media activity is unavailable.", null)
+            return
+        }
+        stopInMemoryAudio()
+        val memorySource = ChatMemoryDataSource(bytes)
+        audioSource = memorySource
+        audioSessionId = sessionId
+        audioSpeed = 1.0f
+        try {
+            val loadControl = androidx.media3.exoplayer.DefaultLoadControl.Builder()
+                .setBufferDurationsMs(1000, 3000, 300, 600)
+                .build()
+            val mediaSource = androidx.media3.exoplayer.source.ProgressiveMediaSource.Factory(
+                androidx.media3.datasource.DataSource.Factory { ChatMedia3DataSource(memorySource) },
+            ).createMediaSource(androidx.media3.common.MediaItem.fromUri("chat-memory://audio"))
+            val playback = androidx.media3.exoplayer.ExoPlayer.Builder(host)
+                .setLoadControl(loadControl)
+                .build()
+            audioPlayer = playback
+            playback.addListener(object : androidx.media3.common.Player.Listener {
+                override fun onIsPlayingChanged(isPlaying: Boolean) {
+                    if (audioPlayer !== playback) return
+                    main.removeCallbacks(audioTicker)
+                    if (isPlaying) {
+                        main.post(audioTicker)
+                    }
+                    emitAudioState(
+                        sessionId = sessionId,
+                        state = if (isPlaying) "playing" else "paused",
+                        player = playback,
+                    )
+                }
+
+                override fun onPlaybackStateChanged(playbackState: Int) {
+                    if (audioPlayer !== playback) return
+                    when (playbackState) {
+                        androidx.media3.common.Player.STATE_READY -> {
+                            emitAudioState(
+                                sessionId = sessionId,
+                                state = if (playback.isPlaying) "playing" else "ready",
+                                player = playback,
+                            )
+                        }
+                        androidx.media3.common.Player.STATE_ENDED -> {
+                            main.removeCallbacks(audioTicker)
+                            emitAudioState(
+                                sessionId = sessionId,
+                                state = "ended",
+                                player = playback,
+                            )
+                        }
+                        else -> {}
+                    }
+                }
+
+                override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                    if (audioPlayer !== playback) return
+                    val msg = error.message ?: "Audio playback failed."
+                    stopInMemoryAudio(notifyError = msg)
+                }
+            })
+            playback.setMediaSource(mediaSource)
+            playback.prepare()
+            playback.playWhenReady = true
+            emitAudioState(sessionId = sessionId, state = "loading", player = playback)
+            result.success(null)
+        } catch (error: Exception) {
+            stopInMemoryAudio()
+            result.error("unsupported", error.message ?: "Audio playback is unavailable.", null)
+        }
+    }
+
+    private fun stopInMemoryAudio(notifyError: String? = null) {
+        main.removeCallbacks(audioTicker)
+        val previousId = audioSessionId
+        audioSessionId = null
+        audioSpeed = 1.0f
+        val current = audioPlayer
+        audioPlayer = null
+        try {
+            current?.release()
+        } catch (_: Exception) {
+        }
+        val source = audioSource
+        audioSource = null
+        source?.close()
+        if (previousId != null && engineAttached) {
+            main.post {
+                channel.invokeMethod(
+                    "audioState",
+                    mapOf(
+                        "sessionId" to previousId,
+                        "state" to if (notifyError != null) "error" else "stopped",
+                        "positionMs" to 0L,
+                        "durationMs" to 0L,
+                        "speed" to 1.0,
+                        if (notifyError != null) "error" to notifyError else "error" to null,
+                    ),
+                )
+            }
+        }
+    }
+
+    private fun emitAudioState(
+        sessionId: String,
+        state: String,
+        player: androidx.media3.exoplayer.ExoPlayer,
+    ) {
+        if (!engineAttached) return
+        channel.invokeMethod(
+            "audioState",
+            mapOf(
+                "sessionId" to sessionId,
+                "state" to state,
+                "positionMs" to player.currentPosition.coerceAtLeast(0L),
+                "durationMs" to (player.duration.takeIf { it > 0L } ?: 0L),
+                "speed" to audioSpeed.toDouble(),
+            ),
+        )
     }
 
     override fun onActivityStopped(activity: Activity) {

@@ -70,6 +70,56 @@ class AndroidChatSecureMediaService {
 
   Future<void> showAudio(Uint8List bytes) => _show('showAudio', bytes);
 
+  Future<void> startAudio({
+    required Uint8List bytes,
+    required String sessionId,
+  }) {
+    _validate(bytes);
+    return _channel.invokeMethod<void>('startAudio', {
+      'bytes': bytes,
+      'sessionId': sessionId,
+    });
+  }
+
+  Future<void> pauseAudio({String? sessionId}) =>
+      _channel.invokeMethod<void>('pauseAudio', {'sessionId': sessionId});
+
+  Future<void> resumeAudio({String? sessionId}) =>
+      _channel.invokeMethod<void>('resumeAudio', {'sessionId': sessionId});
+
+  Future<void> seekAudio({
+    required Duration position,
+    String? sessionId,
+  }) => _channel.invokeMethod<void>('seekAudio', {
+    'sessionId': sessionId,
+    'positionMs': position.inMilliseconds,
+  });
+
+  Future<void> setAudioSpeed({
+    required double speed,
+    String? sessionId,
+  }) => _channel.invokeMethod<void>('setAudioSpeed', {
+    'sessionId': sessionId,
+    'speed': speed,
+  });
+
+  Future<void> stopAudio({String? sessionId}) =>
+      _channel.invokeMethod<void>('stopAudio', {'sessionId': sessionId});
+
+  void setAudioStateHandler(
+    Future<void> Function(Map<Object?, Object?> event)? handler,
+  ) {
+    if (handler == null) {
+      _channel.setMethodCallHandler(null);
+      return;
+    }
+    _channel.setMethodCallHandler((call) async {
+      if (call.method == 'audioState' && call.arguments is Map) {
+        await handler(Map<Object?, Object?>.from(call.arguments as Map));
+      }
+    });
+  }
+
   /// API 26+ uses a memory-backed proxy descriptor; older Android returns
   /// `unsupported` rather than staging a plaintext PDF.
   Future<void> showPdf(Uint8List bytes) => _show('showPdf', bytes);
@@ -102,6 +152,8 @@ class AndroidChatSecureMediaService {
     if (result == null) throw StateError('Attachment acquisition cancelled.');
     return SecureMediaAttachment.fromMap(result);
   }
+
+  static void validateBytes(Uint8List bytes) => _validate(bytes);
 
   static void _validate(Uint8List bytes) {
     if (bytes.isEmpty || bytes.length > maxBytes) {

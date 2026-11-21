@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'package:photo_vault/core/widgets/secure_video_player.dart';
 import '../../application/media/android_chat_secure_media_service.dart';
 import '../../application/media/chat_media_loader.dart';
 import '../../domain/entities/chat_message.dart';
@@ -9,7 +10,7 @@ import '../widgets/attachment_download_progress.dart';
 import '../widgets/chat_media_preview.dart'
     show chatMediaFailureMessage, chatMediaRequiresAction;
 
-/// Loads authenticated bytes, then opens an in-app native memory-data player.
+/// Loads authenticated bytes, then plays them in the Material 3 in-memory player.
 class ChatVideoPlayerScreen extends StatefulWidget {
   const ChatVideoPlayerScreen({
     super.key,
@@ -49,6 +50,7 @@ class _ChatVideoPlayerScreenState extends State<ChatVideoPlayerScreen> {
   bool _requiresAction = false;
   bool _busy = false;
   int _generation = 0;
+  Uint8List? _videoBytes;
 
   @override
   void initState() {
@@ -56,12 +58,18 @@ class _ChatVideoPlayerScreenState extends State<ChatVideoPlayerScreen> {
     _prepare();
   }
 
+  void _releaseVideoBytes() {
+    final bytes = _videoBytes;
+    _videoBytes = null;
+    if (bytes != null) bytes.fillRange(0, bytes.length, 0);
+  }
+
   Future<void> _prepare() async {
     if (_busy) return;
     final generation = ++_generation;
     final message = widget.message;
     final loader = widget.loader;
-    final service = widget.service;
+    _releaseVideoBytes();
     setState(() {
       _busy = true;
       _error = null;
@@ -85,37 +93,53 @@ class _ChatVideoPlayerScreenState extends State<ChatVideoPlayerScreen> {
             storagePath: ref,
             senderId: message.senderId,
           );
-      if (!mounted || generation != _generation) return;
-      await service.showVideo(bytes);
-      if (mounted && generation == _generation) Navigator.of(context).pop();
+      if (!mounted || generation != _generation) {
+        bytes.fillRange(0, bytes.length, 0);
+        return;
+      }
+      AndroidChatSecureMediaService.validateBytes(bytes);
+      setState(() {
+        _videoBytes = bytes;
+        _busy = false;
+      });
+      bytes = null;
+    } on ArgumentError catch (e) {
+      bytes?.fillRange(0, bytes.length, 0);
+      if (mounted && generation == _generation) {
+        setState(() {
+          _error = e.message?.toString() ?? 'Video exceeds in-memory limit.';
+          _busy = false;
+        });
+      }
     } on PlatformException catch (e) {
+      bytes?.fillRange(0, bytes.length, 0);
       if (mounted && generation == _generation) {
         _requiresAction = chatMediaRequiresAction(e);
-        setState(
-          () => _error =
+        setState(() {
+          _error =
               e.message ??
-              'In-app video playback unavailable. You can access it securely from the vault.',
-        );
+              'In-app video playback unavailable. You can access it securely from the vault.';
+          _busy = false;
+        });
       }
     } on UnsupportedError {
+      bytes?.fillRange(0, bytes.length, 0);
       if (mounted && generation == _generation) {
-        setState(
-          () => _error =
-              'In-app video playback unavailable. You can access it securely from the vault.',
-        );
+        setState(() {
+          _error =
+              'In-app video playback unavailable. You can access it securely from the vault.';
+          _busy = false;
+        });
       }
     } catch (error) {
+      bytes?.fillRange(0, bytes.length, 0);
       if (mounted && generation == _generation) {
         setState(() {
           _requiresAction = chatMediaRequiresAction(error);
           _error =
               chatMediaFailureMessage(error) ?? 'Could not play this video.';
+          _busy = false;
         });
-      }
-    } finally {
-      bytes?.fillRange(0, bytes.length, 0);
-      if (mounted && generation == _generation) {
-        setState(() => _busy = false);
       }
     }
   }
@@ -135,6 +159,7 @@ class _ChatVideoPlayerScreenState extends State<ChatVideoPlayerScreen> {
   @override
   void dispose() {
     _generation++;
+    _releaseVideoBytes();
     unawaited(
       widget.service.close().catchError((Object _) {
         debugPrint('Secure chat video cleanup unavailable.');
@@ -147,6 +172,18 @@ class _ChatVideoPlayerScreenState extends State<ChatVideoPlayerScreen> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
+    final videoBytes = _videoBytes;
+
+    if (videoBytes != null && _error == null) {
+      return Scaffold(
+        backgroundColor: Colors.black,
+        body: SecureVideoPlayer(
+          bytes: videoBytes,
+          title: 'Video',
+          onClose: () => Navigator.of(context).pop(),
+        ),
+      );
+    }
 
     return Scaffold(
       backgroundColor: const Color(0xFF0F1017),
