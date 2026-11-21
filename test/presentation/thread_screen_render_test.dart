@@ -760,7 +760,7 @@ void main() {
     await tester.pump();
     expect(find.byType(ChatMediaPickerPanel), findsNothing);
     final composer = find.byType(TextField).last;
-    expect(tester.widget<TextField>(composer).focusNode!.hasFocus, isTrue);
+    expect(tester.widget<TextField>(composer).focusNode!.hasFocus, isFalse);
     await tester.enterText(composer, 'typed after picker');
     await tester.pump(const Duration(milliseconds: 400));
     expect(
@@ -839,7 +839,7 @@ void main() {
 
     await cubit.close();
     await tester.pumpWidget(const SizedBox.shrink());
-    await tester.pump(const Duration(seconds: 2));
+    await tester.pump(const Duration(seconds: 15));
   });
 
   testWidgets(
@@ -1439,6 +1439,119 @@ void main() {
 
       await cubit.close();
       mediaLoader.dispose();
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
+  testWidgets(
+    'emoji, attachment, keyboard, and back key follow WhatsApp-style non-overlapping transitions',
+    (tester) async {
+      tester.view.physicalSize = const Size(1080, 2400);
+      tester.view.devicePixelRatio = 3.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      final messages = _Messages();
+      final unused = _Unused();
+      final cubit = ActiveThreadCubit(
+        messageRepository: messages,
+        threadRepository: _Threads(),
+        userRepository: unused,
+        typingRepository: _Typing(),
+        presenceRepository: _Presence(),
+        mediaRepository: unused,
+        messageCache: const NoopMessageCacheRepository(),
+        outbox: _Outbox(),
+        cryptoService: _Crypto(),
+        myUid: 'me',
+      );
+      final thread = ChatThread(
+        threadId: 't',
+        participantIds: const ['me', 'other'],
+        lastMessage: '',
+        createdAt: DateTime.utc(2024),
+        lastMessageAt: DateTime.utc(2024),
+        unreadCounts: const {},
+      );
+      final other = ChatUser(
+        uid: 'other',
+        email: 'other@example.com',
+        displayName: 'Other',
+        publicKey: '',
+        createdAt: DateTime.utc(2024),
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: BlocProvider.value(
+            value: cubit,
+            child: ThreadScreen(
+              thread: thread,
+              otherUser: other,
+              mediaLoader: ChatMediaLoader(
+                mediaRepository: unused,
+                cryptoService: _Crypto(),
+              ),
+              vaultBridge: unused,
+              onLock: () {},
+              chatDraftRepository: _Drafts(),
+              stickerPackFactory: (uid) =>
+                  LocalStickerPackRepository(userId: uid),
+            ),
+          ),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 50));
+
+      final composer = find.byType(TextField).first;
+      await tester.tap(composer);
+      await tester.pump();
+      expect(tester.widget<TextField>(composer).focusNode!.hasFocus, isTrue);
+
+      // Keyboard -> Emoji: emoji opens, keyboard unfocuses, attachment is absent.
+      await tester.tap(find.byTooltip('Emoji, stickers, and GIFs'));
+      await tester.pump(const Duration(milliseconds: 250));
+      expect(find.byType(ChatMediaPickerPanel), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('attachment-options-grid')),
+        findsNothing,
+      );
+      expect(tester.widget<TextField>(composer).focusNode!.hasFocus, isFalse);
+
+      // Emoji -> Attachment: switches in-place without overlapping.
+      await tester.tap(find.byTooltip('Attach'));
+      await tester.pump();
+      expect(find.byType(ChatMediaPickerPanel), findsNothing);
+      expect(
+        find.byKey(const ValueKey('attachment-options-grid')),
+        findsOneWidget,
+      );
+
+      // Attachment -> Emoji: switches back cleanly.
+      await tester.tap(find.byTooltip('Emoji, stickers, and GIFs'));
+      await tester.pump();
+      expect(find.byType(ChatMediaPickerPanel), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('attachment-options-grid')),
+        findsNothing,
+      );
+
+      // Emoji -> Keyboard button: closes emoji and focuses composer.
+      await tester.tap(find.byTooltip('Keyboard'));
+      await tester.pump(const Duration(milliseconds: 250));
+      expect(find.byType(ChatMediaPickerPanel), findsNothing);
+      expect(tester.widget<TextField>(composer).focusNode!.hasFocus, isTrue);
+
+      // Keyboard -> Emoji -> Back key: closes emoji WITHOUT focusing keyboard.
+      await tester.tap(find.byTooltip('Emoji, stickers, and GIFs'));
+      await tester.pump(const Duration(milliseconds: 250));
+      expect(find.byType(ChatMediaPickerPanel), findsOneWidget);
+      await tester.binding.handlePopRoute();
+      await tester.pump();
+      expect(find.byType(ChatMediaPickerPanel), findsNothing);
+      expect(tester.widget<TextField>(composer).focusNode!.hasFocus, isFalse);
+
+      await cubit.close();
       await tester.pumpWidget(const SizedBox.shrink());
     },
   );
