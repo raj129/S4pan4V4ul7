@@ -47,11 +47,90 @@ class ChatNotificationService {
   /// New channel IDs avoid immutable settings from earlier releases.
   static const channelId = 'chat_alerts_silent';
   static const channelName = 'Chat notifications (app settings)';
+  static const customVibratingChannelId = 'chat_alerts_custom_vibrate_v1';
+  static const customVibratingChannelName =
+      'Chat notifications (custom vibration)';
   static const systemChannelId = 'chat_alerts_system';
   static const systemChannelName = 'Chat messages';
 
   static String channelForSource(NotificationAlertSource source) =>
       source == NotificationAlertSource.system ? systemChannelId : channelId;
+
+  static String channelForPreferences(
+    IncomingChatAlertPreferences preferences,
+  ) {
+    if (preferences.source == NotificationAlertSource.system) {
+      return systemChannelId;
+    }
+    return preferences.vibrationEnabled ? customVibratingChannelId : channelId;
+  }
+
+  static Future<void> createAndroidNotificationChannels(
+    AndroidFlutterLocalNotificationsPlugin? android,
+  ) async {
+    await android?.createNotificationChannel(
+      const AndroidNotificationChannel(
+        channelId,
+        channelName,
+        description: 'Shows chat messages alongside the selected alert.',
+        importance: Importance.high,
+        playSound: false,
+        enableVibration: false,
+      ),
+    );
+    await android?.createNotificationChannel(
+      const AndroidNotificationChannel(
+        customVibratingChannelId,
+        customVibratingChannelName,
+        description: 'Vibrates for chat messages on phone and connected watch.',
+        importance: Importance.high,
+        playSound: false,
+        enableVibration: true,
+      ),
+    );
+    await android?.createNotificationChannel(
+      const AndroidNotificationChannel(
+        systemChannelId,
+        systemChannelName,
+        description: 'Notifies you about incoming chat messages.',
+        importance: Importance.high,
+        playSound: true,
+        enableVibration: true,
+      ),
+    );
+  }
+
+  static NotificationDetails notificationDetailsFor({
+    String? tag,
+    required IncomingChatAlertPreferences preferences,
+  }) {
+    final usesSystemChannel =
+        preferences.source == NotificationAlertSource.system;
+    final vibrationEnabled = usesSystemChannel || preferences.vibrationEnabled;
+    final channelId = channelForPreferences(preferences);
+    final channelName = usesSystemChannel
+        ? systemChannelName
+        : vibrationEnabled
+        ? customVibratingChannelName
+        : ChatNotificationService.channelName;
+    return NotificationDetails(
+      android: AndroidNotificationDetails(
+        channelId,
+        channelName,
+        channelDescription: usesSystemChannel
+            ? 'Notifies you about incoming chat messages.'
+            : vibrationEnabled
+            ? 'Vibrates for chat messages on phone and connected watch.'
+            : 'Shows chat messages alongside the selected alert.',
+        importance: Importance.high,
+        priority: Priority.high,
+        category: AndroidNotificationCategory.message,
+        playSound: usesSystemChannel,
+        enableVibration: vibrationEnabled,
+        tag: tag,
+      ),
+    );
+  }
 
   /// FCM posts tagged notifications with id 0; reusing it lets them replace.
   static const _notificationId = 0;
@@ -89,26 +168,7 @@ class ChatNotificationService {
           .resolvePlatformSpecificImplementation<
             AndroidFlutterLocalNotificationsPlugin
           >();
-      await android?.createNotificationChannel(
-        const AndroidNotificationChannel(
-          channelId,
-          channelName,
-          description: 'Shows chat messages alongside the selected alert.',
-          importance: Importance.high,
-          playSound: false,
-          enableVibration: false,
-        ),
-      );
-      await android?.createNotificationChannel(
-        const AndroidNotificationChannel(
-          systemChannelId,
-          systemChannelName,
-          description: 'Notifies you about incoming chat messages.',
-          importance: Importance.high,
-          playSound: true,
-          enableVibration: true,
-        ),
-      );
+      await createAndroidNotificationChannels(android);
       await android?.requestNotificationsPermission();
       try {
         final launch = await _plugin.getNotificationAppLaunchDetails();
@@ -189,9 +249,9 @@ class ChatNotificationService {
       id: _notificationId,
       title: title,
       body: body,
-      notificationDetails: _notificationDetails(
+      notificationDetails: notificationDetailsFor(
         tag: thread.threadId,
-        source: preferences.source,
+        preferences: preferences,
       ),
       payload: thread.threadId,
     );
@@ -223,6 +283,7 @@ class ChatNotificationService {
     required String alertId,
     required String title,
     required String body,
+    IncomingChatAlertPreferences? preferences,
     bool openThread = true,
   }) async {
     await init();
@@ -234,7 +295,10 @@ class ChatNotificationService {
       id: _ringNotificationId,
       title: title,
       body: body,
-      notificationDetails: _notificationDetails(tag: 'ring-$alertId'),
+      notificationDetails: notificationDetailsFor(
+        tag: 'ring-$alertId',
+        preferences: preferences ?? const IncomingChatAlertPreferences(),
+      ),
       payload: openThread ? threadId : null,
     );
   }
@@ -268,8 +332,8 @@ class ChatNotificationService {
       id: _testNotificationId,
       title: notificationTitle,
       body: notificationBody,
-      notificationDetails: _notificationDetails(
-        source: alertPreferences.source,
+      notificationDetails: notificationDetailsFor(
+        preferences: alertPreferences,
       ),
     );
     await _startAlert(
@@ -313,27 +377,6 @@ class ChatNotificationService {
       debugPrint('Could not read custom notification alert text: $error');
       return SettingsRepository.defaultIncomingChatAlertText;
     }
-  }
-
-  NotificationDetails _notificationDetails({
-    String? tag,
-    NotificationAlertSource source = NotificationAlertSource.custom,
-  }) {
-    final usesSystemChannel = source == NotificationAlertSource.system;
-    return NotificationDetails(
-      android: AndroidNotificationDetails(
-        usesSystemChannel ? systemChannelId : channelId,
-        usesSystemChannel ? systemChannelName : channelName,
-        channelDescription: usesSystemChannel
-            ? 'Notifies you about incoming chat messages.'
-            : 'Shows chat messages alongside the selected alert.',
-        importance: Importance.high,
-        priority: Priority.high,
-        playSound: usesSystemChannel,
-        enableVibration: usesSystemChannel,
-        tag: tag,
-      ),
-    );
   }
 
   Future<void> setActiveThread(String? threadId) async {

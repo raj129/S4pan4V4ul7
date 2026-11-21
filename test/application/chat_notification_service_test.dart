@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:photo_vault/features/chat/application/services/chat_notification_service.dart';
 import 'package:photo_vault/features/chat/domain/entities/chat_thread.dart';
@@ -130,6 +131,55 @@ void main() {
       ChatNotificationService.channelForSource(NotificationAlertSource.custom),
       ChatNotificationService.channelId,
     );
+  });
+
+  test('uses a vibration channel for custom chat alerts when enabled', () {
+    const preferences = IncomingChatAlertPreferences(
+      source: NotificationAlertSource.custom,
+      vibrationEnabled: true,
+    );
+
+    final details = ChatNotificationService.notificationDetailsFor(
+      preferences: preferences,
+      tag: 'thread',
+    ).android!;
+
+    expect(details.channelId, ChatNotificationService.customVibratingChannelId);
+    expect(details.enableVibration, isTrue);
+    expect(details.playSound, isFalse);
+    expect(details.category, AndroidNotificationCategory.message);
+    expect(details.tag, 'thread');
+  });
+
+  test('uses the silent channel when custom vibration is disabled', () {
+    const preferences = IncomingChatAlertPreferences(
+      source: NotificationAlertSource.custom,
+      vibrationEnabled: false,
+    );
+
+    final details = ChatNotificationService.notificationDetailsFor(
+      preferences: preferences,
+    ).android!;
+
+    expect(details.channelId, ChatNotificationService.channelId);
+    expect(details.enableVibration, isFalse);
+  });
+
+  test('system alerts keep sound and vibration enabled', () {
+    const preferences = IncomingChatAlertPreferences(
+      source: NotificationAlertSource.system,
+      ringSoundEnabled: false,
+      vibrationEnabled: false,
+    );
+
+    final details = ChatNotificationService.notificationDetailsFor(
+      preferences: preferences,
+    ).android!;
+
+    expect(details.channelId, ChatNotificationService.systemChannelId);
+    expect(details.enableVibration, isTrue);
+    expect(details.playSound, isTrue);
+    expect(details.category, AndroidNotificationCategory.message);
   });
 
   test('keeps a blank body for received and test notifications', () async {

@@ -58,6 +58,7 @@ class _NotificationTypeSettingsScreenState
   bool _loading = true;
   bool _saving = false;
   bool _testing = false;
+  Timer? _delayedTestTimer;
   IncomingChatAlertPreferences _chatAlertPreferences =
       const IncomingChatAlertPreferences();
   String? _systemNotificationSoundTitle;
@@ -140,6 +141,7 @@ class _NotificationTypeSettingsScreenState
 
   @override
   void dispose() {
+    _delayedTestTimer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     _headerController.dispose();
     _messageController.dispose();
@@ -378,9 +380,26 @@ class _NotificationTypeSettingsScreenState
     }
   }
 
-  Future<void> _testNotification() async {
+  Future<void> _testNotification({Duration delay = Duration.zero}) async {
     if (_testing || _saving) return;
     setState(() => _testing = true);
+    if (delay > Duration.zero) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Sending test notification in ${delay.inSeconds}s. '
+              'Lock your phone now to test watch alerts.',
+            ),
+          ),
+        );
+      }
+      final completer = Completer<void>();
+      _delayedTestTimer?.cancel();
+      _delayedTestTimer = Timer(delay, completer.complete);
+      await completer.future;
+      if (!mounted) return;
+    }
     try {
       if (_isChat) {
         final tester = widget.onTestChatNotification;
@@ -637,6 +656,19 @@ class _NotificationTypeSettingsScreenState
               title: _headerController.text,
               message: _messageController.text,
             ),
+            if (_isChat &&
+                _headerController.text.trim().isEmpty &&
+                _messageController.text.trim().isEmpty) ...[
+              const SizedBox(height: AppSpacing.sm),
+              const InfoBanner(
+                key: Key('incoming-chat-blank-wear-warning'),
+                message:
+                    'Wear OS / Pixel Watch drops notifications when both '
+                    'Header and Message are blank. Enter text in either field '
+                    'to receive watch notifications.',
+                tone: InfoBannerTone.warning,
+              ),
+            ],
           ],
         ),
       ),
@@ -782,6 +814,23 @@ class _NotificationTypeSettingsScreenState
                 onChanged: _setChatFlashlight,
               ),
             ],
+            Padding(
+              padding: const EdgeInsets.fromLTRB(
+                AppSpacing.lg,
+                AppSpacing.sm,
+                AppSpacing.lg,
+                AppSpacing.sm,
+              ),
+              child: Text(
+                'Smartwatch note: in the Pixel Watch / Wear OS app, enable '
+                'notifications for "Calculator". Watch alerts are muted while '
+                'your phone screen is unlocked unless you disable "Mute '
+                'notifications when using phone".',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ),
           ],
         ),
       ),
@@ -819,6 +868,19 @@ class _NotificationTypeSettingsScreenState
                   label: Text(testLabel),
                 ),
               ),
+              if (_isChat) ...[
+                const SizedBox(width: AppSpacing.sm),
+                OutlinedButton.icon(
+                  key: Key('test-$_typeKey-delayed-notification-button'),
+                  onPressed: _testing || _saving
+                      ? null
+                      : () => unawaited(
+                          _testNotification(delay: const Duration(seconds: 5)),
+                        ),
+                  icon: const Icon(Icons.timer_outlined),
+                  label: const Text('In 5s'),
+                ),
+              ],
             ],
           ),
         ),

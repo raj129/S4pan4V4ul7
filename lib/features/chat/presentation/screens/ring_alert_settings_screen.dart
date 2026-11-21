@@ -20,7 +20,11 @@ class RingAlertSettingsScreen extends StatefulWidget {
 
   final RingAlertPreferencesRepository repository;
   final String? uid;
-  final Future<void> Function({required String title, required String body})?
+  final Future<void> Function({
+    required String title,
+    required String body,
+    required RingAlertPreferences preferences,
+  })?
   onTestNotification;
 
   @override
@@ -324,6 +328,7 @@ class _RingAlertSettingsScreenState extends State<RingAlertSettingsScreen>
       await widget.onTestNotification?.call(
         title: _preferences.notificationTitle,
         body: _preferences.notificationBody,
+        preferences: _preferences,
       );
       final hasSelectedOutput =
           _preferences.source == RingAlertSource.system ||

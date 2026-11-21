@@ -65,25 +65,8 @@ Future<void> handleChatPushInBackground(RemoteMessage message) async {
       .resolvePlatformSpecificImplementation<
         AndroidFlutterLocalNotificationsPlugin
       >();
-  await androidNotifications?.createNotificationChannel(
-    const AndroidNotificationChannel(
-      ChatNotificationService.channelId,
-      ChatNotificationService.channelName,
-      description: 'Shows chat messages alongside the selected alert.',
-      importance: Importance.high,
-      playSound: false,
-      enableVibration: false,
-    ),
-  );
-  await androidNotifications?.createNotificationChannel(
-    const AndroidNotificationChannel(
-      ChatNotificationService.systemChannelId,
-      ChatNotificationService.systemChannelName,
-      description: 'Notifies you about incoming chat messages.',
-      importance: Importance.high,
-      playSound: true,
-      enableVibration: true,
-    ),
+  await ChatNotificationService.createAndroidNotificationChannels(
+    androidNotifications,
   );
 
   if (message.data['eventType'] == 'ringRequest') {
@@ -138,6 +121,12 @@ Future<void> handleChatPushInBackground(RemoteMessage message) async {
       }
     }
     if (ringEnabled) {
+      final ringPreferences = IncomingChatAlertPreferences(
+        source: source == 'custom'
+            ? NotificationAlertSource.custom
+            : NotificationAlertSource.system,
+        vibrationEnabled: vibrationEnabled,
+      );
       await notifications.show(
         id: 2,
         title: _ringString(
@@ -148,18 +137,9 @@ Future<void> handleChatPushInBackground(RemoteMessage message) async {
           message.data['ringBody'],
           RingAlertPreferences.defaultNotificationBody,
         ),
-        notificationDetails: NotificationDetails(
-          android: AndroidNotificationDetails(
-            ChatNotificationService.channelId,
-            ChatNotificationService.channelName,
-            channelDescription:
-                'Shows chat messages alongside the selected alert.',
-            importance: Importance.high,
-            priority: Priority.high,
-            playSound: false,
-            enableVibration: false,
-            tag: 'ring-${messageId ?? threadId}',
-          ),
+        notificationDetails: ChatNotificationService.notificationDetailsFor(
+          tag: 'ring-${messageId ?? threadId}',
+          preferences: ringPreferences,
         ),
         payload: threadId,
       );
@@ -197,30 +177,13 @@ Future<void> handleChatPushInBackground(RemoteMessage message) async {
     } catch (error) {
       debugPrint('Could not read chat alert preferences: $error');
     }
-    final usesSystemChannel =
-        alertPreferences.source == NotificationAlertSource.system;
-    final notificationChannelId = ChatNotificationService.channelForSource(
-      alertPreferences.source,
-    );
     await notifications.show(
       id: 0,
       title: alertTitle,
       body: alertBody,
-      notificationDetails: NotificationDetails(
-        android: AndroidNotificationDetails(
-          notificationChannelId,
-          usesSystemChannel
-              ? ChatNotificationService.systemChannelName
-              : ChatNotificationService.channelName,
-          channelDescription: usesSystemChannel
-              ? 'Notifies you about incoming chat messages.'
-              : 'Shows chat messages alongside the selected alert.',
-          importance: Importance.high,
-          priority: Priority.high,
-          playSound: usesSystemChannel,
-          enableVibration: usesSystemChannel,
-          tag: threadId,
-        ),
+      notificationDetails: ChatNotificationService.notificationDetailsFor(
+        preferences: alertPreferences,
+        tag: threadId,
       ),
       payload: threadId,
     );
@@ -410,6 +373,12 @@ class PushNotificationService {
               body: _ringString(
                 message.data['ringBody'],
                 RingAlertPreferences.defaultNotificationBody,
+              ),
+              preferences: IncomingChatAlertPreferences(
+                source: source == 'custom'
+                    ? NotificationAlertSource.custom
+                    : NotificationAlertSource.system,
+                vibrationEnabled: vibrationEnabled,
               ),
             );
           } catch (error) {

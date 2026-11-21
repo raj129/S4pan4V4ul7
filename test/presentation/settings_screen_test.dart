@@ -393,6 +393,10 @@ void main() {
     await tester.pumpAndSettle();
     tester.testTextInput.hide();
     await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('incoming-chat-blank-wear-warning')),
+      findsNothing,
+    );
     expect(await settings.getIncomingChatAlertTitle(), isEmpty);
     expect(await settings.getIncomingChatAlertText(), isEmpty);
 
@@ -458,6 +462,10 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.widgetWithText(FilledButton, 'Reset'));
     await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('incoming-chat-blank-wear-warning')),
+      findsOneWidget,
+    );
     expect(await settings.getIncomingChatAlertTitle(), 'Private chat');
     expect(await settings.getIncomingChatAlertText(), 'A message is waiting');
     await tester.pump(const Duration(seconds: 5));

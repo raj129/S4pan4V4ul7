@@ -22,6 +22,7 @@ import '../../features/chat/presentation/screens/ring_alert_settings_screen.dart
 import '../../features/chat/presentation/screens/thread_screen.dart';
 import '../../features/chat/application/services/background_location_notification_preview.dart';
 import '../../features/chat/domain/entities/chat_user.dart';
+import '../../features/vault/domain/entities/incoming_chat_alert_preferences.dart';
 import '../../features/vault/presentation/screens/files/files_screen.dart';
 import '../../features/vault/presentation/screens/gallery/gallery_home_screen.dart';
 import '../../features/vault/presentation/screens/gallery/gallery_photo_viewer_screen.dart';
@@ -610,18 +611,29 @@ GoRoute _settingsRoute(
             builder: (context, state) => RingAlertSettingsScreen(
               repository: deps.chatDependencies.ringAlertPreferencesRepository,
               uid: deps.chatDependencies.authService.currentUid,
-              onTestNotification: ({required title, required body}) async {
-                final alertId =
-                    'ring-test-${DateTime.now().millisecondsSinceEpoch}';
-                await deps.chatDependencies.notificationService
-                    .showRingRequestNotification(
-                      threadId: 'ring-alert-test',
-                      alertId: alertId,
-                      title: title,
-                      body: body,
-                      openThread: false,
-                    );
-              },
+              onTestNotification:
+                  ({
+                    required title,
+                    required body,
+                    required preferences,
+                  }) async {
+                    final alertId =
+                        'ring-test-${DateTime.now().millisecondsSinceEpoch}';
+                    await deps.chatDependencies.notificationService
+                        .showRingRequestNotification(
+                          threadId: 'ring-alert-test',
+                          alertId: alertId,
+                          title: title,
+                          body: body,
+                          preferences: IncomingChatAlertPreferences(
+                            source: preferences.source.name == 'custom'
+                                ? NotificationAlertSource.custom
+                                : NotificationAlertSource.system,
+                            vibrationEnabled: preferences.vibrationEnabled,
+                          ),
+                          openThread: false,
+                        );
+                  },
             ),
           ),
         ],
