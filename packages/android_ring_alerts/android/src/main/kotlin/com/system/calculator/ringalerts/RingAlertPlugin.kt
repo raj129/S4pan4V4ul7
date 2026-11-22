@@ -25,6 +25,7 @@ class RingAlertPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, Activity
     private var activity: Activity? = null
     private var activityBinding: ActivityPluginBinding? = null
     private var pickerResult: MethodChannel.Result? = null
+    private var pickerSoundType = RingtoneManager.TYPE_RINGTONE
 
     override fun onAttachedToEngine(@NonNull binding: FlutterPlugin.FlutterPluginBinding) {
         applicationContext = binding.applicationContext
@@ -35,6 +36,7 @@ class RingAlertPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, Activity
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
         when (call.method) {
             "pickRingtone" -> pickRingtone(call, result)
+            "pickNotificationSound" -> pickNotificationSound(call, result)
             "ringtoneTitle" -> {
                 val uri = call.argument<String>("uri")?.let(Uri::parse)
                 result.success(uri?.let {
@@ -44,6 +46,29 @@ class RingAlertPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, Activity
             }
             "hasFlashlight" -> result.success(hasFlashlight())
             "systemAlertSettings" -> result.success(systemAlertSettings())
+            "openNotificationChannelSettings" -> {
+                val channelId = call.argument<String>("channelId")
+                if (channelId.isNullOrBlank()) {
+                    result.error(
+                        "invalid_argument",
+                        "A notification channel ID is required.",
+                        null,
+                    )
+                    return
+                }
+                val intent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
+                        .putExtra(Settings.EXTRA_APP_PACKAGE, applicationContext.packageName)
+                        .putExtra(Settings.EXTRA_CHANNEL_ID, channelId)
+                } else {
+                    Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                        .setData(Uri.fromParts("package", applicationContext.packageName, null))
+                }
+                applicationContext.startActivity(
+                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                )
+                result.success(null)
+            }
             "openSystemRingtoneSettings" -> {
                 applicationContext.startActivity(
                     Intent(Settings.ACTION_SOUND_SETTINGS)
@@ -104,6 +129,14 @@ class RingAlertPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, Activity
             .putExtra(RingAlertService.EXTRA_FLASH_PATTERN, call.argument<String>("flashPattern") ?: "slowBlink")
             .putExtra(RingAlertService.EXTRA_START_DELAY_SECONDS, startDelay)
             .putExtra(RingAlertService.EXTRA_ALLOW_FLASH_IN_BACKGROUND, call.argument<Boolean>("allowFlashInBackground") == true)
+            .putExtra(
+                RingAlertService.EXTRA_NOTIFICATION_AUDIO_USAGE,
+                call.argument<Boolean>("notificationAudioUsage") == true,
+            )
+            .putExtra(
+                RingAlertService.EXTRA_REPEAT_VIBRATION,
+                call.argument<Boolean>("repeatVibration") ?: true,
+            )
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             context.startForegroundService(intent)
         } else {
@@ -136,10 +169,17 @@ class RingAlertPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, Activity
             RingtoneManager.getRingtone(applicationContext, it)
                 ?.getTitle(applicationContext)
         }
+        val notificationUri =
+            RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+        val notificationSoundTitle = notificationUri?.let {
+            RingtoneManager.getRingtone(applicationContext, it)
+                ?.getTitle(applicationContext)
+        }
         val cameraFlashEnabled = readSystemToggle("camera_flash_notification")
         val screenFlashEnabled = readSystemToggle("screen_flash_notification")
         return mapOf(
             "ringtoneTitle" to ringtoneTitle,
+            "notificationSoundTitle" to notificationSoundTitle,
             "cameraFlashEnabled" to cameraFlashEnabled,
             "screenFlashEnabled" to screenFlashEnabled,
         )
@@ -154,23 +194,36 @@ class RingAlertPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, Activity
     }
 
     private fun pickRingtone(call: MethodCall, result: MethodChannel.Result) {
+        pickSound(call, result, RingtoneManager.TYPE_RINGTONE)
+    }
+
+    private fun pickNotificationSound(call: MethodCall, result: MethodChannel.Result) {
+        pickSound(call, result, RingtoneManager.TYPE_NOTIFICATION)
+    }
+
+    private fun pickSound(
+        call: MethodCall,
+        result: MethodChannel.Result,
+        soundType: Int,
+    ) {
         val currentActivity = activity
         if (currentActivity == null) {
             result.error("unavailable", "No Android activity is attached.", null)
             return
         }
         if (pickerResult != null) {
-            result.error("picker_busy", "The ringtone picker is already open.", null)
+            result.error("picker_busy", "The sound picker is already open.", null)
             return
         }
         val intent = Intent(RingtoneManager.ACTION_RINGTONE_PICKER)
-            .putExtra(RingtoneManager.EXTRA_RINGTONE_TYPE, RingtoneManager.TYPE_RINGTONE)
+            .putExtra(RingtoneManager.EXTRA_RINGTONE_TYPE, soundType)
             .putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_DEFAULT, true)
             .putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_SILENT, false)
         call.argument<String>("currentUri")?.let {
             intent.putExtra(RingtoneManager.EXTRA_RINGTONE_EXISTING_URI, Uri.parse(it))
         }
         pickerResult = result
+        pickerSoundType = soundType
         currentActivity.startActivityForResult(intent, RINGTONE_REQUEST_CODE)
     }
 
@@ -180,11 +233,13 @@ class RingAlertPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, Activity
         pickerResult = null
         if (resultCode != Activity.RESULT_OK || data == null) {
             result.success(null)
+            pickerSoundType = RingtoneManager.TYPE_RINGTONE
             return true
         }
         val uri = data.getParcelableExtra<Uri>(RingtoneManager.EXTRA_RINGTONE_PICKED_URI)
-            ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
+            ?: RingtoneManager.getDefaultUri(pickerSoundType)
         result.success(uri?.toString())
+        pickerSoundType = RingtoneManager.TYPE_RINGTONE
         return true
     }
 

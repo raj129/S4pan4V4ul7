@@ -137,7 +137,7 @@ async function refreshAccessToken(refreshToken: string): Promise<{
 }
 
 export const connectGoogleDrive = onCall(
-  { secrets: [oauthClientSecret, tokenEncryptionKey] },
+  { region: "asia-south1", secrets: [oauthClientSecret, tokenEncryptionKey] },
   async (request) => {
     const uid = requireUid(request.auth?.uid);
     const code = request.data?.serverAuthCode;
@@ -172,7 +172,7 @@ export const connectGoogleDrive = onCall(
 );
 
 export const getGoogleDriveAccessToken = onCall(
-  { secrets: [oauthClientSecret, tokenEncryptionKey] },
+  { region: "asia-south1", secrets: [oauthClientSecret, tokenEncryptionKey] },
   async (request) => {
     const uid = requireUid(request.auth?.uid);
     const snapshot = await tokenDocument(uid).get();
@@ -198,7 +198,7 @@ export const getGoogleDriveAccessToken = onCall(
 );
 
 export const disconnectGoogleDrive = onCall(
-  { secrets: [oauthClientSecret, tokenEncryptionKey] },
+  { region: "asia-south1", secrets: [oauthClientSecret, tokenEncryptionKey] },
   async (request) => {
     const uid = requireUid(request.auth?.uid);
     const reference = tokenDocument(uid);

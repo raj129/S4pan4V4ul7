@@ -861,6 +861,15 @@ class LiveLocationService with WidgetsBindingObserver {
       await _stopAfterExpiry();
       return;
     }
+    final lastFix = _lastFreshFixAt;
+    final started = _subscriptionStartedAt;
+    if (_positionSubscription != null &&
+        _locationRetryTimer == null &&
+        lastFix != null &&
+        (started == null || lastFix >= started) &&
+        _elapsed - lastFix < silenceTimeout) {
+      return;
+    }
     await _recoverSafely('resume');
   }
 

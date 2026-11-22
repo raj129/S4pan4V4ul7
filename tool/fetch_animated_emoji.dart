@@ -1,6 +1,7 @@
 // Downloads every Noto Animated Emoji (Lottie) into assets/animated_emoji/.
 //
 // Run from the project root:  dart run tool/fetch_animated_emoji.dart
+// Use --check to report stale or missing files without changing assets.
 //
 // Source: https://googlefonts.github.io/noto-emoji-animation/
 // License: CC BY 4.0 (see assets/animated_emoji/LICENSE).
@@ -14,7 +15,15 @@ String _lottieUrl(String codepoint) =>
 
 const _concurrency = 12;
 
-Future<void> main() async {
+Future<void> main(List<String> args) async {
+  final checkOnly = args.contains('--check');
+  final unknownArgs = args.where((arg) => arg != '--check').toList();
+  if (unknownArgs.isNotEmpty) {
+    stderr.writeln('Unknown arguments: ${unknownArgs.join(' ')}');
+    exitCode = 2;
+    return;
+  }
+
   final outDir = Directory('assets/animated_emoji');
   await outDir.create(recursive: true);
   final client = HttpClient();
@@ -27,6 +36,8 @@ Future<void> main() async {
     ];
 
     final done = <String>[];
+    final added = <String>[];
+    final updated = <String>[];
     final failed = <String>[];
     var next = 0;
 
@@ -35,10 +46,17 @@ Future<void> main() async {
         final cp = codepoints[next++];
         final file = File('${outDir.path}/$cp.json');
         try {
-          if (!await file.exists()) {
-            final body = await _get(client, _lottieUrl(cp));
-            // Re-encode to strip any whitespace; also validates the JSON.
-            await file.writeAsString(jsonEncode(jsonDecode(body)));
+          final body = await _get(client, _lottieUrl(cp));
+          final normalized = jsonEncode(jsonDecode(body));
+          final existed = await file.exists();
+          final isCurrent =
+              existed && (await file.readAsString()).trim() == normalized;
+
+          if (!isCurrent && !checkOnly) {
+            await file.writeAsString(normalized);
+          }
+          if (!isCurrent) {
+            (existed ? updated : added).add(cp);
           }
           done.add(cp);
         } on _NotFound {
@@ -55,17 +73,37 @@ Future<void> main() async {
     await Future.wait(List.generate(_concurrency, (_) => worker()));
 
     done.sort();
-    await File('${outDir.path}/index.json').writeAsString(jsonEncode(done));
+    final indexFile = File('${outDir.path}/index.json');
+    final nextIndex = jsonEncode(done);
+    final previousIndex = await indexFile.exists()
+        ? (await indexFile.readAsString()).trim()
+        : '';
+    if (!checkOnly && previousIndex != nextIndex) {
+      await indexFile.writeAsString(nextIndex);
+    }
 
     var bytes = 0;
     await for (final f in outDir.list()) {
       if (f is File) bytes += await f.length();
     }
     stdout.writeln(
-      'Downloaded ${done.length}/${codepoints.length} animations '
+      '${checkOnly ? 'Checked' : 'Synced'} ${done.length}/${codepoints.length} '
+      'animations '
       '(${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB), '
+      '${added.length} missing, ${updated.length} updated, '
+      '${previousIndex == nextIndex ? 0 : 1} index changes, '
       '${failed.length} failed.',
     );
+    if (checkOnly &&
+        (added.isNotEmpty ||
+            updated.isNotEmpty ||
+            previousIndex != nextIndex)) {
+      stderr.writeln(
+        'Animated emoji assets are stale. Run '
+        'dart run tool/fetch_animated_emoji.dart',
+      );
+      exitCode = 1;
+    }
     if (failed.isNotEmpty) exitCode = 1;
   } finally {
     client.close();

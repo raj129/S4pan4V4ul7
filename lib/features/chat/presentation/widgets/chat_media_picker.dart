@@ -165,7 +165,8 @@ class ChatMediaPickerPanel extends StatefulWidget {
     required this.onSend,
     required this.onInsertEmoji,
     required this.onBackspace,
-    required this.sheetScrollController,
+    this.sheetScrollController,
+    this.onDragDelta,
     super.key,
   });
 
@@ -179,7 +180,8 @@ class ChatMediaPickerPanel extends StatefulWidget {
   onSend;
   final ValueChanged<String> onInsertEmoji;
   final VoidCallback onBackspace;
-  final ScrollController sheetScrollController;
+  final ScrollController? sheetScrollController;
+  final ValueChanged<double>? onDragDelta;
 
   @override
   State<ChatMediaPickerPanel> createState() => _ChatMediaPickerPanelState();
@@ -568,34 +570,36 @@ class _ChatMediaPickerPanelState extends State<ChatMediaPickerPanel> {
         _tab == ChatMediaPickerTab.stickers &&
         _stickerSource == _StickerSource.personal;
     final colors = Theme.of(context).colorScheme;
-    return CustomScrollView(
-      controller: widget.sheetScrollController,
-      physics: const ClampingScrollPhysics(),
-      slivers: [
-        SliverFillRemaining(
-          hasScrollBody: true,
-          child: Material(
-            color: colors.surface,
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
-            clipBehavior: Clip.antiAlias,
-            child: SafeArea(
-              top: false,
-              child: Column(
-                children: [
-                  SizedBox(
-                    key: const ValueKey('picker-drag-handle'),
-                    height: 24,
-                    child: Center(
-                      child: Container(
-                        width: 32,
-                        height: 4,
-                        decoration: BoxDecoration(
-                          color: colors.onSurfaceVariant.withValues(alpha: 0.4),
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                      ),
+    final panel = Material(
+      color: colors.surface,
+      borderRadius: widget.sheetScrollController == null
+          ? null
+          : const BorderRadius.vertical(top: Radius.circular(28)),
+      clipBehavior: Clip.antiAlias,
+      child: SafeArea(
+        top: false,
+        child: Column(
+          children: [
+            GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onVerticalDragUpdate: widget.onDragDelta == null
+                  ? null
+                  : (details) => widget.onDragDelta!(details.delta.dy),
+              child: SizedBox(
+                key: const ValueKey('picker-drag-handle'),
+                height: 24,
+                child: Center(
+                  child: Container(
+                    width: 32,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: colors.onSurfaceVariant.withValues(alpha: 0.4),
+                      borderRadius: BorderRadius.circular(4),
                     ),
                   ),
+                ),
+              ),
+            ),
                   Padding(
                     padding: const EdgeInsets.fromLTRB(8, 2, 8, 4),
                     child: SizedBox(
@@ -731,62 +735,74 @@ class _ChatMediaPickerPanelState extends State<ChatMediaPickerPanel> {
                   if (_tab == ChatMediaPickerTab.stickers)
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 10),
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: ConstrainedBox(
-                              constraints: const BoxConstraints(maxWidth: 340),
-                              child: SegmentedButton<_StickerSource>(
-                                showSelectedIcon: false,
-                                style: const ButtonStyle(
-                                  tapTargetSize:
-                                      MaterialTapTargetSize.shrinkWrap,
-                                  visualDensity: VisualDensity.compact,
-                                  minimumSize: WidgetStatePropertyAll(
-                                    Size(0, 32),
+                      child: SizedBox(
+                        height: 32,
+                        child: Stack(
+                          children: [
+                            Center(
+                              child: SizedBox(
+                                width: 200,
+                                height: 28,
+                                child: SegmentedButton<_StickerSource>(
+                                  key: const ValueKey(
+                                    'sticker-source-selector',
                                   ),
-                                  padding: WidgetStatePropertyAll(
-                                    EdgeInsets.symmetric(
-                                      horizontal: 8,
-                                      vertical: 4,
+                                  showSelectedIcon: false,
+                                  style: const ButtonStyle(
+                                    tapTargetSize:
+                                        MaterialTapTargetSize.shrinkWrap,
+                                    visualDensity: VisualDensity.compact,
+                                    minimumSize: WidgetStatePropertyAll(
+                                      Size(0, 28),
+                                    ),
+                                    padding: WidgetStatePropertyAll(
+                                      EdgeInsets.symmetric(
+                                        horizontal: 6,
+                                        vertical: 2,
+                                      ),
+                                    ),
+                                    textStyle: WidgetStatePropertyAll(
+                                      TextStyle(fontSize: 11, height: 0.8),
                                     ),
                                   ),
-                                  textStyle: WidgetStatePropertyAll(
-                                    TextStyle(fontSize: 12),
+                                  segments: const [
+                                    ButtonSegment(
+                                      value: _StickerSource.giphy,
+                                      label: Text('Explore'),
+                                    ),
+                                    ButtonSegment(
+                                      value: _StickerSource.personal,
+                                      label: Text('My stickers'),
+                                    ),
+                                  ],
+                                  selected: {_stickerSource},
+                                  onSelectionChanged: (selection) =>
+                                      _selectStickerSource(selection.first),
+                                ),
+                              ),
+                            ),
+                            if (showPersonalStickers)
+                              Positioned(
+                                right: 0,
+                                top: 0,
+                                bottom: 0,
+                                child: IconButton(
+                                  tooltip: 'Add sticker from device',
+                                  visualDensity: VisualDensity.compact,
+                                  constraints: const BoxConstraints.tightFor(
+                                    width: 32,
+                                    height: 32,
+                                  ),
+                                  padding: EdgeInsets.zero,
+                                  onPressed: _importSticker,
+                                  icon: const Icon(
+                                    Icons.add_photo_alternate_outlined,
+                                    size: 18,
                                   ),
                                 ),
-                                segments: const [
-                                  ButtonSegment(
-                                    value: _StickerSource.giphy,
-                                    label: Text('Explore'),
-                                  ),
-                                  ButtonSegment(
-                                    value: _StickerSource.personal,
-                                    label: Text('My stickers'),
-                                  ),
-                                ],
-                                selected: {_stickerSource},
-                                onSelectionChanged: (selection) =>
-                                    _selectStickerSource(selection.first),
                               ),
-                            ),
-                          ),
-                          if (showPersonalStickers)
-                            IconButton(
-                              tooltip: 'Add sticker from device',
-                              visualDensity: VisualDensity.compact,
-                              constraints: const BoxConstraints.tightFor(
-                                width: 32,
-                                height: 32,
-                              ),
-                              padding: EdgeInsets.zero,
-                              onPressed: _importSticker,
-                              icon: const Icon(
-                                Icons.add_photo_alternate_outlined,
-                                size: 18,
-                              ),
-                            ),
-                        ],
+                          ],
+                        ),
                       ),
                     ),
                   Expanded(
@@ -817,9 +833,15 @@ class _ChatMediaPickerPanelState extends State<ChatMediaPickerPanel> {
                 ],
               ),
             ),
-          ),
-        ),
-      ],
+          );
+    final sheetController = widget.sheetScrollController;
+    if (sheetController == null) {
+      return panel;
+    }
+    return CustomScrollView(
+      controller: sheetController,
+      physics: const ClampingScrollPhysics(),
+      slivers: [SliverFillRemaining(hasScrollBody: true, child: panel)],
     );
   }
 

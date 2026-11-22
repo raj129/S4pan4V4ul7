@@ -25,8 +25,8 @@
     <uses-permission android:name="android.permission.READ_CALL_LOG" />
     <uses-permission android:name="android.permission.WRITE_CALL_LOG" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <uses-permission android:name="android.permission.SEND_SMS" />
-    <uses-permission android:name="android.permission.RECEIVE_SMS" />
+<!--    <uses-permission android:name="android.permission.SEND_SMS" />-->
+<!--    <uses-permission android:name="android.permission.RECEIVE_SMS" />-->
     <!-- Lets the hidden Developer options feed a simulated position to other apps
          once this app is chosen as "Select mock location app". -->
     <uses-permission android:name="android.permission.ACCESS_MOCK_LOCATION"
@@ -108,11 +108,10 @@
                 android:resource="@xml/flutter_image_picker_file_paths" />
         </provider>
         
-        <!-- FCM pushes from the onChatMessageCreated Cloud Function land on the
-             same channel ChatNotificationService creates. -->
+        <!-- Default channel used by the local chat notifications. -->
         <meta-data
             android:name="com.google.firebase.messaging.default_notification_channel_id"
-            android:value="chat_messages" />
+            android:value="chat_alerts_system" />
 
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->

@@ -12,9 +12,10 @@ part 'vault_database.g.dart';
 // TABLE DEFINITIONS
 // ============================================================================
 
-/// Photos table: encrypted photo metadata including file paths, keys, and checksums.
+/// Photos table: encrypted metadata, separated by stable vault ID.
 @DataClassName('VaultPhoto')
 class Photos extends Table {
+  TextColumn get vaultId => text()();
   TextColumn get id => text()();
   TextColumn get originalFilename => text()();
   IntColumn get createdTimeMs => integer()();
@@ -53,7 +54,7 @@ class Photos extends Table {
       integer().nullable()(); // For cloud sync tombstone cleanup
 
   @override
-  Set<Column> get primaryKey => {id};
+  Set<Column> get primaryKey => {vaultId, id};
 }
 
 /// Albums: user-created folders for organizing photos.
@@ -337,7 +338,7 @@ class VaultDatabase extends _$VaultDatabase {
   VaultDatabase.forTesting(super.executor);
 
   @override
-  int get schemaVersion => 6;
+  int get schemaVersion => 7;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -367,6 +368,32 @@ class VaultDatabase extends _$VaultDatabase {
       }
       if (from < 6) {
         await m.createTable(chatDrafts);
+      }
+      if (from < 7) {
+        await customStatement('ALTER TABLE photos RENAME TO photos_before_v7');
+        await m.createTable(photos);
+        await customStatement(
+          'INSERT INTO photos ('
+          'vault_id, id, original_filename, created_time_ms, imported_time_ms, '
+          'modified_time_ms, source, album_id, favorite, encrypted_file_path, '
+          'thumbnail_path, thumbnail_nonce, photo_nonce, wrapped_dek, '
+          'encryption_version, sync_status, backup_status, checksum_sha256, '
+          'file_size, mime_type, is_trashed, trash_expires_at_ms, '
+          'deleted_tombstone_at_ms'
+          ') SELECT '
+          '\'__legacy__\', id, original_filename, created_time_ms, '
+          'imported_time_ms, modified_time_ms, source, album_id, favorite, '
+          'encrypted_file_path, thumbnail_path, thumbnail_nonce, photo_nonce, '
+          'wrapped_dek, encryption_version, sync_status, backup_status, '
+          'checksum_sha256, file_size, mime_type, is_trashed, '
+          'trash_expires_at_ms, deleted_tombstone_at_ms '
+          'FROM photos_before_v7',
+        );
+        await customStatement('DROP TABLE photos_before_v7');
+        await customStatement(
+          'CREATE INDEX IF NOT EXISTS idx_photos_vault_imported '
+          'ON photos (vault_id, imported_time_ms DESC)',
+        );
       }
     },
   );
@@ -420,9 +447,18 @@ class VaultDatabase extends _$VaultDatabase {
   // =========================================================================
 
   /// Get non-trashed photos with pagination, ordered by most recent imported first.
-  Future<List<VaultPhoto>> getGalleryPhotos({int? limit, int? offset}) async {
+  Future<List<VaultPhoto>> getGalleryPhotos({
+    required String vaultId,
+    int? limit,
+    int? offset,
+  }) async {
     final query = select(photos)
-      ..where((p) => p.isTrashed.equals(0) & p.mimeType.like('image/%'))
+      ..where(
+        (p) =>
+            p.vaultId.equals(vaultId) &
+            p.isTrashed.equals(0) &
+            p.mimeType.like('image/%'),
+      )
       ..orderBy([
         (p) =>
             OrderingTerm(expression: p.importedTimeMs, mode: OrderingMode.desc),
@@ -434,9 +470,13 @@ class VaultDatabase extends _$VaultDatabase {
   }
 
   /// Get trashed photos with pagination.
-  Future<List<VaultPhoto>> getTrashedPhotos({int? limit, int? offset}) async {
+  Future<List<VaultPhoto>> getTrashedPhotos({
+    required String vaultId,
+    int? limit,
+    int? offset,
+  }) async {
     final query = select(photos)
-      ..where((p) => p.isTrashed.equals(1))
+      ..where((p) => p.vaultId.equals(vaultId) & p.isTrashed.equals(1))
       ..orderBy([
         (p) => OrderingTerm(
           expression: p.trashExpiresAtMs,
@@ -450,9 +490,17 @@ class VaultDatabase extends _$VaultDatabase {
   }
 
   /// Get all photos (including trashed) by album.
-  Future<List<VaultPhoto>> getPhotosByAlbum(String albumId) async {
+  Future<List<VaultPhoto>> getPhotosByAlbum(
+    String vaultId,
+    String albumId,
+  ) async {
     return (select(photos)
-          ..where((p) => p.albumId.equals(albumId) & p.isTrashed.equals(0))
+          ..where(
+            (p) =>
+                p.vaultId.equals(vaultId) &
+                p.albumId.equals(albumId) &
+                p.isTrashed.equals(0),
+          )
           ..orderBy([
             (p) => OrderingTerm(
               expression: p.importedTimeMs,
@@ -463,10 +511,13 @@ class VaultDatabase extends _$VaultDatabase {
   }
 
   /// Check if checksum already exists (duplicate detection).
-  Future<bool> photoWithChecksumExists(String checksum) async {
+  Future<bool> photoWithChecksumExists(String checksum, String vaultId) async {
     final count =
         await (select(photos)..where(
-              (p) => p.checksumSha256.equals(checksum) & p.isTrashed.equals(0),
+              (p) =>
+                  p.vaultId.equals(vaultId) &
+                  p.checksumSha256.equals(checksum) &
+                  p.isTrashed.equals(0),
             ))
             .get()
             .then((rows) => rows.length);
@@ -474,8 +525,16 @@ class VaultDatabase extends _$VaultDatabase {
   }
 
   /// Get single photo by ID (for viewer/editor screens).
-  Future<VaultPhoto?> getPhotoById(String id) async {
-    return (select(photos)..where((p) => p.id.equals(id))).getSingleOrNull();
+  Future<VaultPhoto?> getPhotoById(String id, String vaultId) async {
+    return (select(photos)
+          ..where((p) => p.id.equals(id) & p.vaultId.equals(vaultId)))
+        .getSingleOrNull();
+  }
+
+  Future<void> assignLegacyPhotosToVault(String vaultId) async {
+    await (update(photos)..where((p) => p.vaultId.equals('__legacy__'))).write(
+      PhotosCompanion(vaultId: Value(vaultId)),
+    );
   }
 
   /// Insert new photo with metadata and encrypted file path.
@@ -489,8 +548,12 @@ class VaultDatabase extends _$VaultDatabase {
   }
 
   /// Move photo to trash (soft delete).
-  Future<void> movePhotoToTrash(String photoId, int expiresAtMs) async {
-    final photo = await getPhotoById(photoId);
+  Future<void> movePhotoToTrash(
+    String photoId,
+    int expiresAtMs,
+    String vaultId,
+  ) async {
+    final photo = await getPhotoById(photoId, vaultId);
     if (photo != null) {
       await update(photos).replace(
         photo.copyWith(isTrashed: 1, trashExpiresAtMs: Value(expiresAtMs)),
@@ -499,8 +562,8 @@ class VaultDatabase extends _$VaultDatabase {
   }
 
   /// Restore photo from trash.
-  Future<void> restorePhotoFromTrash(String photoId) async {
-    final photo = await getPhotoById(photoId);
+  Future<void> restorePhotoFromTrash(String photoId, String vaultId) async {
+    final photo = await getPhotoById(photoId, vaultId);
     if (photo != null) {
       await update(photos).replace(
         photo.copyWith(isTrashed: 0, trashExpiresAtMs: const Value(null)),
@@ -509,15 +572,21 @@ class VaultDatabase extends _$VaultDatabase {
   }
 
   /// Permanently delete photo (removes encrypted file marker for cleanup).
-  Future<void> permanentlyDeletePhoto(String photoId) async {
-    await (delete(photos)..where((p) => p.id.equals(photoId))).go();
+  Future<void> permanentlyDeletePhoto(String photoId, String vaultId) async {
+    await (delete(
+      photos,
+    )..where((p) => p.id.equals(photoId) & p.vaultId.equals(vaultId))).go();
     await (delete(photoTags)..where((pt) => pt.photoId.equals(photoId))).go();
   }
 
   /// Get all trashed photos with expiry < now (for cleanup job).
-  Future<List<VaultPhoto>> getExpiredTrashPhotos(int nowMs) async {
+  Future<List<VaultPhoto>> getExpiredTrashPhotos(
+    int nowMs,
+    String vaultId,
+  ) async {
     return (select(photos)..where(
           (p) =>
+              p.vaultId.equals(vaultId) &
               p.isTrashed.equals(1) &
               (p.trashExpiresAtMs.isSmallerThanValue(nowMs) |
                   p.trashExpiresAtMs.isNull()),
@@ -526,11 +595,9 @@ class VaultDatabase extends _$VaultDatabase {
   }
 
   /// Count photos for gallery stats.
-  Future<int> countPhotos({bool includeTrashed = false}) async {
-    final query = select(photos);
-    if (!includeTrashed) {
-      query.where((p) => p.isTrashed.equals(0));
-    }
+  Future<int> countPhotos(String vaultId, {bool includeTrashed = false}) async {
+    final query = select(photos)..where((p) => p.vaultId.equals(vaultId));
+    if (!includeTrashed) query.where((p) => p.isTrashed.equals(0));
     return query.get().then((rows) => rows.length);
   }
 
@@ -674,10 +741,10 @@ class VaultDatabase extends _$VaultDatabase {
   // =========================================================================
 
   /// Clean up expired trash items and their associated database records.
-  Future<int> cleanupExpiredTrash(int nowMs) async {
-    final expiredPhotos = await getExpiredTrashPhotos(nowMs);
+  Future<int> cleanupExpiredTrash(int nowMs, String vaultId) async {
+    final expiredPhotos = await getExpiredTrashPhotos(nowMs, vaultId);
     for (final photo in expiredPhotos) {
-      await permanentlyDeletePhoto(photo.id);
+      await permanentlyDeletePhoto(photo.id, vaultId);
       await removeFromTrash(photo.id);
     }
     return expiredPhotos.length;
@@ -1116,7 +1183,7 @@ LazyDatabase _openConnection() {
       native: DriftNativeOptions(
         shareAcrossIsolates: true,
         setup: (database) {
-          database.execute('PRAGMA busy_timeout = 1000');
+          database.execute('PRAGMA busy_timeout = 5000');
           database.execute('PRAGMA journal_mode = WAL');
         },
       ),

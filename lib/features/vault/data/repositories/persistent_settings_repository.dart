@@ -1,5 +1,9 @@
+import 'dart:convert';
+
 import '../../domain/entities/user_mode.dart';
+import '../../domain/entities/incoming_chat_alert_preferences.dart';
 import '../../domain/repositories/settings_repository.dart';
+import '../../../calculator/domain/models/secret_entry_config.dart';
 import 'storage_keys.dart';
 import 'storage_mode_codec.dart';
 import 'storage_string_kv.dart';
@@ -71,6 +75,132 @@ class PersistentSettingsRepository implements SettingsRepository {
       StorageKeys.driveEncryptedBackupEnabled,
       enabled.toString(),
     );
+  }
+
+  Future<bool> _readDefaultTrue(String key) async {
+    final raw = await _kv.read(key);
+    return raw == null ? true : raw == 'true';
+  }
+
+  @override
+  Future<bool> isBackupChatsEnabled() =>
+      _readDefaultTrue(StorageKeys.backupChatsEnabled);
+
+  @override
+  Future<void> setBackupChatsEnabled(bool enabled) =>
+      _kv.write(StorageKeys.backupChatsEnabled, enabled.toString());
+
+  @override
+  Future<bool> isBackupVaultPhotosEnabled() =>
+      _readDefaultTrue(StorageKeys.backupVaultPhotosEnabled);
+
+  @override
+  Future<void> setBackupVaultPhotosEnabled(bool enabled) =>
+      _kv.write(StorageKeys.backupVaultPhotosEnabled, enabled.toString());
+
+  @override
+  Future<bool> isBackupSettingsEnabled() =>
+      _readDefaultTrue(StorageKeys.backupSettingsEnabled);
+
+  @override
+  Future<void> setBackupSettingsEnabled(bool enabled) =>
+      _kv.write(StorageKeys.backupSettingsEnabled, enabled.toString());
+
+  @override
+  Future<DateTime?> getLastSettingsBackupAt() async {
+    final ms = int.tryParse(
+      await _kv.read(StorageKeys.lastSettingsBackupAt) ?? '',
+    );
+    return ms == null ? null : DateTime.fromMillisecondsSinceEpoch(ms);
+  }
+
+  @override
+  Future<void> setLastSettingsBackupAt(DateTime? at) async {
+    if (at == null) {
+      await _kv.delete(StorageKeys.lastSettingsBackupAt);
+      return;
+    }
+    await _kv.write(
+      StorageKeys.lastSettingsBackupAt,
+      at.millisecondsSinceEpoch.toString(),
+    );
+  }
+
+  @override
+  Future<bool> isBackupCloudEnabled() async {
+    final raw = await _kv.read(StorageKeys.backupCloudEnabled);
+    return raw == 'true';
+  }
+
+  @override
+  Future<void> setBackupCloudEnabled(bool enabled) =>
+      _kv.write(StorageKeys.backupCloudEnabled, enabled.toString());
+
+  @override
+  Future<bool> isBackupWifiOnly() =>
+      _readDefaultTrue(StorageKeys.backupWifiOnly);
+
+  @override
+  Future<void> setBackupWifiOnly(bool enabled) =>
+      _kv.write(StorageKeys.backupWifiOnly, enabled.toString());
+
+  @override
+  Future<DateTime?> getLastVaultPhotoBackupAt() async {
+    final ms = int.tryParse(
+      await _kv.read(StorageKeys.lastVaultPhotoBackupAt) ?? '',
+    );
+    return ms == null ? null : DateTime.fromMillisecondsSinceEpoch(ms);
+  }
+
+  @override
+  Future<void> setLastVaultPhotoBackupAt(DateTime? at) async {
+    if (at == null) {
+      await _kv.delete(StorageKeys.lastVaultPhotoBackupAt);
+      return;
+    }
+    await _kv.write(
+      StorageKeys.lastVaultPhotoBackupAt,
+      at.millisecondsSinceEpoch.toString(),
+    );
+  }
+
+  @override
+  Future<String?> getLastVaultPhotoBackupVaultId() =>
+      _kv.read(StorageKeys.lastVaultPhotoBackupVaultId);
+
+  @override
+  Future<void> setLastVaultPhotoBackupVaultId(String? vaultId) async {
+    if (vaultId == null) {
+      await _kv.delete(StorageKeys.lastVaultPhotoBackupVaultId);
+      return;
+    }
+    await _kv.write(StorageKeys.lastVaultPhotoBackupVaultId, vaultId);
+  }
+
+  @override
+  Future<bool> isVaultPhotoBackupCloudPending() async =>
+      await _kv.read(StorageKeys.vaultPhotoBackupCloudPending) == 'true';
+
+  @override
+  Future<void> setVaultPhotoBackupCloudPending(bool pending) async {
+    if (!pending) {
+      await _kv.delete(StorageKeys.vaultPhotoBackupCloudPending);
+      return;
+    }
+    await _kv.write(StorageKeys.vaultPhotoBackupCloudPending, 'true');
+  }
+
+  @override
+  Future<void> migrateLegacyPhotoSyncSetting() async {
+    if (await _kv.read(StorageKeys.legacyPhotoSyncMigrated) == 'true') return;
+    final explicitPhotos = await _kv.read(StorageKeys.backupVaultPhotosEnabled);
+    final legacySync = await _kv.read(StorageKeys.photoSyncEnabled);
+    // Only carry over an explicit legacy setting if backupVaultPhotosEnabled
+    // was never explicitly configured, keeping default true for fresh installs.
+    if (explicitPhotos == null && legacySync == 'true') {
+      await _kv.write(StorageKeys.backupVaultPhotosEnabled, 'true');
+    }
+    await _kv.write(StorageKeys.legacyPhotoSyncMigrated, 'true');
   }
 
   @override
@@ -154,6 +284,25 @@ class PersistentSettingsRepository implements SettingsRepository {
   }
 
   @override
+  Future<IncomingChatAlertPreferences> getIncomingChatAlertPreferences() async {
+    final raw = await _kv.read(StorageKeys.incomingChatAlertPreferences);
+    if (raw == null) return const IncomingChatAlertPreferences();
+    try {
+      return IncomingChatAlertPreferences.fromJson(jsonDecode(raw));
+    } on FormatException {
+      return const IncomingChatAlertPreferences();
+    }
+  }
+
+  @override
+  Future<void> setIncomingChatAlertPreferences(
+    IncomingChatAlertPreferences preferences,
+  ) => _kv.write(
+    StorageKeys.incomingChatAlertPreferences,
+    jsonEncode(preferences.toJson()),
+  );
+
+  @override
   Future<String> getBackgroundLocationAlertTitle() async {
     final raw = await _kv.read(StorageKeys.backgroundLocationAlertTitle);
     return raw == null
@@ -228,4 +377,21 @@ class PersistentSettingsRepository implements SettingsRepository {
   @override
   Future<void> setMockLocationPrefs(String json) =>
       _kv.write(StorageKeys.mockLocationPrefs, json);
+
+  @override
+  Future<SecretEntryConfig> getSecretEntryConfig() async {
+    final raw = await _kv.read(StorageKeys.secretEntryConfig);
+    if (raw == null || raw.isEmpty) return const SecretEntryConfig();
+    try {
+      return SecretEntryConfig.fromJson(jsonDecode(raw));
+    } on FormatException {
+      return const SecretEntryConfig();
+    }
+  }
+
+  @override
+  Future<void> setSecretEntryConfig(SecretEntryConfig config) => _kv.write(
+    StorageKeys.secretEntryConfig,
+    jsonEncode(config.toJson()),
+  );
 }

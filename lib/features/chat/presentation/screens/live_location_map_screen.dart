@@ -393,6 +393,7 @@ class _LiveGoogleMap extends StatefulWidget {
 class _LiveGoogleMapState extends State<_LiveGoogleMap> {
   static const _defaultCenter = LatLng(20.5937, 78.9629);
   GoogleMapController? _controller;
+  MapType _mapType = MapType.normal;
 
   @override
   void didUpdateWidget(covariant _LiveGoogleMap oldWidget) {
@@ -415,8 +416,33 @@ class _LiveGoogleMapState extends State<_LiveGoogleMap> {
     super.dispose();
   }
 
+  Future<void> _recenter() async {
+    final point = widget.point;
+    if (point == null) return;
+    await _controller?.animateCamera(
+      CameraUpdate.newLatLngZoom(LatLng(point.latitude, point.longitude), 16),
+    );
+  }
+
+  void _cycleMapType() {
+    setState(() {
+      _mapType = switch (_mapType) {
+        MapType.normal => MapType.satellite,
+        MapType.satellite => MapType.terrain,
+        _ => MapType.normal,
+      };
+    });
+  }
+
+  (IconData, String) _mapTypeMeta(MapType type) => switch (type) {
+    MapType.satellite => (Icons.satellite_alt_rounded, 'Map type: Satellite'),
+    MapType.terrain => (Icons.terrain_rounded, 'Map type: Terrain'),
+    _ => (Icons.layers_outlined, 'Map type: Normal'),
+  };
+
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
     final point = widget.point;
     final center = point != null
         ? LatLng(point.latitude, point.longitude)
@@ -435,48 +461,85 @@ class _LiveGoogleMapState extends State<_LiveGoogleMap> {
             if (point.heading != null)
               'Heading ${point.heading!.toStringAsFixed(0)}°',
           ].join(' · ');
+    final (mapIcon, mapTooltip) = _mapTypeMeta(_mapType);
 
-    return GoogleMap(
-      initialCameraPosition: CameraPosition(
-        target: center,
-        zoom: point != null ? 16 : 5,
-      ),
-      onMapCreated: (controller) => _controller = controller,
-      markers: point == null
-          ? const <Marker>{}
-          : {
-              Marker(
-                markerId: const MarkerId('shared-location'),
-                position: center,
-                icon: BitmapDescriptor.defaultMarkerWithHue(
-                  widget.isActive
-                      ? BitmapDescriptor.hueAzure
-                      : BitmapDescriptor.hueOrange,
+    return Stack(
+      children: [
+        GoogleMap(
+          initialCameraPosition: CameraPosition(
+            target: center,
+            zoom: point != null ? 16 : 5,
+          ),
+          mapType: _mapType,
+          onMapCreated: (controller) => _controller = controller,
+          markers: point == null
+              ? const <Marker>{}
+              : {
+                  Marker(
+                    markerId: const MarkerId('shared-location'),
+                    position: center,
+                    icon: BitmapDescriptor.defaultMarkerWithHue(
+                      widget.isActive
+                          ? BitmapDescriptor.hueAzure
+                          : BitmapDescriptor.hueOrange,
+                    ),
+                    infoWindow: InfoWindow(
+                      title: markerTitle,
+                      snippet: markerSnippet,
+                    ),
+                  ),
+                },
+          circles: point == null
+              ? const <Circle>{}
+              : {
+                  Circle(
+                    circleId: const CircleId('location-accuracy'),
+                    center: center,
+                    radius: math.max(point.accuracy, 5.0),
+                    fillColor: (widget.isActive ? Colors.blue : Colors.orange)
+                        .withValues(alpha: 0.12),
+                    strokeColor: (widget.isActive ? Colors.blue : Colors.orange)
+                        .withValues(alpha: 0.5),
+                    strokeWidth: 1,
+                  ),
+                },
+          myLocationEnabled: widget.myLocationEnabled,
+          myLocationButtonEnabled: false,
+          zoomControlsEnabled: true,
+          mapToolbarEnabled: false,
+        ),
+        Positioned(
+          top: 12,
+          right: 12,
+          child: SafeArea(
+            bottom: false,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                FloatingActionButton.small(
+                  heroTag: 'live-map-type',
+                  tooltip: mapTooltip,
+                  backgroundColor: cs.surfaceContainerHigh,
+                  foregroundColor: cs.onSurface,
+                  onPressed: _cycleMapType,
+                  child: Icon(mapIcon),
                 ),
-                infoWindow: InfoWindow(
-                  title: markerTitle,
-                  snippet: markerSnippet,
-                ),
-              ),
-            },
-      circles: point == null
-          ? const <Circle>{}
-          : {
-              Circle(
-                circleId: const CircleId('location-accuracy'),
-                center: center,
-                radius: math.max(point.accuracy, 5.0),
-                fillColor: (widget.isActive ? Colors.blue : Colors.orange)
-                    .withValues(alpha: 0.12),
-                strokeColor: (widget.isActive ? Colors.blue : Colors.orange)
-                    .withValues(alpha: 0.5),
-                strokeWidth: 1,
-              ),
-            },
-      myLocationEnabled: widget.myLocationEnabled,
-      myLocationButtonEnabled: widget.myLocationEnabled,
-      zoomControlsEnabled: true,
-      mapToolbarEnabled: false,
+                if (point != null) ...[
+                  const SizedBox(height: 8),
+                  FloatingActionButton.small(
+                    heroTag: 'live-recenter',
+                    tooltip: 'Re-center on location',
+                    backgroundColor: cs.surfaceContainerHigh,
+                    foregroundColor: cs.onSurface,
+                    onPressed: _recenter,
+                    child: const Icon(Icons.my_location_rounded),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

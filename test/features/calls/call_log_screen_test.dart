@@ -96,8 +96,8 @@ void main() {
 
     expect(find.text('Asha'), findsOneWidget);
     expect(find.text('5551234'), findsOneWidget);
-    expect(find.byIcon(Icons.call_missed), findsOneWidget);
-    expect(find.byIcon(Icons.call_made), findsOneWidget);
+    expect(find.byIcon(Icons.call_missed_rounded), findsOneWidget);
+    expect(find.byIcon(Icons.call_made_rounded), findsOneWidget);
     expect(find.text('Add call'), findsOneWidget);
   });
 

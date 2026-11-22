@@ -4,6 +4,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:firebase_crashlytics/firebase_crashlytics.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:google_sign_in/google_sign_in.dart';
@@ -13,9 +14,13 @@ import './features/chat/application/services/push_notification_service.dart';
 import 'firebase_options.dart';
 import './core/app/vault_app.dart';
 import './features/chat/presentation/widgets/animated_emoji.dart';
+import './core/storage/shared_preferences_readiness.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  if (defaultTargetPlatform == TargetPlatform.android) {
+    GestureBinding.instance.resamplingEnabled = true;
+  }
 
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
   if (defaultTargetPlatform == TargetPlatform.android) {
@@ -27,6 +32,12 @@ Future<void> main() async {
     FirebaseCrashlytics.instance.recordError(error, stack, fatal: true);
     return true;
   };
+
+  try {
+    await SharedPreferencesReadiness.instance.ensureInitialized();
+  } catch (e, stack) {
+    unawaited(FirebaseCrashlytics.instance.recordError(e, stack));
+  }
 
   // Guarded so a platform failure or a slow Play Services call can never keep
   // the first frame from rendering; sign-in surfaces its own error later.

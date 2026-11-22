@@ -1,6 +1,8 @@
 import 'package:bloc_test/bloc_test.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:photo_vault/features/chat/application/services/chat_backup_service.dart';
+import 'package:photo_vault/features/vault/application/services/onboarding_restore_bridge.dart';
 import 'package:photo_vault/features/vault/application/services/pin_validator.dart';
 import 'package:photo_vault/core/session/vault_session.dart';
 import 'package:photo_vault/features/vault/application/usecases/create_vault_usecase.dart';
@@ -14,7 +16,7 @@ import 'package:photo_vault/features/vault/domain/repositories/vmk_backup_reposi
 import 'package:photo_vault/features/vault/presentation/state/onboarding_cubit.dart';
 import 'package:photo_vault/features/vault/presentation/state/onboarding_state.dart';
 
-OnboardingCubit _makeCubit() {
+OnboardingCubit _makeCubit({OnboardingRestoreBridge? restoreBridge}) {
   final vaultRepo = InMemoryVaultRepository();
   final secureRepo = InMemorySecureStorageRepository();
   return OnboardingCubit(
@@ -28,6 +30,7 @@ OnboardingCubit _makeCubit() {
       backupRepositories: [_NoopVmkBackupRepository()],
     ),
     pinValidator: PinValidator(),
+    restoreBridge: restoreBridge,
   );
 }
 
@@ -188,9 +191,226 @@ void main() {
       ],
     );
   });
+
+  group('OnboardingCubit — post-PIN backup discovery & restore', () {
+    blocTest<OnboardingCubit, OnboardingState>(
+      'auto-creates vault when no backups are discovered after PIN confirmation',
+      build: () => _makeCubit(
+        restoreBridge: _FakeRestoreBridge(
+          discovery: const OnboardingBackupDiscovery(),
+        ),
+      ),
+      act: (cubit) async {
+        cubit.selectLocalMode();
+        cubit.pinEntered(UserMode.localOnly, '8472');
+        await cubit.pinConfirmed(UserMode.localOnly, '8472');
+      },
+      skip: 3,
+      expect: () => [
+        const OnboardingCheckingBackups(mode: UserMode.localOnly),
+        isA<OnboardingCreatingVault>(),
+        isA<OnboardingCreatingVault>(),
+        isA<OnboardingCreatingVault>(),
+        isA<OnboardingVaultCreated>(),
+      ],
+    );
+
+    blocTest<OnboardingCubit, OnboardingState>(
+      'emits RestoreAvailable and restores with progress when backups exist',
+      build: () => _makeCubit(
+        restoreBridge: _FakeRestoreBridge(
+          discovery: const OnboardingBackupDiscovery(
+            cloudVaultId: 'vault-123',
+          ),
+          requireOldPin: false,
+        ),
+      ),
+      act: (cubit) async {
+        cubit.continueGoogleAsNewVault();
+        cubit.pinEntered(UserMode.googleEnabled, '8472');
+        await cubit.pinConfirmed(UserMode.googleEnabled, '8472');
+        await cubit.restoreFromSelectedSource(
+          source: OnboardingRestoreSource.googleDrive,
+        );
+      },
+      skip: 2,
+      expect: () => [
+        const OnboardingCheckingBackups(mode: UserMode.googleEnabled),
+        isA<OnboardingRestoreAvailable>().having(
+          (s) => s.selectedSource,
+          'selectedSource',
+          OnboardingRestoreSource.googleDrive,
+        ),
+        isA<OnboardingRestoringBackup>().having(
+          (s) => s.chatProgress,
+          'chatProgress',
+          isNull,
+        ),
+        isA<OnboardingRestoringBackup>().having(
+          (s) => s.chatProgress?.stage,
+          'stage',
+          ChatRestoreStage.restoringMessages,
+        ),
+        isA<OnboardingRestoringBackup>().having(
+          (s) => s.chatProgress?.stage,
+          'stage',
+          ChatRestoreStage.completed,
+        ),
+        isA<OnboardingVaultCreated>()
+            .having((s) => s.vaultId, 'vaultId', 'vault-123')
+            .having((s) => s.restoredMessages, 'restoredMessages', 5)
+            .having(
+              (s) => s.backgroundPhotoRestoreStarted,
+              'backgroundPhotoRestoreStarted',
+              isTrue,
+            ),
+      ],
+    );
+
+    blocTest<OnboardingCubit, OnboardingState>(
+      'prompts for old PIN on mismatch and succeeds once old PIN is provided',
+      build: () => _makeCubit(
+        restoreBridge: _FakeRestoreBridge(
+          discovery: const OnboardingBackupDiscovery(
+            localVaultId: 'vault-old',
+          ),
+          requireOldPin: true,
+          expectedOldPin: '2468',
+        ),
+      ),
+      act: (cubit) async {
+        cubit.selectLocalMode();
+        cubit.pinEntered(UserMode.localOnly, '8472');
+        await cubit.pinConfirmed(UserMode.localOnly, '8472');
+        await cubit.restoreFromSelectedSource(
+          source: OnboardingRestoreSource.local,
+        );
+        await cubit.restoreFromSelectedSource(
+          source: OnboardingRestoreSource.local,
+          oldPin: '2468',
+        );
+      },
+      skip: 4,
+      expect: () => [
+        isA<OnboardingRestoreAvailable>().having(
+          (s) => s.needsOldPin,
+          'needsOldPin',
+          isFalse,
+        ),
+        isA<OnboardingRestoringBackup>(),
+        isA<OnboardingRestoreAvailable>()
+            .having((s) => s.needsOldPin, 'needsOldPin', isTrue)
+            .having((s) => s.errorMessage, 'errorMessage', isNotNull),
+        isA<OnboardingRestoringBackup>(),
+        isA<OnboardingRestoringBackup>(),
+        isA<OnboardingRestoringBackup>(),
+        isA<OnboardingVaultCreated>().having(
+          (s) => s.vaultId,
+          'vaultId',
+          'vault-old',
+        ),
+      ],
+    );
+
+    blocTest<OnboardingCubit, OnboardingState>(
+      'skipRestoreAndCreateVault dismisses offer and creates a fresh vault',
+      build: () {
+        final bridge = _FakeRestoreBridge(
+          discovery: const OnboardingBackupDiscovery(
+            localVaultId: 'vault-old',
+          ),
+        );
+        return _makeCubit(restoreBridge: bridge);
+      },
+      act: (cubit) async {
+        cubit.selectLocalMode();
+        cubit.pinEntered(UserMode.localOnly, '8472');
+        await cubit.pinConfirmed(UserMode.localOnly, '8472');
+        await cubit.skipRestoreAndCreateVault();
+      },
+      skip: 5,
+      expect: () => [
+        isA<OnboardingCreatingVault>(),
+        isA<OnboardingCreatingVault>(),
+        isA<OnboardingCreatingVault>(),
+        isA<OnboardingVaultCreated>(),
+      ],
+    );
+  });
+}
+
+class _FakeRestoreBridge implements OnboardingRestoreBridge {
+  _FakeRestoreBridge({
+    required this.discovery,
+    this.requireOldPin = false,
+    this.expectedOldPin = '2468',
+  });
+
+  final OnboardingBackupDiscovery discovery;
+  final bool requireOldPin;
+  final String expectedOldPin;
+  bool dismissed = false;
+
+  @override
+  Future<OnboardingBackupDiscovery> discoverBackups({
+    required UserMode mode,
+  }) async => discovery;
+
+  @override
+  Future<void> dismissChatRestoreOffer() async {
+    dismissed = true;
+  }
+
+  @override
+  Future<OnboardingRestoreOutcome> restoreFromSource({
+    required OnboardingRestoreSource source,
+    required OnboardingBackupDiscovery discovery,
+    required String newPin,
+    required UserMode mode,
+    String? oldPin,
+    String? selectedVaultId,
+    bool restoreVault = true,
+    bool restoreChat = true,
+    bool restoreVaultPhotos = true,
+    bool restoreSettings = true,
+    void Function(ChatRestoreProgress)? onChatProgress,
+  }) async {
+    if (requireOldPin && oldPin != expectedOldPin) {
+      return const OnboardingRestoreNeedsOldPin(
+        message: 'Previous PIN required.',
+      );
+    }
+    if (restoreChat) {
+      onChatProgress?.call(
+        const ChatRestoreProgress(
+          stage: ChatRestoreStage.restoringMessages,
+          done: 3,
+          total: 5,
+        ),
+      );
+      onChatProgress?.call(
+        const ChatRestoreProgress(
+          stage: ChatRestoreStage.completed,
+          done: 5,
+          total: 5,
+        ),
+      );
+    }
+    return OnboardingRestoreSuccess(
+      vaultId:
+          selectedVaultId ??
+          discovery.cloudVaultId ??
+          discovery.localVaultId ??
+          'vault-1',
+      restoredMessages: restoreChat ? 5 : 0,
+      backgroundPhotoRestoreStarted: restoreVaultPhotos,
+    );
+  }
 }
 
 class _NoopVmkBackupRepository implements VmkBackupRepository {
+  @override
+  bool get isCloud => false;
   @override
   Future<void> backupVmk({
     required String vaultId,

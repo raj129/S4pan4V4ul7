@@ -9,7 +9,7 @@ import '../../state/onboarding_state.dart';
 import 'package:photo_vault/core/presentation/theme/app_spacing.dart';
 import '../../widgets/pin/pin_flow_body.dart';
 import '../../widgets/pin/pin_pad.dart';
-import '../../widgets/pin/pin_step_indicator.dart';
+import 'onboarding_wizard_header.dart';
 
 /// Screen 4: Create PIN screen.
 ///
@@ -66,7 +66,6 @@ class _CreatePinScreenState extends State<CreatePinScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Create PIN')),
       body: BlocBuilder<OnboardingCubit, OnboardingState>(
         builder: (context, state) {
           final String? errorMsg = state is OnboardingPinInvalid
@@ -79,7 +78,7 @@ class _CreatePinScreenState extends State<CreatePinScreen> {
             });
           }
           return _PinEntryLayout(
-            step: 1,
+            step: 2,
             icon: Icons.lock_outline_rounded,
             title: 'Create your vault PIN',
             subtitle:
@@ -146,14 +145,13 @@ class _ConfirmPinScreenState extends State<ConfirmPinScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Confirm PIN')),
       body: BlocBuilder<OnboardingCubit, OnboardingState>(
         builder: (context, state) {
           final errorMsg = state is OnboardingPinConfirm
               ? state.errorMessage
               : null;
           return _PinEntryLayout(
-            step: 2,
+            step: 3,
             icon: Icons.verified_user_outlined,
             title: 'Confirm your vault PIN',
             subtitle: 'Enter the same 4-digit PIN once more.',
@@ -211,7 +209,7 @@ class _PinEntryLayout extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               const SizedBox(height: AppSpacing.lg),
-              PinStepIndicator(current: step, total: 2),
+              OnboardingWizardHeader(currentStep: step),
               const SizedBox(height: AppSpacing.xl),
               _PinHero(icon: icon, title: title, subtitle: subtitle),
               const SizedBox(height: AppSpacing.xxl),

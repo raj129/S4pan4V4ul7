@@ -6,6 +6,7 @@ import 'package:photo_vault/core/widgets/app_surfaces.dart';
 import '../../state/onboarding_cubit.dart';
 import '../../state/onboarding_state.dart';
 import 'package:photo_vault/core/presentation/theme/app_spacing.dart';
+import 'onboarding_wizard_header.dart';
 
 /// Screen 3 (optional): Google sign-in.
 ///
@@ -19,13 +20,6 @@ class GoogleSignInScreen extends StatelessWidget {
     final theme = Theme.of(context);
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Sign in with Google'),
-        leading: BackButton(
-          onPressed: () =>
-              context.read<OnboardingCubit>().fallbackToLocalMode(),
-        ),
-      ),
       body: BlocBuilder<OnboardingCubit, OnboardingState>(
         builder: (context, state) {
           return SafeArea(
@@ -34,6 +28,11 @@ class GoogleSignInScreen extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
+                  OnboardingWizardHeader(
+                    currentStep: 1,
+                    onBack: () =>
+                        context.read<OnboardingCubit>().fallbackToLocalMode(),
+                  ),
                   Expanded(
                     child: SingleChildScrollView(
                       child: Column(
@@ -54,13 +53,13 @@ class GoogleSignInScreen extends StatelessWidget {
                           ),
                           const SizedBox(height: AppSpacing.xxl),
                           Text(
-                            'Enable encrypted backup & restore',
+                            'Sign in with Gmail',
                             textAlign: TextAlign.center,
                             style: theme.textTheme.headlineSmall,
                           ),
                           const SizedBox(height: AppSpacing.md),
                           Text(
-                            'Your vault key is encrypted before backup. Google cannot read your photos or keys.',
+                            'Required for Secure Chat and encrypted Google Drive backup & restore. After signing in, you will create your PIN and restore any existing backups.',
                             textAlign: TextAlign.center,
                             style: theme.textTheme.bodyLarge?.copyWith(
                               color: theme.colorScheme.onSurfaceVariant,

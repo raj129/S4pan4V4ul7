@@ -3,6 +3,7 @@ import 'package:photo_vault/features/vault/data/repositories/persistent_settings
 import 'package:photo_vault/features/vault/data/repositories/storage_keys.dart';
 import 'package:photo_vault/features/vault/data/repositories/storage_string_kv.dart';
 import 'package:photo_vault/features/vault/domain/repositories/settings_repository.dart';
+import 'package:photo_vault/features/vault/domain/entities/incoming_chat_alert_preferences.dart';
 
 class _MemoryStringKv implements StorageStringKv {
   final values = <String, String>{};
@@ -54,10 +55,7 @@ void main() {
     expect(await repository.getIncomingChatAlertTitle(), isEmpty);
     expect(await repository.getIncomingChatAlertText(), isEmpty);
     expect(await repository.getBackgroundLocationAlertTitle(), isEmpty);
-    expect(
-      await repository.getBackgroundLocationAlertText(),
-      'Syncing in background',
-    );
+    expect(await repository.getBackgroundLocationAlertText(), '');
 
     await repository.setAutoLockTimeoutSeconds(30);
     await repository.setIncomingChatAlertTitle('  Private  ');
@@ -104,6 +102,44 @@ void main() {
     );
   });
 
+  test('persists independent incoming-chat alert preferences', () async {
+    final kv = _MemoryStringKv();
+    final repository = PersistentSettingsRepository(kv);
+    const preferences = IncomingChatAlertPreferences(
+      source: NotificationAlertSource.custom,
+      ringSoundEnabled: false,
+      vibrationEnabled: true,
+      vibrationPattern: IncomingChatVibrationPattern.shortPulses,
+      notificationSoundUri: 'content://settings/system/notification',
+      flashlightEnabled: true,
+    );
+
+    expect(
+      await repository.getIncomingChatAlertPreferences(),
+      const IncomingChatAlertPreferences(),
+    );
+    await repository.setIncomingChatAlertPreferences(preferences);
+
+    expect(await repository.getIncomingChatAlertPreferences(), preferences);
+    expect(
+      kv.values[StorageKeys.incomingChatAlertPreferences],
+      contains('"source":"custom"'),
+    );
+  });
+
+  test('migrates a stored ringtone URI to the notification sound field', () {
+    final preferences = IncomingChatAlertPreferences.fromJson({
+      'source': 'custom',
+      'ringtoneUri': 'content://settings/system/notification',
+    });
+
+    expect(
+      preferences.notificationSoundUri,
+      'content://settings/system/notification',
+    );
+    expect(preferences.vibrationPattern, IncomingChatVibrationPattern.standard);
+  });
+
   test('rejects invalid timeout values', () async {
     final repository = PersistentSettingsRepository(_MemoryStringKv());
 
@@ -111,5 +147,29 @@ void main() {
       repository.setAutoLockTimeoutSeconds(2),
       throwsArgumentError,
     );
+  });
+
+  test('migrates legacy photoSyncEnabled into backupVaultPhotosEnabled once without disabling fresh vaults', () async {
+    final kv = _MemoryStringKv()
+      ..values[StorageKeys.photoSyncEnabled] = 'true';
+    final repository = PersistentSettingsRepository(kv);
+
+    await repository.migrateLegacyPhotoSyncSetting();
+
+    expect(kv.values[StorageKeys.backupVaultPhotosEnabled], 'true');
+    expect(kv.values[StorageKeys.legacyPhotoSyncMigrated], 'true');
+
+    // Explicit user changes afterwards are not overwritten by re-running migration.
+    await repository.setBackupVaultPhotosEnabled(false);
+    await repository.migrateLegacyPhotoSyncSetting();
+    expect(await repository.isBackupVaultPhotosEnabled(), isFalse);
+  });
+
+  test('persists vaultPhotoBackupCloudPending flag', () async {
+    final repository = PersistentSettingsRepository(_MemoryStringKv());
+
+    expect(await repository.isVaultPhotoBackupCloudPending(), isFalse);
+    await repository.setVaultPhotoBackupCloudPending(true);
+    expect(await repository.isVaultPhotoBackupCloudPending(), isTrue);
   });
 }

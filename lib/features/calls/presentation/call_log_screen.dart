@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
+import '../../../core/app/external_activity_guard.dart';
+import '../../../core/presentation/theme/app_spacing.dart';
+import '../../../core/widgets/app_surfaces.dart';
 import '../../../core/widgets/base_screen_shell.dart';
 import '../data/phone_contact_source.dart';
 import '../domain/call_log_entry.dart';
@@ -24,8 +27,11 @@ class CallLogScreen extends StatefulWidget {
 
 enum _LoadState { loading, ready, permissionDenied, unsupported, error }
 
+enum _CallFilter { all, missed, incoming, outgoing }
+
 class _CallLogScreenState extends State<CallLogScreen> {
   _LoadState _state = _LoadState.loading;
+  _CallFilter _filter = _CallFilter.all;
   List<CallLogEntry> _entries = const [];
   String? _error;
 
@@ -41,7 +47,9 @@ class _CallLogScreenState extends State<CallLogScreen> {
       return;
     }
     final granted = requestAccess
-        ? await widget.repository.requestPermissions()
+        ? await ExternalActivityGuard.run(
+            () => widget.repository.requestPermissions(),
+          )
         : true;
     if (!mounted) return;
     if (!granted) {
@@ -107,7 +115,6 @@ class _CallLogScreenState extends State<CallLogScreen> {
   }
 
   Widget _buildBody(BuildContext context) {
-    final theme = Theme.of(context);
     switch (_state) {
       case _LoadState.loading:
         return const Center(child: CircularProgressIndicator());
@@ -145,53 +152,219 @@ class _CallLogScreenState extends State<CallLogScreen> {
             ),
           );
         }
-        final timeFormat = DateFormat('d MMM y, h:mm a');
-        return RefreshIndicator(
-          onRefresh: () => _load(requestAccess: false),
-          child: ListView.separated(
-            itemCount: _entries.length,
-            separatorBuilder: (_, _) => const Divider(height: 1),
-            itemBuilder: (context, index) {
-              final entry = _entries[index];
-              final missed = entry.type == CallLogType.missed;
-              return ListTile(
-                onTap: () => _openEdit(entry),
-                trailing: const Icon(Icons.edit_outlined, size: 18),
-                leading: Icon(
-                  _iconFor(entry.type),
-                  color: missed ? theme.colorScheme.error : null,
-                ),
-                title: Text(
-                  entry.name ?? entry.number,
-                  style: missed
-                      ? TextStyle(color: theme.colorScheme.error)
-                      : null,
-                ),
-                subtitle: Text(
-                  [
-                    if (entry.name != null) entry.number,
-                    timeFormat.format(entry.timestamp),
-                    if (!missed && entry.durationSeconds > 0)
-                      _formatDuration(entry.durationSeconds),
-                  ].join(' · '),
-                ),
-              );
-            },
-          ),
+        final filtered = switch (_filter) {
+          _CallFilter.all => _entries,
+          _CallFilter.missed =>
+            _entries.where((e) => e.type == CallLogType.missed).toList(),
+          _CallFilter.incoming =>
+            _entries.where((e) => e.type == CallLogType.incoming).toList(),
+          _CallFilter.outgoing =>
+            _entries.where((e) => e.type == CallLogType.outgoing).toList(),
+        };
+        final groups = _groupByDate(filtered);
+        final timeFormat = DateFormat('h:mm a');
+        return Column(
+          children: [
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.fromLTRB(
+                AppSpacing.lg,
+                AppSpacing.sm,
+                AppSpacing.lg,
+                AppSpacing.xs,
+              ),
+              child: Row(
+                children: [
+                  for (final filter in _CallFilter.values) ...[
+                    ChoiceChip(
+                      label: Text(_filterLabel(filter)),
+                      selected: _filter == filter,
+                      onSelected: (_) => setState(() => _filter = filter),
+                    ),
+                    if (filter != _CallFilter.values.last)
+                      const SizedBox(width: AppSpacing.xs),
+                  ],
+                ],
+              ),
+            ),
+            Expanded(
+              child: filtered.isEmpty
+                  ? _Message(
+                      icon: Icons.call_outlined,
+                      text:
+                          'No ${_filterLabel(_filter).toLowerCase()} calls.',
+                    )
+                  : RefreshIndicator(
+                      onRefresh: () => _load(requestAccess: false),
+                      child: ListView(
+                        padding: const EdgeInsets.only(bottom: 96),
+                        children: [
+                          for (final group in groups) ...[
+                            SectionHeader(group.label),
+                            SettingsCard(
+                              children: [
+                                for (final entry in group.entries)
+                                  _PixelCallRow(
+                                    entry: entry,
+                                    timeText: timeFormat.format(
+                                      entry.timestamp.toLocal(),
+                                    ),
+                                    durationText:
+                                        entry.type != CallLogType.missed &&
+                                            entry.durationSeconds > 0
+                                        ? _formatDuration(entry.durationSeconds)
+                                        : null,
+                                    onTap: () => _openEdit(entry),
+                                  ),
+                              ],
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+            ),
+          ],
         );
     }
   }
 
-  static IconData _iconFor(CallLogType type) => switch (type) {
-    CallLogType.incoming => Icons.call_received,
-    CallLogType.outgoing => Icons.call_made,
-    CallLogType.missed => Icons.call_missed,
+  static String _filterLabel(_CallFilter filter) => switch (filter) {
+    _CallFilter.all => 'All',
+    _CallFilter.missed => 'Missed',
+    _CallFilter.incoming => 'Incoming',
+    _CallFilter.outgoing => 'Outgoing',
   };
+
+  static List<({String label, List<CallLogEntry> entries})> _groupByDate(
+    List<CallLogEntry> entries,
+  ) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final yesterday = today.subtract(const Duration(days: 1));
+    final dateFmt = DateFormat('EEE, d MMM y');
+
+    final map = <String, List<CallLogEntry>>{};
+    for (final entry in entries) {
+      final local = entry.timestamp.toLocal();
+      final day = DateTime(local.year, local.month, local.day);
+      final label = day == today
+          ? 'Today'
+          : day == yesterday
+          ? 'Yesterday'
+          : dateFmt.format(day);
+      (map[label] ??= []).add(entry);
+    }
+    return [
+      for (final e in map.entries) (label: e.key, entries: e.value),
+    ];
+  }
 
   static String _formatDuration(int seconds) {
     final m = seconds ~/ 60;
     final s = seconds % 60;
     return m > 0 ? '${m}m ${s}s' : '${s}s';
+  }
+}
+
+class _PixelCallRow extends StatelessWidget {
+  const _PixelCallRow({
+    required this.entry,
+    required this.timeText,
+    required this.durationText,
+    required this.onTap,
+  });
+
+  final CallLogEntry entry;
+  final String timeText;
+  final String? durationText;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    final missed = entry.type == CallLogType.missed;
+    final display = entry.name?.trim().isNotEmpty == true
+        ? entry.name!.trim()
+        : entry.number;
+    final initial = entry.name?.trim().isNotEmpty == true
+        ? entry.name!.trim()[0].toUpperCase()
+        : null;
+
+    final (avatarBg, avatarFg) = missed
+        ? (cs.errorContainer, cs.onErrorContainer)
+        : (cs.primaryContainer, cs.onPrimaryContainer);
+
+    final typeIcon = switch (entry.type) {
+      CallLogType.incoming => Icons.call_received_rounded,
+      CallLogType.outgoing => Icons.call_made_rounded,
+      CallLogType.missed => Icons.call_missed_rounded,
+    };
+
+    final meta = [
+      if (entry.name != null && entry.name!.trim().isNotEmpty) entry.number,
+      timeText,
+      ?durationText,
+    ].join(' · ');
+
+    return ListTile(
+      onTap: onTap,
+      contentPadding: const EdgeInsets.symmetric(
+        horizontal: AppSpacing.lg,
+        vertical: AppSpacing.xs,
+      ),
+      leading: CircleAvatar(
+        radius: 21,
+        backgroundColor: avatarBg,
+        foregroundColor: avatarFg,
+        child: initial != null
+            ? Text(
+                initial,
+                style: theme.textTheme.titleMedium?.copyWith(
+                  color: avatarFg,
+                  fontWeight: FontWeight.w700,
+                ),
+              )
+            : Icon(Icons.person_outline_rounded, color: avatarFg, size: 22),
+      ),
+      title: Text(
+        display,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: theme.textTheme.titleMedium?.copyWith(
+          color: missed ? cs.error : cs.onSurface,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+      subtitle: Padding(
+        padding: const EdgeInsets.only(top: 2),
+        child: Row(
+          children: [
+            Icon(
+              typeIcon,
+              size: 14,
+              color: missed ? cs.error : cs.onSurfaceVariant,
+            ),
+            const SizedBox(width: 5),
+            Expanded(
+              child: Text(
+                meta,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: cs.onSurfaceVariant,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+      trailing: IconButton(
+        tooltip: 'Edit call',
+        icon: Icon(Icons.edit_outlined, size: 19, color: cs.onSurfaceVariant),
+        onPressed: onTap,
+      ),
+    );
   }
 }
 

@@ -299,6 +299,9 @@ class ThreadUploadCoordinator {
       } else {
         message = message.withDecryptedText(existing!.localDecryptedText!);
       }
+      if (job.status.lifecycle == MediaUploadLifecycle.failed) {
+        message = message.copyWith(status: MessageStatus.failed);
+      }
       _setPendingMessage(message.messageId, message);
       _setUploadStatus(
         message.messageId,
@@ -500,7 +503,10 @@ class ThreadUploadCoordinator {
         outboxItem = outboxItem.copyWith(mediaMeta: meta);
         await _outbox.enqueue(outboxItem);
         _onMediaReady?.call(ref, thumb);
-      } else if (type == MessageType.image || type == MessageType.video) {
+      } else if (type == MessageType.image ||
+          type == MessageType.video ||
+          type == MessageType.gif ||
+          type == MessageType.sticker) {
         _onMediaReady?.call(mediaRef, preparedBytes);
       }
       final message = ChatMessage(
@@ -805,7 +811,9 @@ class ThreadUploadCoordinator {
           ),
         );
         throwIfCancelled();
-        if (type == MessageType.image) {
+        if (type == MessageType.image ||
+            type == MessageType.gif ||
+            type == MessageType.sticker) {
           _onMediaReady?.call(storagePath, bytes);
         }
 

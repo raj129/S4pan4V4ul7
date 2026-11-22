@@ -4,40 +4,38 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
-import 'package:photo_vault/features/chat/application/services/chat_backup_service.dart';
 import 'package:photo_vault/core/media/animated_media.dart';
 import 'package:photo_vault/core/platform/hdr_preview_capability.dart';
+import 'package:photo_vault/features/calculator/domain/models/secret_entry_config.dart';
 import 'package:photo_vault/features/vault/application/services/pin_validator.dart';
 import 'package:photo_vault/features/vault/application/usecases/unlock_vault_usecase.dart';
 import 'package:photo_vault/core/widgets/app_surfaces.dart';
 import 'package:photo_vault/core/widgets/base_screen_shell.dart';
-import 'package:photo_vault/features/vault/domain/entities/user_mode.dart';
 import 'package:photo_vault/features/vault/domain/repositories/settings_repository.dart';
 import 'package:photo_vault/core/platform/screenshot_protection.dart';
 import 'package:photo_vault/core/presentation/theme/app_colors.dart';
 import 'package:photo_vault/core/presentation/theme/app_spacing.dart';
-import '../../widgets/pin_reauth_dialog.dart';
 import 'package:photo_vault/core/platform/battery_optimization.dart';
+import 'package:photo_vault/features/backup/application/backup_manager.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({
-    required this.mode,
     required this.settingsRepository,
     required this.unlockVaultUseCase,
     required this.pinValidator,
     required this.onSettingsChanged,
+    this.backupManager,
     this.screenshotProtection = const AndroidScreenshotProtection(),
-    this.chatBackupService,
     this.onShowLastSeenChanged,
     this.batteryOptimization = const AndroidBatteryOptimization(),
     super.key,
   });
 
-  final UserMode mode;
   final SettingsRepository settingsRepository;
   final UnlockVaultUseCase unlockVaultUseCase;
   final PinValidator pinValidator;
   final Future<void> Function() onSettingsChanged;
+  final BackupManager? backupManager;
   final ScreenshotProtectionController screenshotProtection;
 
   /// Reports and requests exemption from Android battery optimisation.
@@ -45,10 +43,6 @@ class SettingsScreen extends StatefulWidget {
 
   /// Applies a "Show last seen" change to live presence (chat), if available.
   final Future<void> Function(bool show)? onShowLastSeenChanged;
-
-  /// Lazily resolves the chat backup service (it touches Firebase), or null
-  /// when chat is unavailable (local mode).
-  final ChatBackupService Function()? chatBackupService;
 
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
@@ -64,6 +58,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _showLastSeen = true;
   bool _screenshotProtectionEnabled = true;
   bool? _backgroundAllowed;
+  bool _loaded = false;
 
   Future<void> _loadBackgroundStatus() async {
     final allowed = await widget.batteryOptimization.isExempt();
@@ -75,12 +70,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     await _loadBackgroundStatus();
   }
 
-  bool _photoSyncEnabled = false;
-  bool _wifiOnlyBackup = true;
-  bool _externalStorageMirrorEnabled = true;
-  bool _driveEncryptedBackupEnabled = false;
   AppThemePalette _themePalette = AppThemePalette.royalIndigo;
   String _themeMode = 'system';
+  SecretEntryConfig _secretEntryConfig = const SecretEntryConfig();
   String? _version;
 
   @override
@@ -93,9 +85,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
     HdrPreviewPreference.instance.enabled.addListener(_onHdrPreviewChanged);
     unawaited(HdrPreviewCapability.instance.load());
     unawaited(_loadMediaPreviewPreferences());
-    _loadSettings();
+    unawaited(_loadSettings());
     unawaited(_loadAbout());
     unawaited(_loadBackgroundStatus());
+    final manager = widget.backupManager;
+    if (manager != null && !manager.isLoaded) {
+      unawaited(manager.load());
+    }
   }
 
   Future<void> _loadAbout() async {
@@ -111,11 +107,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _loadSettings() async {
-    final photoSync = await widget.settingsRepository.isPhotoSyncEnabled();
-    final externalMirror = await widget.settingsRepository
-        .isExternalStorageMirrorEnabled();
-    final driveBackup = await widget.settingsRepository
-        .isDriveEncryptedBackupEnabled();
+    await widget.settingsRepository.migrateLegacyPhotoSyncSetting();
     final autoLock = await widget.settingsRepository
         .isAutoLockOnBackgroundEnabled();
     final autoLockTimeoutSeconds = await widget.settingsRepository
@@ -126,11 +118,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
         .isScreenshotProtectionEnabled();
     final paletteId = await widget.settingsRepository.getThemePaletteId();
     final themeMode = await widget.settingsRepository.getThemeMode();
+    final secretEntryConfig = await widget.settingsRepository
+        .getSecretEntryConfig();
     if (!mounted) return;
     setState(() {
-      _photoSyncEnabled = photoSync;
-      _externalStorageMirrorEnabled = externalMirror;
-      _driveEncryptedBackupEnabled = driveBackup;
       _autoLockOnBackground = autoLock;
       _autoLockTimeoutSeconds = autoLockTimeoutSeconds;
       _showLastSeen = showLastSeen;
@@ -140,8 +131,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
         'light' || 'dark' => themeMode!,
         _ => 'system',
       };
+      _secretEntryConfig = secretEntryConfig;
+      _loaded = true;
     });
-    await _loadChatBackupInfo();
   }
 
   @override
@@ -222,111 +214,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     await widget.onSettingsChanged();
   }
 
-  ChatBackupService? _chatBackup() {
-    try {
-      return widget.chatBackupService?.call();
-    } catch (_) {
-      return null;
-    }
-  }
-
-  DateTime? _lastChatBackup;
-  bool _chatBackupBusy = false;
-
-  Future<void> _loadChatBackupInfo() async {
-    final backup = _chatBackup();
-    if (backup == null) return;
-    try {
-      final last = await backup.lastBackupAt();
-      final wifiOnly = await backup.isWifiOnly();
-      if (!mounted) return;
-      setState(() {
-        _lastChatBackup = last;
-        _wifiOnlyBackup = wifiOnly;
-      });
-    } catch (_) {}
-  }
-
-  static String _formatTime(DateTime at) {
-    final l = at.toLocal();
-    String two(int v) => v.toString().padLeft(2, '0');
-    return '${l.year}-${two(l.month)}-${two(l.day)} ${two(l.hour)}:${two(l.minute)}';
-  }
-
-  Future<void> _backUpChatNow() async {
-    final backup = _chatBackup();
-    if (backup == null || _chatBackupBusy) return;
-    final messenger = ScaffoldMessenger.of(context);
-    setState(() => _chatBackupBusy = true);
-    try {
-      final result = await backup.backupNow(interactive: true);
-      final skipped = result.skipped.entries
-          .map((e) => '${e.key}: ${e.value}')
-          .join('; ');
-      messenger.showSnackBar(
-        SnackBar(
-          content: Text(
-            'Backed up ${result.messageCount} messages to '
-            '${result.savedTo.join(' and ')}.'
-            '${skipped.isEmpty ? '' : ' Skipped $skipped'}',
-          ),
-        ),
-      );
-    } catch (e) {
-      messenger.showSnackBar(SnackBar(content: Text('Chat backup failed: $e')));
-    } finally {
-      if (mounted) setState(() => _chatBackupBusy = false);
-      await _loadChatBackupInfo();
-    }
-  }
-
-  Future<void> _restoreChatBackup() async {
-    final backup = _chatBackup();
-    if (backup == null || _chatBackupBusy) return;
-    final messenger = ScaffoldMessenger.of(context);
-    setState(() => _chatBackupBusy = true);
-    try {
-      final snapshot = await backup.findLatestBackup(interactive: true);
-      if (!mounted) return;
-      if (snapshot == null) {
-        messenger.showSnackBar(
-          const SnackBar(content: Text('No chat backup found.')),
-        );
-        return;
-      }
-      final ok = await showDialog<bool>(
-        context: context,
-        builder: (dialogContext) => AlertDialog(
-          title: const Text('Restore chat backup?'),
-          content: Text(
-            'Backup from ${_formatTime(snapshot.backupAt)} on '
-            '${snapshot.source} with ${snapshot.messageCount} messages. '
-            'Messages already on this device are kept.',
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext, false),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(dialogContext, true),
-              child: const Text('Restore'),
-            ),
-          ],
-        ),
-      );
-      if (ok != true) return;
-      await backup.restore(snapshot);
-      messenger.showSnackBar(
-        SnackBar(content: Text('Restored ${snapshot.messageCount} messages.')),
-      );
-    } catch (e) {
-      messenger.showSnackBar(SnackBar(content: Text('Restore failed: $e')));
-    } finally {
-      if (mounted) setState(() => _chatBackupBusy = false);
-    }
-  }
-
   Future<void> _selectPalette(AppThemePalette palette) async {
     if (_themePalette == palette) return;
     setState(() => _themePalette = palette);
@@ -349,9 +236,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return BaseScreenShell(
       title: 'Settings',
       drawerSelectedIndex: 6,
-      body: ListView(
-        padding: const EdgeInsets.only(bottom: AppSpacing.xl),
-        children: [
+      body: !_loaded
+          ? const Center(child: CircularProgressIndicator())
+          : ListView(
+              padding: const EdgeInsets.only(bottom: AppSpacing.xl),
+              children: [
           const SectionHeader('Appearance'),
           SettingsCard(
             children: [
@@ -367,9 +256,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   children: [
                     Row(
                       children: [
-                        Icon(
-                          Icons.palette_outlined,
-                          color: cs.onSurfaceVariant,
+                        SettingsIconBadge(
+                          icon: Icons.palette_outlined,
+                          backgroundColor: cs.primaryContainer,
+                          iconColor: cs.onPrimaryContainer,
                         ),
                         const SizedBox(width: AppSpacing.md),
                         Expanded(
@@ -419,9 +309,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   children: [
                     Row(
                       children: [
-                        Icon(
-                          Icons.brightness_6_outlined,
-                          color: cs.onSurfaceVariant,
+                        SettingsIconBadge(
+                          icon: Icons.brightness_6_outlined,
+                          backgroundColor: cs.secondaryContainer,
+                          iconColor: cs.onSecondaryContainer,
                         ),
                         const SizedBox(width: AppSpacing.md),
                         Text(
@@ -469,6 +360,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
             children: [
               _SettingsSwitch(
                 icon: Icons.screen_lock_portrait_outlined,
+                badgeBackgroundColor: cs.tertiaryContainer,
+                badgeIconColor: cs.onTertiaryContainer,
                 title: 'Auto-lock on background',
                 subtitle:
                     'Lock the vault automatically while it stays in the background.',
@@ -481,32 +374,80 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 },
               ),
               ListTile(
-                leading: const Icon(Icons.timer_outlined),
+                enabled: _autoLockOnBackground,
+                leading: SettingsIconBadge(
+                  icon: Icons.timer_outlined,
+                  backgroundColor: cs.tertiaryContainer,
+                  iconColor: cs.onTertiaryContainer,
+                ),
                 title: const Text('Auto-lock delay'),
                 subtitle: Text(
-                  'Lock the vault after ${_autoLockTimeoutLabel(_autoLockTimeoutSeconds)} '
-                  'in the background.',
+                  _autoLockOnBackground
+                      ? 'Lock the vault after ${_autoLockTimeoutLabel(_autoLockTimeoutSeconds)} '
+                            'in the background.'
+                      : 'Turn on Auto-lock on background to choose a delay.',
                 ),
-                trailing: DropdownButton<int>(
-                  key: const Key('auto-lock-timeout-dropdown'),
-                  value: _autoLockTimeoutSeconds,
-                  onChanged: (seconds) {
-                    if (seconds != null) {
-                      unawaited(_selectAutoLockTimeout(seconds));
-                    }
-                  },
-                  items: SettingsRepository.autoLockTimeoutOptionsSeconds
-                      .map(
-                        (seconds) => DropdownMenuItem<int>(
-                          value: seconds,
-                          child: Text(_autoLockTimeoutLabel(seconds)),
-                        ),
-                      )
-                      .toList(growable: false),
+                trailing: DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: _autoLockOnBackground
+                        ? cs.surfaceContainerHighest
+                        : cs.surfaceContainerHighest.withValues(alpha: 0.45),
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: AppSpacing.md,
+                    ),
+                    child: DropdownButtonHideUnderline(
+                      child: DropdownButton<int>(
+                        key: const Key('auto-lock-timeout-dropdown'),
+                        value: _autoLockTimeoutSeconds,
+                        borderRadius: BorderRadius.circular(16),
+                        onChanged: _autoLockOnBackground
+                            ? (seconds) {
+                                if (seconds != null) {
+                                  unawaited(_selectAutoLockTimeout(seconds));
+                                }
+                              }
+                            : null,
+                        items: SettingsRepository.autoLockTimeoutOptionsSeconds
+                            .map(
+                              (seconds) => DropdownMenuItem<int>(
+                                value: seconds,
+                                child: Text(_autoLockTimeoutLabel(seconds)),
+                              ),
+                            )
+                            .toList(growable: false),
+                      ),
+                    ),
+                  ),
                 ),
               ),
               ListTile(
-                leading: const Icon(Icons.password_rounded),
+                key: const Key('secret-entry-settings-tile'),
+                leading: SettingsIconBadge(
+                  icon: Icons.touch_app_outlined,
+                  backgroundColor: cs.tertiaryContainer,
+                  iconColor: cs.onTertiaryContainer,
+                ),
+                title: const Text('Secret entry'),
+                subtitle: Text(
+                  _secretEntryConfig.oneHandedEnabled
+                      ? '${labelForCalcKeyId(_secretEntryConfig.defaultPrimaryKeyId)} & ${labelForCalcKeyId(_secretEntryConfig.defaultSecondaryKeyId)} + ${_secretEntryConfig.method.shortSummary}'
+                      : 'Default: Hold ${labelForCalcKeyId(_secretEntryConfig.defaultPrimaryKeyId)} and ${labelForCalcKeyId(_secretEntryConfig.defaultSecondaryKeyId)} together',
+                ),
+                trailing: const Icon(Icons.chevron_right_rounded),
+                onTap: () async {
+                  await context.push('/settings/secret-entry');
+                  if (mounted) unawaited(_loadSettings());
+                },
+              ),
+              ListTile(
+                leading: SettingsIconBadge(
+                  icon: Icons.password_rounded,
+                  backgroundColor: cs.tertiaryContainer,
+                  iconColor: cs.onTertiaryContainer,
+                ),
                 title: const Text('Change app PIN'),
                 subtitle: const Text(
                   'Enter your current PIN, then choose a new one.',
@@ -523,6 +464,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
             children: [
               _SettingsSwitch(
                 icon: Icons.visibility_outlined,
+                badgeBackgroundColor: cs.secondaryContainer,
+                badgeIconColor: cs.onSecondaryContainer,
                 title: 'Show last seen',
                 subtitle: _showLastSeen
                     ? 'Contacts can see when you were last online.'
@@ -537,6 +480,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
               if (widget.screenshotProtection.isSupportedPlatform)
                 _SettingsSwitch(
                   icon: Icons.no_photography_outlined,
+                  badgeBackgroundColor: cs.secondaryContainer,
+                  badgeIconColor: cs.onSecondaryContainer,
                   title: 'Screenshot protection',
                   subtitle: _screenshotProtectionEnabled
                       ? 'Screenshots and screen recordings are blocked.'
@@ -558,34 +503,38 @@ class _SettingsScreenState extends State<SettingsScreen> {
             children: [
               ListTile(
                 key: const Key('notification-settings-navigation-tile'),
-                leading: const Icon(Icons.notifications_active_outlined),
+                leading: SettingsIconBadge(
+                  icon: Icons.notifications_active_outlined,
+                  backgroundColor: cs.primaryContainer,
+                  iconColor: cs.onPrimaryContainer,
+                ),
                 title: const Text('Notification settings'),
                 subtitle: const Text(
-                  'Customize headers and messages for all notifications.',
+                  'Configure chat, ring, and background location notifications.',
                 ),
                 trailing: const Icon(Icons.chevron_right_rounded),
                 onTap: () => unawaited(context.push('/settings/notifications')),
               ),
-              ListTile(
-                key: const Key('ring-alert-settings-navigation-tile'),
-                leading: const Icon(Icons.ring_volume_outlined),
-                title: const Text('Chat ring requests'),
-                subtitle: const Text(
-                  'Choose whether ring requests vibrate, ring, or stay silent.',
-                ),
-                trailing: const Icon(Icons.chevron_right_rounded),
-                onTap: () => unawaited(context.push('/settings/ring-alerts')),
-              ),
             ],
           ),
-          const SectionHeader('Backup & sync'),
+          const SectionHeader('Backup & restore'),
           SettingsCard(
             children: [
+              _BackupEntryTile(
+                manager: widget.backupManager,
+                onTap: () => unawaited(context.push('/settings/backup')),
+              ),
               ListTile(
-                leading: Icon(
-                  _backgroundAllowed == false
+                leading: SettingsIconBadge(
+                  icon: _backgroundAllowed == false
                       ? Icons.battery_alert_outlined
                       : Icons.battery_charging_full_outlined,
+                  backgroundColor: _backgroundAllowed == false
+                      ? cs.errorContainer
+                      : cs.primaryContainer,
+                  iconColor: _backgroundAllowed == false
+                      ? cs.onErrorContainer
+                      : cs.onPrimaryContainer,
                 ),
                 title: const Text('Run in background'),
                 subtitle: Text(switch (_backgroundAllowed) {
@@ -602,145 +551,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 onTap: _backgroundAllowed == false
                     ? () => unawaited(_requestBackground())
                     : null,
-              ),
-            ],
-          ),
-          SettingsCard(
-            children: [
-              _SettingsSwitch(
-                icon: Icons.cloud_sync_outlined,
-                title: 'Photo sync',
-                subtitle: 'Upload encrypted photo packages only when enabled.',
-                value: _photoSyncEnabled,
-                onChanged: (v) async {
-                  if (!v) {
-                    final allowed = await requirePinReauth(
-                      context: context,
-                      unlockVaultUseCase: widget.unlockVaultUseCase,
-                      pinValidator: widget.pinValidator,
-                      actionLabel: 'disable photo sync',
-                    );
-                    if (!allowed) return;
-                  }
-                  setState(() => _photoSyncEnabled = v);
-                  await widget.settingsRepository.setPhotoSyncEnabled(v);
-                  await widget.onSettingsChanged();
-                },
-              ),
-              _SettingsSwitch(
-                icon: Icons.sd_storage_outlined,
-                title: 'External encrypted mirror',
-                subtitle:
-                    'Keep encrypted files and manifest under Android/media for reinstall recovery.',
-                value: _externalStorageMirrorEnabled,
-                onChanged: (v) async {
-                  setState(() => _externalStorageMirrorEnabled = v);
-                  await widget.settingsRepository
-                      .setExternalStorageMirrorEnabled(v);
-                  await widget.onSettingsChanged();
-                },
-              ),
-              _SettingsSwitch(
-                icon: Icons.drive_folder_upload_outlined,
-                title: 'Google Drive encrypted package',
-                subtitle: widget.mode == UserMode.googleEnabled
-                    ? 'Back up encrypted objects, manifest, and wrapped key envelope.'
-                    : 'Switch to Google mode below to enable Drive backup.',
-                value: _driveEncryptedBackupEnabled,
-                onChanged: widget.mode == UserMode.googleEnabled
-                    ? (v) async {
-                        if (!v) {
-                          final allowed = await requirePinReauth(
-                            context: context,
-                            unlockVaultUseCase: widget.unlockVaultUseCase,
-                            pinValidator: widget.pinValidator,
-                            actionLabel: 'disable Drive backup',
-                          );
-                          if (!allowed) return;
-                        }
-                        setState(() => _driveEncryptedBackupEnabled = v);
-                        await widget.settingsRepository
-                            .setDriveEncryptedBackupEnabled(v);
-                        await widget.onSettingsChanged();
-                      }
-                    : null,
-              ),
-            ],
-          ),
-          if (widget.chatBackupService != null) ...[
-            const SectionHeader('Chat backup'),
-            SettingsCard(
-              children: [
-                _SettingsSwitch(
-                  icon: Icons.wifi_rounded,
-                  title: 'Backup on Wi-Fi only',
-                  subtitle: 'Avoid mobile data when nightly chat backups run.',
-                  value: _wifiOnlyBackup,
-                  onChanged: (v) {
-                    setState(() => _wifiOnlyBackup = v);
-                    final backup = _chatBackup();
-                    if (backup != null) unawaited(backup.setWifiOnly(v));
-                  },
-                ),
-                ListTile(
-                  leading: const Icon(Icons.backup_outlined),
-                  title: const Text('Back up chats now'),
-                  subtitle: Text(
-                    _lastChatBackup == null
-                        ? 'Never backed up. Runs nightly around 2 AM to this '
-                              'device and Google Drive.'
-                        : 'Last backup ${_formatTime(_lastChatBackup!)}. '
-                              'Runs nightly around 2 AM.',
-                  ),
-                  trailing: _chatBackupBusy
-                      ? const SizedBox.square(
-                          dimension: 20,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.chevron_right_rounded),
-                  onTap: _chatBackupBusy ? null : _backUpChatNow,
-                ),
-                ListTile(
-                  leading: const Icon(Icons.restore_rounded),
-                  title: const Text('Restore chat backup'),
-                  subtitle: const Text(
-                    'Bring back messages from this device or Google Drive.',
-                  ),
-                  trailing: const Icon(Icons.chevron_right_rounded),
-                  onTap: _chatBackupBusy ? null : _restoreChatBackup,
-                ),
-              ],
-            ),
-          ],
-          const SectionHeader('Account & restore'),
-          SettingsCard(
-            children: [
-              ListTile(
-                leading: const Icon(Icons.cloud_outlined),
-                title: const Text('Google mode & restore'),
-                subtitle: Text('${widget.mode.title} · Manage cloud restore'),
-                trailing: const Icon(Icons.chevron_right_rounded),
-                onTap: () async {
-                  final allowed = await requirePinReauth(
-                    context: context,
-                    unlockVaultUseCase: widget.unlockVaultUseCase,
-                    pinValidator: widget.pinValidator,
-                    actionLabel: 'open restore',
-                  );
-                  if (!allowed || !context.mounted) return;
-                  unawaited(context.push('/restore'));
-                },
-              ),
-            ],
-          ),
-          const SectionHeader('About'),
-          SettingsCard(
-            children: [
-              ListTile(
-                key: const Key('settings-version-tile'),
-                leading: const Icon(Icons.info_outline_rounded),
-                title: const Text('Version'),
-                subtitle: Text(_version ?? '…'),
               ),
             ],
           ),
@@ -805,6 +615,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 builder: (context, isAvailable, _) => isAvailable
                     ? _SettingsSwitch(
                         icon: Icons.hdr_on_rounded,
+                        badgeBackgroundColor: cs.secondaryContainer,
+                        badgeIconColor: cs.onSecondaryContainer,
                         title: 'HDR photo preview',
                         subtitle: _hdrPreviewEnabled
                             ? 'Use HDR rendering for supported photos.'
@@ -816,7 +628,80 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ],
           ),
+          const SectionHeader('About'),
+          SettingsCard(
+            children: [
+              ListTile(
+                key: const Key('settings-version-tile'),
+                leading: SettingsIconBadge(
+                  icon: Icons.info_outline_rounded,
+                  backgroundColor: cs.surfaceContainerHighest,
+                  iconColor: cs.onSurfaceVariant,
+                ),
+                title: const Text('Version'),
+                subtitle: Text(_version ?? '…'),
+              ),
+            ],
+          ),
         ],
+      ),
+    );
+  }
+}
+
+class _BackupEntryTile extends StatelessWidget {
+  const _BackupEntryTile({required this.manager, required this.onTap});
+
+  final BackupManager? manager;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final backup = manager;
+    if (backup == null) {
+      return ListTile(
+        key: const Key('settings-backup-tile'),
+        leading: SettingsIconBadge(
+          icon: Icons.backup_outlined,
+          backgroundColor: cs.primaryContainer,
+          iconColor: cs.onPrimaryContainer,
+        ),
+        title: const Text('Backup & restore'),
+        subtitle: const Text(
+          'Chats, vault photos, Google Drive, and vault recovery.',
+        ),
+        trailing: const Icon(Icons.chevron_right_rounded),
+        onTap: onTap,
+      );
+    }
+    return ListenableBuilder(
+      listenable: backup,
+      builder: (context, _) => ListTile(
+        key: const Key('settings-backup-tile'),
+        leading: backup.isBusy
+            ? Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: cs.primaryContainer,
+                  shape: BoxShape.circle,
+                ),
+                alignment: Alignment.center,
+                child: const SizedBox.square(
+                  dimension: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+              )
+            : SettingsIconBadge(
+                icon: Icons.backup_outlined,
+                backgroundColor: cs.primaryContainer,
+                iconColor: cs.onPrimaryContainer,
+              ),
+        title: const Text('Backup & restore'),
+        subtitle: Text(backup.settingsSummary()),
+        trailing: const Icon(Icons.chevron_right_rounded),
+        onTap: onTap,
       ),
     );
   }
@@ -900,6 +785,8 @@ class _SettingsSwitch extends StatelessWidget {
     required this.subtitle,
     required this.value,
     required this.onChanged,
+    this.badgeBackgroundColor,
+    this.badgeIconColor,
   });
 
   final IconData icon;
@@ -907,11 +794,17 @@ class _SettingsSwitch extends StatelessWidget {
   final String subtitle;
   final bool value;
   final ValueChanged<bool>? onChanged;
+  final Color? badgeBackgroundColor;
+  final Color? badgeIconColor;
 
   @override
   Widget build(BuildContext context) {
     return SwitchListTile(
-      secondary: Icon(icon),
+      secondary: SettingsIconBadge(
+        icon: icon,
+        backgroundColor: badgeBackgroundColor,
+        iconColor: badgeIconColor,
+      ),
       title: Text(title),
       subtitle: Text(subtitle),
       value: value,

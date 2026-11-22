@@ -273,8 +273,7 @@ class _InlineMotionPhotoPreviewState extends State<InlineMotionPhotoPreview>
   bool _pendingPause = false;
   int _viewRevision = 0;
 
-  bool get _useNative =>
-      !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
+  bool get _useNative => defaultTargetPlatform == TargetPlatform.android;
 
   @override
   void initState() {

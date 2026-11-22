@@ -1,5 +1,9 @@
+import 'dart:async';
+
+import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:photo_vault/core/storage/shared_preferences_readiness.dart';
 import 'package:photo_vault/features/chat/presentation/widgets/message_bubble.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -8,6 +12,103 @@ void main() {
 
   setUp(() {
     SharedPreferences.setMockInitialValues({});
+  });
+
+  testWidgets('waits for shared preferences before mounting emoji picker', (
+    tester,
+  ) async {
+    final readiness = Completer<void>();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: ThemedEmojiPicker(
+            preferencesReadiness: SharedPreferencesReadiness(
+              load: () => readiness.future,
+            ),
+            onEmojiSelected: (_, _) {},
+          ),
+        ),
+      ),
+    );
+
+    expect(find.text('Loading emoji...'), findsOneWidget);
+    expect(find.byType(EmojiPicker), findsNothing);
+
+    readiness.complete();
+    await tester.pump();
+    await tester.pump();
+    await tester.pumpAndSettle();
+
+    expect(find.byType(EmojiPicker), findsOneWidget);
+  });
+
+  testWidgets('retries shared preferences failure without mounting picker', (
+    tester,
+  ) async {
+    var attempts = 0;
+    final readiness = SharedPreferencesReadiness(
+      load: () async {
+        attempts++;
+        if (attempts == 1) throw StateError('plugin unavailable');
+      },
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: ThemedEmojiPicker(
+            preferencesReadiness: readiness,
+            onEmojiSelected: (_, _) {},
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byType(EmojiPicker), findsNothing);
+    expect(find.text('Emoji history is unavailable.'), findsOneWidget);
+
+    await tester.tap(find.text('Retry'));
+    await tester.pump();
+    await tester.pump();
+    await tester.pumpAndSettle();
+
+    expect(attempts, 2);
+    expect(find.byType(EmojiPicker), findsOneWidget);
+  });
+
+  testWidgets('layout height changes do not invalidate emoji categories', (
+    tester,
+  ) async {
+    Future<void> pumpPicker(double height) {
+      return tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: ThemedEmojiPicker(
+              height: height,
+              searchHeight: height * 0.7,
+              onEmojiSelected: (_, _) {},
+            ),
+          ),
+        ),
+      );
+    }
+
+    await pumpPicker(280);
+    await tester.pumpAndSettle();
+
+    final initialConfig = tester
+        .widget<EmojiPicker>(find.byType(EmojiPicker))
+        .config;
+
+    await pumpPicker(360);
+    await tester.pumpAndSettle();
+
+    final resizedConfig = tester
+        .widget<EmojiPicker>(find.byType(EmojiPicker))
+        .config;
+    expect(initialConfig.height, isNull);
+    expect(resizedConfig, initialConfig);
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('emoji selected from search appears in recent emojis', (

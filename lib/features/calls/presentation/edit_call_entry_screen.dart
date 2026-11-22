@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
+import '../../../core/presentation/theme/app_spacing.dart';
+import '../../../core/widgets/app_surfaces.dart';
 import '../domain/call_log_entry.dart';
 import '../domain/call_log_repository.dart';
 import 'call_entry_widgets.dart';
@@ -55,52 +57,66 @@ class _EditCallEntryScreenState extends State<EditCallEntryScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
+    final cs = Theme.of(context).colorScheme;
     final entry = widget.entry;
     final dateText = DateFormat('EEE, d MMM y').format(_when);
     final timeText = DateFormat('h:mm a').format(_when);
     return Scaffold(
       appBar: AppBar(title: const Text('Edit call')),
       body: ListView(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.only(
+          top: AppSpacing.md,
+          bottom: AppSpacing.xxl,
+        ),
         children: [
-          ListTile(
-            contentPadding: EdgeInsets.zero,
-            leading: const Icon(Icons.person_outline),
-            title: Text(entry.name ?? entry.number),
-            subtitle: Text(
-              entry.number.isEmpty ? 'Unknown number' : entry.number,
-            ),
+          SettingsCard(
+            children: [
+              ListTile(
+                leading: SettingsIconBadge(
+                  icon: Icons.person_outline_rounded,
+                  backgroundColor: cs.primaryContainer,
+                  iconColor: cs.onPrimaryContainer,
+                ),
+                title: Text(entry.name ?? entry.number),
+                subtitle: Text(
+                  entry.number.isEmpty ? 'Unknown number' : entry.number,
+                ),
+              ),
+            ],
           ),
-          const Divider(),
-          const SizedBox(height: 8),
-          Text('Date and time', style: theme.textTheme.titleSmall),
-          const SizedBox(height: 8),
-          OutlinedButton.icon(
-            onPressed: _pickWhen,
-            icon: const Icon(Icons.schedule),
-            label: Text('$dateText, $timeText'),
+          const SectionHeader('Date and time'),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
+            child: FilledButton.tonalIcon(
+              onPressed: _pickWhen,
+              icon: const Icon(Icons.schedule_rounded),
+              label: Text('$dateText, $timeText'),
+            ),
           ),
           if (_showsDuration) ...[
-            const SizedBox(height: 24),
-            Text('Duration', style: theme.textTheme.titleSmall),
-            const SizedBox(height: 8),
-            CallDurationField(
-              initialSeconds: _durationSeconds,
-              onChanged: (seconds) => _durationSeconds = seconds,
+            const SectionHeader('Duration'),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
+              child: CallDurationField(
+                initialSeconds: _durationSeconds,
+                onChanged: (seconds) => _durationSeconds = seconds,
+              ),
             ),
           ],
-          const SizedBox(height: 32),
-          FilledButton.icon(
-            onPressed: _saving ? null : _save,
-            icon: _saving
-                ? const SizedBox(
-                    width: 16,
-                    height: 16,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.save_outlined),
-            label: const Text('Save changes'),
+          const SizedBox(height: AppSpacing.xl),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
+            child: FilledButton.icon(
+              onPressed: _saving ? null : _save,
+              icon: _saving
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.save_outlined),
+              label: const Text('Save changes'),
+            ),
           ),
         ],
       ),

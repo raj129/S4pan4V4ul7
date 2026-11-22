@@ -45,14 +45,13 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
     persistentState: widget.persistentState,
   );
   final AppSessionState _session = AppSessionState();
-  final _scaffoldMessengerKey = GlobalKey<ScaffoldMessengerState>();
   late final ChatNotificationService _notificationService =
       _deps.chatDependencies.notificationService;
   late final OnboardingCubit _onboardingCubit = OnboardingCubit(
     authRepository: _deps.authRepository,
     createVaultUseCase: _deps.createVaultUseCase,
     pinValidator: _deps.pinValidator,
-    restoreFlowService: _deps.restoreFlowService,
+    restoreBridge: _deps.onboardingRestoreBridge,
   );
   late final GoRouter _router = buildAppRouter(
     deps: _deps,
@@ -75,9 +74,6 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _notificationService.foregroundNotification.addListener(
-      _showForegroundNotification,
-    );
     _router.routeInformationProvider.addListener(_updateChatVisibility);
     _updateChatVisibility();
     HdrPreviewPreference.instance.configure(_deps.settingsRepository);
@@ -97,7 +93,11 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
         );
       }),
     );
+    _deps.backupManager.onSettingsChanged = _hydrateSessionSettings;
     unawaited(_hydrateSessionSettings());
+    // Run overdue or pending backups silently on open (covers desktop and
+    // network catch-up without OS notifications).
+    unawaited(_deps.backupManager.backupIfDue());
   }
 
   void _updateChatVisibility() {
@@ -107,60 +107,17 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
     );
   }
 
-  void _showForegroundNotification() {
-    final notification = _notificationService.foregroundNotification.value;
-    final messenger = _scaffoldMessengerKey.currentState;
-    if (notification == null || messenger == null) return;
-
-    messenger
-      ..hideCurrentMaterialBanner()
-      ..showMaterialBanner(
-        MaterialBanner(
-          content: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                notification.title,
-                style: Theme.of(context).textTheme.titleSmall,
-              ),
-              if (notification.body.isNotEmpty) Text(notification.body),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () {
-                _router.go('/chat');
-                WidgetsBinding.instance.addPostFrameCallback((_) {
-                  if (mounted) {
-                    _notificationService.openFromNotification(
-                      notification.threadId,
-                    );
-                  }
-                });
-                messenger.hideCurrentMaterialBanner();
-              },
-              child: const Text('Open'),
-            ),
-            TextButton(
-              onPressed: messenger.hideCurrentMaterialBanner,
-              child: const Text('Dismiss'),
-            ),
-          ],
-        ),
-      );
-  }
-
   Future<void> _hydrateSessionSettings() async {
+    await _deps.settingsRepository.migrateLegacyPhotoSyncSetting();
     final mode = await _deps.settingsRepository.getUserMode();
     final calculatorOnboardingCompleted = await _deps.settingsRepository
         .isCalculatorOnboardingCompleted();
     final photoSyncEnabled = await _deps.settingsRepository
-        .isPhotoSyncEnabled();
+        .isBackupVaultPhotosEnabled();
     final externalMirrorEnabled = await _deps.settingsRepository
         .isExternalStorageMirrorEnabled();
     final driveEncryptedBackupEnabled = await _deps.settingsRepository
-        .isDriveEncryptedBackupEnabled();
+        .isBackupCloudEnabled();
     final autoLockOnBackground = await _deps.settingsRepository
         .isAutoLockOnBackgroundEnabled();
     final autoLockTimeoutSeconds = await _deps.settingsRepository
@@ -182,10 +139,13 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
     }
     final paletteId = await _deps.settingsRepository.getThemePaletteId();
     final rawThemeMode = await _deps.settingsRepository.getThemeMode();
+    final secretEntryConfig = await _deps.settingsRepository
+        .getSecretEntryConfig();
     if (!mounted) return;
     if (mode != null) _session.mode = mode;
     _session.calculatorOnboardingCompleted = calculatorOnboardingCompleted;
     _session.photoSyncEnabled = photoSyncEnabled;
+    _session.secretEntryConfig = secretEntryConfig;
     _deps.importManager.configureStorage(
       useExternalStorageMirror: externalMirrorEnabled,
       driveEncryptedBackupEnabled: driveEncryptedBackupEnabled,
@@ -241,6 +201,15 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden) {
+      unawaited(
+        _deps.backupManager.scheduleCatchUpIfNeeded(forceIfBusy: true),
+      );
+    } else if (state == AppLifecycleState.resumed) {
+      unawaited(_deps.backupManager.backupIfDue());
+    }
+
     if (!_session.isUnlocked || !_autoLockOnBackground) return;
     if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.hidden ||
@@ -269,6 +238,9 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
     _deps.vaultSession.lock();
     _session.lock();
     if (!mounted) return;
+    _router.routerDelegate.navigatorKey.currentState?.popUntil(
+      (route) => route.isFirst,
+    );
     _router.go('/');
   }
 
@@ -277,9 +249,6 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
     _onboardingCubit.close();
     _shareStreamSub?.cancel();
     _backgroundLockTimer?.cancel();
-    _notificationService.foregroundNotification.removeListener(
-      _showForegroundNotification,
-    );
     _router.routeInformationProvider.removeListener(_updateChatVisibility);
     unawaited(_deps.dispose());
     WidgetsBinding.instance.removeObserver(this);
@@ -296,7 +265,6 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
       darkTheme: AppTheme.forPalette(_themePalette, Brightness.dark),
       themeMode: _themeMode,
       routerConfig: _router,
-      scaffoldMessengerKey: _scaffoldMessengerKey,
       builder: (context, child) => VaultLockScope(
         onLock: _lockSession,
         child: AppDrawerScope(

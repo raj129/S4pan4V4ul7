@@ -33,20 +33,20 @@ class ModeInfoSheet extends StatelessWidget {
             ),
           ),
           const SizedBox(height: AppSpacing.xl),
-          Text('Local vs Google mode', style: theme.textTheme.titleLarge),
+          Text('Google vs Local mode', style: theme.textTheme.titleLarge),
           const SizedBox(height: AppSpacing.xl),
+          const _ModeRow(
+            icon: Icons.backup_rounded,
+            title: 'Sign in with Google (Recommended)',
+            description:
+                'Enables Secure Chat and encrypted backup & restore on Google Drive. After creating your PIN, you can restore existing chats and vault photos.',
+          ),
+          const SizedBox(height: AppSpacing.lg),
           const _ModeRow(
             icon: Icons.smartphone_rounded,
             title: 'Continue locally',
             description:
-                'Photos stay encrypted on this device only. If you lose this device, the vault cannot be restored.',
-          ),
-          const SizedBox(height: AppSpacing.lg),
-          const _ModeRow(
-            icon: Icons.backup_rounded,
-            title: 'Sign in with Google',
-            description:
-                'Enables encrypted VMK backup and optional photo sync. You can restore on a new device after signing in.',
+                'Keeps your vault on this device only. You can still restore a local backup after creating your PIN, and sign in with Gmail later.',
           ),
           const SizedBox(height: AppSpacing.lg),
           const InfoBanner(

@@ -37,8 +37,12 @@ class _MemoryStore implements ChatBackupStore {
   @override
   final bool requiresNetwork;
 
+  @override
+  bool get isCloud => requiresNetwork;
+
   final Map<String, Uint8List> blobs = {};
   int writes = 0;
+  Object? readFailure;
 
   @override
   Future<void> write(
@@ -51,8 +55,16 @@ class _MemoryStore implements ChatBackupStore {
   }
 
   @override
-  Future<Uint8List?> read(String accountId, {bool interactive = false}) async =>
-      blobs[accountId];
+  Future<Uint8List?> read(String accountId, {bool interactive = false}) async {
+    final failure = readFailure;
+    if (failure != null) throw failure;
+    return blobs[accountId];
+  }
+
+  @override
+  Future<void> delete(String accountId, {bool interactive = false}) async {
+    blobs.remove(accountId);
+  }
 }
 
 ChatMessage _msg(String id, DateTime at, {String thread = 't1'}) => ChatMessage(
@@ -105,7 +117,7 @@ void main() {
 
       final snapshot = await service.findLatestBackup();
       expect(snapshot, isNotNull);
-      await service.restore(snapshot!);
+      expect(await service.restore(snapshot!), 1);
 
       expect(fresh.rows.keys, ['after-clear']);
       expect(fresh.cleared['t1'], clearedAt);
@@ -155,21 +167,63 @@ void main() {
     },
   );
 
-  test('picks the newest readable backup across stores', () async {
-    await cache.save([_msg('old', DateTime.utc(2024, 3, 1))]);
-    connectivity = [ConnectivityResult.none];
-    await build().backupNow(); // local only
-    now = now.add(const Duration(days: 1));
-    await cache.save([_msg('new', DateTime.utc(2024, 3, 11))]);
+  test(
+    'falls back to Google Drive when the device copy is unreadable',
+    () async {
+      await cache.save([_msg('old', DateTime.utc(2024, 3, 1))]);
+      connectivity = [ConnectivityResult.none];
+      await build().backupNow(); // local only
+      now = now.add(const Duration(days: 1));
+      await cache.save([_msg('new', DateTime.utc(2024, 3, 11))]);
+      connectivity = [ConnectivityResult.wifi];
+      await build().backupNow();
+      local.blobs.updateAll((_, _) => Uint8List.fromList([1, 2, 3]));
+
+      final snapshot = await build().findLatestBackup();
+
+      expect(snapshot!.source, 'Google Drive');
+      expect(snapshot.messageCount, 2);
+    },
+  );
+
+  test('prefers this device copy over Google Drive', () async {
+    await cache.save([_msg('a', DateTime.utc(2024, 3, 1))]);
     connectivity = [ConnectivityResult.wifi];
     await build().backupNow();
-    local.blobs.updateAll((_, _) => Uint8List.fromList([1, 2, 3]));
 
     final snapshot = await build().findLatestBackup();
 
-    expect(snapshot!.source, 'Google Drive');
-    expect(snapshot.messageCount, 2);
+    expect(snapshot!.source, 'This device');
   });
+
+  test('returns no backup when all readable stores are empty', () async {
+    expect(await build().findLatestBackup(), isNull);
+  });
+
+  test(
+    'reports unreadable stores instead of claiming no backup exists',
+    () async {
+      local.readFailure = StateError('device file cannot be read');
+      drive.readFailure = StateError('Google Drive returned 403');
+
+      await expectLater(
+        build().findLatestBackup(interactive: true),
+        throwsA(
+          isA<ChatBackupReadException>()
+              .having(
+                (error) => error.toString(),
+                'message',
+                contains('This device'),
+              )
+              .having(
+                (error) => error.toString(),
+                'message',
+                contains('Google Drive'),
+              ),
+        ),
+      );
+    },
+  );
 
   test('next backup is scheduled for 2 AM local time', () {
     expect(

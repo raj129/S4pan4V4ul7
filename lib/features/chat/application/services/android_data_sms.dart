@@ -94,7 +94,7 @@ class AndroidDataSms {
   static const MethodChannel _channel = MethodChannel('photo_vault/data_sms');
 
   Future<bool> isSupported() async {
-    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return false;
+    if (defaultTargetPlatform != TargetPlatform.android) return false;
     try {
       return await _channel.invokeMethod<bool>('isSupported') ?? false;
     } on MissingPluginException {

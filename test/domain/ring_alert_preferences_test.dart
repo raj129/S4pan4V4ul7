@@ -23,6 +23,16 @@ void main() {
       ]);
       expect(preferences.flashlightEnabled, isFalse);
       expect(preferences.testDelaySeconds, 0);
+      expect(
+        preferences.notificationTitle,
+        RingAlertPreferences.defaultNotificationTitle,
+      );
+      expect(
+        preferences.notificationBody,
+        RingAlertPreferences.defaultNotificationBody,
+      );
+      expect(preferences.notificationTitle, isEmpty);
+      expect(preferences.notificationBody, isEmpty);
     },
   );
 
@@ -38,6 +48,8 @@ void main() {
       flashlightEnabled: true,
       flashPattern: RingFlashPattern.doubleBlink,
       testDelaySeconds: 10,
+      notificationTitle: 'Personal ring',
+      notificationBody: 'Ring my phone',
     );
 
     expect(
@@ -80,5 +92,37 @@ void main() {
     expect(oldVibrate.vibrationEnabled, isTrue);
     expect(oldSilent.ringSoundEnabled, isFalse);
     expect(oldSilent.vibrationEnabled, isFalse);
+  });
+
+  test('clears only the old automatic ring notification text', () {
+    final oldDefaults = RingAlertPreferences.fromFirestore({
+      'notificationTitle': RingAlertPreferences.legacyDefaultNotificationTitle,
+      'notificationBody': RingAlertPreferences.legacyDefaultNotificationBody,
+    });
+    final customText = RingAlertPreferences.fromFirestore({
+      'notificationTitle': 'My ring header',
+      'notificationBody': 'My ring text',
+    });
+
+    expect(oldDefaults.notificationTitle, isEmpty);
+    expect(oldDefaults.notificationBody, isEmpty);
+    expect(customText.notificationTitle, 'My ring header');
+    expect(customText.notificationBody, 'My ring text');
+  });
+
+  test('clears only the old automatic ring notification text', () {
+    final oldDefaults = RingAlertPreferences.fromFirestore({
+      'notificationTitle': RingAlertPreferences.legacyDefaultNotificationTitle,
+      'notificationBody': RingAlertPreferences.legacyDefaultNotificationBody,
+    });
+    final customText = RingAlertPreferences.fromFirestore({
+      'notificationTitle': 'My ring header',
+      'notificationBody': 'My ring text',
+    });
+
+    expect(oldDefaults.notificationTitle, isEmpty);
+    expect(oldDefaults.notificationBody, isEmpty);
+    expect(customText.notificationTitle, 'My ring header');
+    expect(customText.notificationBody, 'My ring text');
   });
 }

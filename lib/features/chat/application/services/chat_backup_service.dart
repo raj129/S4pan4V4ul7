@@ -5,11 +5,80 @@ import 'dart:typed_data';
 
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:crypto/crypto.dart' as hash;
+import 'package:photo_vault/features/backup/application/backup_coordinator.dart';
+import 'package:photo_vault/features/backup/application/backup_progress.dart';
+import 'package:photo_vault/features/vault/domain/repositories/settings_repository.dart';
 
 import '../crypto/chat_crypto_service.dart';
 import '../../domain/repositories/chat_backup_store.dart';
 import '../../domain/repositories/message_cache_repository.dart';
 import 'profile_service.dart';
+
+/// Stages of a chat backup restoration workflow.
+enum ChatRestoreStage {
+  checkingBackups,
+  downloading,
+  decrypting,
+  restoringMessages,
+  restoringProfile,
+  completed,
+}
+
+/// Live progress snapshot emitted during chat backup discovery & restoration.
+class ChatRestoreProgress {
+  const ChatRestoreProgress({
+    required this.stage,
+    this.source,
+    this.done = 0,
+    this.total,
+  });
+
+  final ChatRestoreStage stage;
+  final String? source;
+  final int done;
+  final int? total;
+
+  double? get fraction {
+    final t = total;
+    if (t == null || t == 0) return null;
+    return (done / t).clamp(0.0, 1.0);
+  }
+
+  String get message => switch (stage) {
+    ChatRestoreStage.checkingBackups =>
+      source == null
+          ? 'Checking for chat backups…'
+          : 'Checking $source for chat backup…',
+    ChatRestoreStage.downloading =>
+      source == null
+          ? 'Downloading chat backup…'
+          : 'Downloading chat backup from $source…',
+    ChatRestoreStage.decrypting => 'Decrypting chat backup…',
+    ChatRestoreStage.restoringMessages =>
+      total != null && total! > 0
+          ? 'Restoring messages ($done of $total)…'
+          : 'Restoring messages…',
+    ChatRestoreStage.restoringProfile => 'Restoring profile & contacts…',
+    ChatRestoreStage.completed => 'Chat restoration complete',
+  };
+}
+
+/// A backup blob discovered in a specific store during onboarding/restore.
+class ChatBackupCandidate {
+  const ChatBackupCandidate({
+    required this.label,
+    required this.isCloud,
+    required this.blob,
+    this.snapshot,
+  });
+
+  final String label;
+  final bool isCloud;
+  final Uint8List blob;
+
+  /// Non-null when the device already had the identity key to decrypt it.
+  final ChatBackupSnapshot? snapshot;
+}
 
 /// A decrypted chat backup found in one of the stores.
 class ChatBackupSnapshot {
@@ -49,6 +118,15 @@ class ChatBackupResult {
   final Map<String, String> skipped;
 }
 
+class ChatBackupReadException implements Exception {
+  const ChatBackupReadException(this.failures);
+
+  final List<String> failures;
+
+  @override
+  String toString() => 'Could not read a chat backup: ${failures.join('; ')}';
+}
+
 /// WhatsApp-style chat backup and restore.
 ///
 /// A backup is this device's *local* view of every chat — the cached
@@ -65,11 +143,15 @@ class ChatBackupService {
     Future<List<ConnectivityResult>> Function()? checkConnectivity,
     DateTime Function()? clock,
     ProfileService? profile,
+    SettingsRepository? settings,
+    BackupCoordinator? coordinator,
   }) : _cache = cache,
        _profile = profile,
        _crypto = crypto,
        _stores = stores,
        _currentUid = currentUid,
+       _settings = settings,
+       _coordinator = coordinator ?? BackupCoordinator.inProcess(),
        _checkConnectivity =
            checkConnectivity ?? (() => Connectivity().checkConnectivity()),
        _clock = clock ?? DateTime.now {
@@ -84,6 +166,8 @@ class ChatBackupService {
   final Future<List<ConnectivityResult>> Function() _checkConnectivity;
   final DateTime Function() _clock;
   final ProfileService? _profile;
+  final SettingsRepository? _settings;
+  final BackupCoordinator _coordinator;
 
   Future<void> _markCloudPending() async {
     try {
@@ -134,18 +218,56 @@ class ChatBackupService {
   // Settings
   // ---------------------------------------------------------------------------
 
-  Future<bool> isWifiOnly() async =>
-      await _cache.readSetting(_wifiOnlyKey) != '0';
+  Future<bool> isWifiOnly() async {
+    final settings = _settings;
+    if (settings != null) return settings.isBackupWifiOnly();
+    return await _cache.readSetting(_wifiOnlyKey) != '0';
+  }
 
-  Future<void> setWifiOnly(bool value) =>
-      _cache.writeSetting(_wifiOnlyKey, value ? '1' : '0');
+  Future<void> setWifiOnly(bool value) async {
+    final settings = _settings;
+    if (settings != null) {
+      await settings.setBackupWifiOnly(value);
+      return;
+    }
+    await _cache.writeSetting(_wifiOnlyKey, value ? '1' : '0');
+  }
+
+  static const _wifiMigratedKey = 'chat_backup_wifi_migrated';
+
+  /// Copies the Wi-Fi-only choice from the chat cache into settings, once.
+  /// Without this, users who had turned Wi-Fi-only off would be switched back on.
+  Future<void> migrateLegacyWifiSetting() async {
+    final settings = _settings;
+    if (settings == null) return;
+    if (await _cache.readSetting(_wifiMigratedKey) != null) return;
+    if (await _cache.readSetting(_wifiOnlyKey) == '0') {
+      await settings.setBackupWifiOnly(false);
+    }
+    await _cache.writeSetting(_wifiMigratedKey, '1');
+  }
+
+  Future<bool> isCloudEnabled() async {
+    final settings = _settings;
+    return settings == null ? true : settings.isBackupCloudEnabled();
+  }
+
+  Future<bool> isChatsEnabled() async {
+    final settings = _settings;
+    return settings == null ? true : settings.isBackupChatsEnabled();
+  }
 
   Future<DateTime?> lastBackupAt() async {
     final ms = int.tryParse(await _cache.readSetting(_lastBackupKey) ?? '');
     return ms == null ? null : DateTime.fromMillisecondsSinceEpoch(ms);
   }
 
-  Future<bool> _networkAllowed() async {
+  /// Whether a cloud upload is queued for retry once connectivity allows.
+  Future<bool> isCloudPending() async =>
+      await _cache.readSetting(_cloudPendingKey) != null;
+
+  /// Whether the network allows a backup now (respects Wi-Fi only).
+  Future<bool> networkAllowed() async {
     final results = await _checkConnectivity();
     if (await isWifiOnly()) {
       return results.contains(ConnectivityResult.wifi) ||
@@ -158,101 +280,219 @@ class ChatBackupService {
   // Backup
   // ---------------------------------------------------------------------------
 
-  Future<ChatBackupResult> backupNow({bool interactive = false}) async {
+  Future<ChatBackupResult> backupNow({bool interactive = false}) =>
+      _coordinator.run(() => _backupNowUnlocked(interactive: interactive));
+
+  Future<ChatBackupResult> _backupNowUnlocked({
+    bool interactive = false,
+  }) async {
     final accountId = _accountId();
     if (accountId == null) throw StateError('Not signed in to chat.');
 
-    final backupAt = _clock().toUtc();
-    final records = await _cache.exportAll();
-    final cleared = await _cache.getAllClearedBefore();
-    final payload = {
-      'v': _formatVersion,
-      'backupAt': backupAt.millisecondsSinceEpoch,
-      'cleared': {
-        for (final e in cleared.entries) e.key: e.value.millisecondsSinceEpoch,
-      },
-      'messages': [for (final r in records) r.toJson()],
-      if (_profile != null) 'profile': await _profile.exportForBackup(),
-    };
-    final blob = await _crypto.encryptBackup(
-      gzip.encode(utf8.encode(jsonEncode(payload))),
-    );
+    backupProgress.begin('Backing up chats');
+    try {
+      final backupAt = _clock().toUtc();
+      final records = await _cache.exportAll();
+      final cleared = await _cache.getAllClearedBefore();
+      final payload = {
+        'v': _formatVersion,
+        'backupAt': backupAt.millisecondsSinceEpoch,
+        'cleared': {
+          for (final e in cleared.entries)
+            e.key: e.value.millisecondsSinceEpoch,
+        },
+        'messages': [for (final r in records) r.toJson()],
+        if (_profile != null) 'profile': await _profile.exportForBackup(),
+      };
+      final blob = await _crypto.encryptBackup(
+        gzip.encode(utf8.encode(jsonEncode(payload))),
+      );
 
-    final savedTo = <String>[];
-    final skipped = <String, String>{};
-    final networkOk = await _networkAllowed();
-    var cloudPending = false;
-    for (final store in _stores) {
-      if (store.requiresNetwork && !networkOk) {
-        skipped[store.label] = (await isWifiOnly())
-            ? 'Waiting for Wi-Fi'
-            : 'Offline';
-        cloudPending = true;
-        continue;
+      final savedTo = <String>[];
+      final skipped = <String, String>{};
+      final networkOk = await networkAllowed();
+      final cloudOn = await isCloudEnabled();
+      var cloudPending = false;
+      for (final store in _stores) {
+        if (store.isCloud && !cloudOn) {
+          skipped[store.label] = 'Cloud backup is off';
+          continue;
+        }
+        if (store.requiresNetwork && !networkOk) {
+          skipped[store.label] = (await isWifiOnly())
+              ? 'Waiting for Wi-Fi'
+              : 'Offline';
+          cloudPending = true;
+          continue;
+        }
+        try {
+          await store.write(accountId, blob, interactive: interactive);
+          savedTo.add(store.label);
+        } catch (e) {
+          skipped[store.label] = e.toString();
+          if (store.requiresNetwork) cloudPending = true;
+        }
       }
-      try {
-        await store.write(accountId, blob, interactive: interactive);
-        savedTo.add(store.label);
-      } catch (e) {
-        skipped[store.label] = e.toString();
-        if (store.requiresNetwork) cloudPending = true;
+      if (savedTo.isEmpty) {
+        throw StateError('Backup failed: ${skipped.values.join('; ')}');
       }
+      await _cache.writeSetting(
+        _lastBackupKey,
+        backupAt.millisecondsSinceEpoch.toString(),
+      );
+      await _cache.writeSetting(_cloudPendingKey, cloudPending ? '1' : null);
+      return ChatBackupResult(
+        backupAt: backupAt,
+        messageCount: records.length,
+        savedTo: savedTo,
+        skipped: skipped,
+      );
+    } finally {
+      backupProgress.end();
     }
-    if (savedTo.isEmpty) {
-      throw StateError('Backup failed: ${skipped.values.join('; ')}');
-    }
-    await _cache.writeSetting(
-      _lastBackupKey,
-      backupAt.millisecondsSinceEpoch.toString(),
-    );
-    await _cache.writeSetting(_cloudPendingKey, cloudPending ? '1' : null);
-    return ChatBackupResult(
-      backupAt: backupAt,
-      messageCount: records.length,
-      savedTo: savedTo,
-      skipped: skipped,
-    );
   }
 
   /// Backs up when the daily backup is overdue, or a cloud upload was missed.
   /// Called on app open so desktop (no background scheduler) is covered too.
-  Future<ChatBackupResult?> backupIfDue({
+  Future<ChatBackupResult?> backupIfDue({Duration minAge = backupInterval}) =>
+      _coordinator.run(() => _backupIfDueUnlocked(minAge: minAge));
+
+  Future<ChatBackupResult?> _backupIfDueUnlocked({
     Duration minAge = backupInterval,
   }) async {
     if (_accountId() == null) return null;
+    await migrateLegacyWifiSetting();
+    if (!await isChatsEnabled()) return null;
     // Never back up an un-restored fresh install over a good backup.
     if (await _cache.readSetting(_restorePendingKey) != null) return null;
     final last = await lastBackupAt();
     final cloudPending = await _cache.readSetting(_cloudPendingKey) != null;
     final overdue = last == null || _clock().difference(last) >= minAge;
     if (!overdue && !cloudPending) return null;
-    return backupNow();
+    return _backupNowUnlocked();
   }
+
+  /// Removes this account's chat backup from the chosen stores.
+  Future<void> deleteBackup({required bool device, required bool cloud}) =>
+      _coordinator.run(() async {
+        final accountId = _accountId();
+        if (accountId == null) throw StateError('Not signed in to chat.');
+        for (final store in _stores) {
+          if (store.isCloud ? !cloud : !device) continue;
+          await store.delete(accountId, interactive: true);
+        }
+      });
 
   // ---------------------------------------------------------------------------
   // Restore
   // ---------------------------------------------------------------------------
 
-  /// The newest readable backup across all stores, or null if there is none.
-  Future<ChatBackupSnapshot?> findLatestBackup({
+  /// Checks every enabled store for an existing chat backup blob.
+  ///
+  /// Unlike [findLatestBackup], this does not fail if the identity key has not
+  /// been unwrapped yet: it returns [ChatBackupCandidate] entries containing
+  /// the encrypted [Uint8List] blob and, when decryptable now, the decoded
+  /// [ChatBackupSnapshot].
+  Future<List<ChatBackupCandidate>> inspectAvailableBackups({
     bool interactive = false,
+    bool includeCloud = true,
+    bool ignoreCloudSetting = false,
+    void Function(ChatRestoreProgress)? onProgress,
   }) async {
     final accountId = _accountId();
-    if (accountId == null) return null;
-    ChatBackupSnapshot? best;
+    if (accountId == null) return const [];
+    if (!await isChatsEnabled()) return const [];
+    final cloudOn =
+        includeCloud && (ignoreCloudSetting || await isCloudEnabled());
+    final canDecrypt = await _crypto.hasIdentityKey();
+    final candidates = <ChatBackupCandidate>[];
     for (final store in _stores) {
+      if (store.isCloud && !cloudOn) continue;
+      onProgress?.call(
+        ChatRestoreProgress(
+          stage: ChatRestoreStage.checkingBackups,
+          source: store.label,
+        ),
+      );
       try {
         final blob = await store.read(accountId, interactive: interactive);
         if (blob == null) continue;
-        final snapshot = await _decode(blob, store.label);
-        if (best == null || snapshot.backupAt.isAfter(best.backupAt)) {
-          best = snapshot;
+        ChatBackupSnapshot? snapshot;
+        if (canDecrypt) {
+          try {
+            snapshot = await _decode(blob, store.label);
+          } catch (_) {}
         }
-      } catch (_) {
-        // Unreachable store or unreadable blob: try the next one.
+        candidates.add(
+          ChatBackupCandidate(
+            label: store.label,
+            isCloud: store.isCloud,
+            blob: blob,
+            snapshot: snapshot,
+          ),
+        );
+      } catch (_) {}
+    }
+    return candidates;
+  }
+
+  /// Decrypts and restores a previously fetched [candidate] with progress.
+  Future<int> restoreCandidate(
+    ChatBackupCandidate candidate, {
+    void Function(ChatRestoreProgress)? onProgress,
+  }) async {
+    onProgress?.call(
+      ChatRestoreProgress(
+        stage: ChatRestoreStage.decrypting,
+        source: candidate.label,
+      ),
+    );
+    final snapshot =
+        candidate.snapshot ?? await _decode(candidate.blob, candidate.label);
+    return restore(snapshot, onProgress: onProgress);
+  }
+
+  /// The first readable backup, checking stores in order: this device first,
+  /// then Google Drive. Returns null if no store has one.
+  Future<ChatBackupSnapshot?> findLatestBackup({
+    bool interactive = false,
+    bool? cloudOnly,
+    bool ignoreCloudSetting = false,
+    void Function(ChatRestoreProgress)? onProgress,
+  }) async {
+    final accountId = _accountId();
+    if (accountId == null) return null;
+    if (!await isChatsEnabled()) return null;
+    final cloudOn = ignoreCloudSetting || await isCloudEnabled();
+    final failures = <String>[];
+    for (final store in _stores) {
+      if (cloudOnly == true && !store.isCloud) continue;
+      if (cloudOnly == false && store.isCloud) continue;
+      if (store.isCloud && !cloudOn) continue;
+      onProgress?.call(
+        ChatRestoreProgress(
+          stage: store.isCloud
+              ? ChatRestoreStage.downloading
+              : ChatRestoreStage.checkingBackups,
+          source: store.label,
+        ),
+      );
+      try {
+        final blob = await store.read(accountId, interactive: interactive);
+        if (blob == null) continue;
+        onProgress?.call(
+          ChatRestoreProgress(
+            stage: ChatRestoreStage.decrypting,
+            source: store.label,
+          ),
+        );
+        return await _decode(blob, store.label);
+      } catch (error) {
+        failures.add('${store.label}: $error');
       }
     }
-    return best;
+    if (failures.isNotEmpty) throw ChatBackupReadException(failures);
+    return null;
   }
 
   Future<ChatBackupSnapshot> _decode(Uint8List blob, String source) async {
@@ -300,7 +540,17 @@ class ChatBackupService {
   /// Clear watermarks are restored (keeping the later one if this device has
   /// its own), and on a fresh install the history horizon moves back to the
   /// backup time, so messages that arrived after the backup still appear.
-  Future<void> restore(ChatBackupSnapshot snapshot) async {
+  Future<int> restore(
+    ChatBackupSnapshot snapshot, {
+    void Function(ChatRestoreProgress)? onProgress,
+  }) => _coordinator.run(
+    () => _restoreUnlocked(snapshot, onProgress: onProgress),
+  );
+
+  Future<int> _restoreUnlocked(
+    ChatBackupSnapshot snapshot, {
+    void Function(ChatRestoreProgress)? onProgress,
+  }) async {
     for (final e in snapshot.clearedBefore.entries) {
       final existing = await _cache.getClearedBefore(e.key);
       if (existing == null || e.value.isAfter(existing)) {
@@ -311,15 +561,63 @@ class ChatBackupService {
       final cleared = snapshot.clearedBefore[m.threadId];
       return cleared == null || m.sentAtMs > cleared.millisecondsSinceEpoch;
     }).toList();
-    await _cache.importAll(visible);
-    if (snapshot.profileData.isNotEmpty) {
-      await _profile?.importFromBackup(snapshot.profileData);
-    }
 
-    final horizon = await _cache.getHistoryHorizon();
-    if (horizon != null && snapshot.backupAt.isBefore(horizon)) {
-      await _cache.setHistoryHorizon(snapshot.backupAt);
+    final total = visible.length;
+    backupProgress.begin('Restoring chats', total: total);
+    onProgress?.call(
+      ChatRestoreProgress(
+        stage: ChatRestoreStage.restoringMessages,
+        source: snapshot.source,
+        done: 0,
+        total: total,
+      ),
+    );
+    try {
+      const chunkSize = 200;
+      var imported = 0;
+      for (var i = 0; i < total; i += chunkSize) {
+        final end = (i + chunkSize < total) ? i + chunkSize : total;
+        await _cache.importAll(visible.sublist(i, end));
+        imported = end;
+        backupProgress.update(imported);
+        onProgress?.call(
+          ChatRestoreProgress(
+            stage: ChatRestoreStage.restoringMessages,
+            source: snapshot.source,
+            done: imported,
+            total: total,
+          ),
+        );
+      }
+
+      if (snapshot.profileData.isNotEmpty) {
+        onProgress?.call(
+          ChatRestoreProgress(
+            stage: ChatRestoreStage.restoringProfile,
+            source: snapshot.source,
+            done: total,
+            total: total,
+          ),
+        );
+        await _profile?.importFromBackup(snapshot.profileData);
+      }
+
+      final horizon = await _cache.getHistoryHorizon();
+      if (horizon != null && snapshot.backupAt.isBefore(horizon)) {
+        await _cache.setHistoryHorizon(snapshot.backupAt);
+      }
+      await dismissRestoreOffer();
+      onProgress?.call(
+        ChatRestoreProgress(
+          stage: ChatRestoreStage.completed,
+          source: snapshot.source,
+          done: total,
+          total: total,
+        ),
+      );
+      return visible.length;
+    } finally {
+      backupProgress.end();
     }
-    await dismissRestoreOffer();
   }
 }

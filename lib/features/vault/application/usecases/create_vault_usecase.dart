@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 
 import 'package:photo_vault/core/crypto/services/crypto_service.dart';
+import 'package:photo_vault/features/backup/application/vault_backup_key_service.dart';
 import '../../domain/entities/user_mode.dart';
 import '../../domain/entities/vault_settings.dart';
 import '../../domain/repositories/secure_storage_repository.dart';
@@ -87,7 +88,8 @@ class CreateVaultUseCase {
         aad: aad,
       );
 
-      // Step 5: persist wrapped VMK in secure storage (never plaintext VMK).
+      // Step 5: persist wrapped VMK in secure storage (never plaintext VMK),
+      // plus a one-way HKDF-derived manifest backup key for background backups.
       await _secureStorageRepository.storeWrappedVmk(
         vaultId: vaultId,
         wrappedVmkBase64: base64Encode(wrapped.wrappedBytes),
@@ -96,6 +98,9 @@ class CreateVaultUseCase {
         saltBase64: base64Encode(salt),
         encVersion: _cryptoService.encryptionVersion,
       );
+      await VaultBackupKeyService(
+        _secureStorageRepository,
+      ).deriveAndStore(vaultId: vaultId, vmkBytes: vmkBytes);
 
       // Step 6: Back up wrapped VMK to external destinations.
       final backupPayload = {

@@ -114,18 +114,15 @@ void main() {
     return (service, users);
   }
 
-  testWidgets('profile enters edit mode and saves back to its summary', (
+  testWidgets('profile edits name via dialog and saves back to summary', (
     tester,
   ) async {
     final (service, users) = await pump(tester);
-    expect(find.byType(TextField), findsNothing);
-    await tester.tap(find.text('Edit profile'));
+    expect(find.byType(AlertDialog), findsNothing);
+    await tester.tap(find.text('Display name'));
     await tester.pumpAndSettle();
+    expect(find.byType(AlertDialog), findsOneWidget);
     expect(find.byType(TextField), findsOneWidget);
-    expect(
-      tester.widget<FilledButton>(find.byType(FilledButton)).onPressed,
-      isNull,
-    );
 
     await tester.enterText(find.byType(TextField), 'New name');
     await tester.pump();
@@ -134,77 +131,54 @@ void main() {
     await tester.tap(find.text('Save'));
     await tester.pumpAndSettle();
 
-    expect(find.text('Profile saved.'), findsOneWidget);
-    expect(find.text('Edit profile'), findsOneWidget);
-    expect(find.byType(TextField), findsNothing);
+    expect(find.text('Name saved.'), findsOneWidget);
+    expect(find.byType(AlertDialog), findsNothing);
     expect(service.profile!.displayName, 'New name');
     expect(users.upserts.single.displayName, 'New name');
   });
 
-  testWidgets('avatar picker uses Material 3 tabs and photo source cards', (
+  testWidgets('avatar picker uses simplified single sheet with quick actions', (
     tester,
   ) async {
     await pump(tester);
-    await tester.tap(find.text('Edit profile'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Change picture'));
+    await tester.tap(find.byIcon(Icons.camera_alt_rounded));
     await tester.pumpAndSettle();
 
-    expect(find.byType(TabBar), findsOneWidget);
-    expect(find.text('Default'), findsOneWidget);
+    expect(find.text('Profile picture'), findsOneWidget);
+    expect(find.text('Camera'), findsOneWidget);
+    expect(find.text('Gallery'), findsOneWidget);
     expect(find.text('Emoji'), findsOneWidget);
-    expect(find.text('Photo'), findsOneWidget);
-
-    await tester.tap(find.text('Photo'));
-    await tester.pumpAndSettle();
-    expect(find.text('Choose from gallery'), findsOneWidget);
-    expect(find.text('Take a photo'), findsOneWidget);
-    expect(find.byType(Card), findsAtLeastNWidgets(1));
+    expect(find.text('Colors & initials'), findsOneWidget);
   });
 
-  testWidgets('a failed save stays on the screen with an error', (
+  testWidgets('a failed save stays in dialog with an error', (
     tester,
   ) async {
     final (_, users) = await pump(tester);
     users.fail = true;
-    await tester.tap(find.text('Edit profile'));
+    await tester.tap(find.text('Display name'));
     await tester.pumpAndSettle();
     await tester.enterText(find.byType(TextField), 'New name');
     await tester.pump();
     await tester.tap(find.text('Save'));
     await tester.pumpAndSettle();
 
-    expect(find.text('chat list'), findsNothing);
+    expect(find.byType(AlertDialog), findsOneWidget);
     expect(find.textContaining('Could not save'), findsOneWidget);
   });
 
-  testWidgets('leaving with unsaved edits asks to discard', (tester) async {
-    await pump(tester);
-    await tester.tap(find.text('Edit profile'));
-    await tester.pumpAndSettle();
-    await tester.enterText(find.byType(TextField), 'Changed');
-    await tester.pump();
-    await tester.pageBack();
-    await tester.pumpAndSettle();
-    expect(find.text('Discard changes?'), findsOneWidget);
-    await tester.tap(find.text('Discard'));
-    await tester.pumpAndSettle();
-    expect(find.text('chat list'), findsOneWidget);
-  });
-
-  testWidgets('Cancel discards drafts and returns to profile view', (
+  testWidgets('Cancel closes name dialog without saving', (
     tester,
   ) async {
     await pump(tester);
-    await tester.tap(find.text('Edit profile'));
+    await tester.tap(find.text('Display name'));
     await tester.pumpAndSettle();
     await tester.enterText(find.byType(TextField), 'Unsaved name');
     await tester.tap(find.text('Cancel'));
     await tester.pumpAndSettle();
 
-    expect(find.byType(TextField), findsNothing);
-    expect(find.text('Me'), findsOneWidget);
-    expect(find.text('Discard changes?'), findsNothing);
+    expect(find.byType(AlertDialog), findsNothing);
+    expect(find.text('Me'), findsWidgets);
   });
 
   testWidgets('Manage chat media opens from Profile', (tester) async {
@@ -231,6 +205,6 @@ void main() {
     await tester.pageBack();
     await tester.pumpAndSettle();
     expect(find.text('Profile'), findsOneWidget);
-    expect(find.text('Edit profile'), findsOneWidget);
+    expect(find.text('Display name'), findsOneWidget);
   });
 }

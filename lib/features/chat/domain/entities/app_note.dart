@@ -163,7 +163,8 @@ class AppNote extends Equatable {
     ),
     title: json['title'] as String? ?? '',
     content: json['content'] as String? ?? '',
-    items: (json['items'] as List?)
+    items:
+        (json['items'] as List?)
             ?.map((i) => ChecklistItem.fromJson(i as Map<String, dynamic>))
             .toList() ??
         const [],
@@ -204,4 +205,47 @@ class AppNote extends Equatable {
     isPinned,
     colorIndex,
   ];
+}
+
+/// Real-time editing presence for a collaborator in a shared note/checklist.
+class NoteEditorPresence extends Equatable {
+  const NoteEditorPresence({
+    required this.userId,
+    this.editingTarget,
+    this.editingItemId,
+    this.editingLine,
+    this.cursorOffset,
+  });
+
+  final String userId;
+
+  /// One of 'title', 'content', or 'item'.
+  final String? editingTarget;
+
+  /// Checklist item ID when [editingTarget] is 'item'.
+  final String? editingItemId;
+
+  /// 0-based line index when [editingTarget] is 'content'.
+  final int? editingLine;
+
+  /// Character offset within the active field/content.
+  final int? cursorOffset;
+
+  @override
+  List<Object?> get props => [
+    userId,
+    editingTarget,
+    editingItemId,
+    editingLine,
+    cursorOffset,
+  ];
+}
+
+/// Thrown when saving an existing shared note that has been deleted remotely.
+class NoteDeletedException implements Exception {
+  const NoteDeletedException(this.noteId);
+  final String noteId;
+
+  @override
+  String toString() => 'Note $noteId was deleted';
 }

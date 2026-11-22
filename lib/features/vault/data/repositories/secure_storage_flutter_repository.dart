@@ -12,6 +12,7 @@ class SecureStorageFlutterRepository implements SecureStorageRepository {
   static String _kMac(String vaultId) => 'vault.$vaultId.mac';
   static String _kSalt(String vaultId) => 'vault.$vaultId.salt';
   static String _kEncVersion(String vaultId) => 'vault.$vaultId.enc_version';
+  static String _kBackupKey(String vaultId) => 'vault.$vaultId.backup_key';
 
   @override
   Future<void> storeWrappedVmk({
@@ -64,5 +65,18 @@ class SecureStorageFlutterRepository implements SecureStorageRepository {
     await _storage.delete(key: _kMac(vaultId));
     await _storage.delete(key: _kSalt(vaultId));
     await _storage.delete(key: _kEncVersion(vaultId));
+    await _storage.delete(key: _kBackupKey(vaultId));
   }
+
+  @override
+  Future<void> storeBackupKey({
+    required String vaultId,
+    required String backupKeyBase64,
+  }) async {
+    await _storage.write(key: _kBackupKey(vaultId), value: backupKeyBase64);
+  }
+
+  @override
+  Future<String?> loadBackupKey(String vaultId) =>
+      _storage.read(key: _kBackupKey(vaultId));
 }

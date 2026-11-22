@@ -1,5 +1,7 @@
 import 'package:equatable/equatable.dart';
 
+import 'package:photo_vault/features/chat/application/services/chat_backup_service.dart';
+import '../../application/services/onboarding_restore_bridge.dart';
 import '../../domain/entities/user_mode.dart';
 
 /// Complete state machine for the first-launch onboarding flow.
@@ -87,6 +89,58 @@ final class OnboardingPinInvalid extends OnboardingState {
   List<Object?> get props => [mode, message];
 }
 
+/// Checking Local and Google Drive for existing backups after PIN creation.
+final class OnboardingCheckingBackups extends OnboardingState {
+  const OnboardingCheckingBackups({required this.mode});
+  final UserMode mode;
+  @override
+  List<Object?> get props => [mode];
+}
+
+/// Existing backups were found in Local and/or Google Drive.
+final class OnboardingRestoreAvailable extends OnboardingState {
+  const OnboardingRestoreAvailable({
+    required this.mode,
+    required this.discovery,
+    this.selectedSource,
+    this.needsOldPin = false,
+    this.errorMessage,
+  });
+
+  final UserMode mode;
+  final OnboardingBackupDiscovery discovery;
+  final OnboardingRestoreSource? selectedSource;
+  final bool needsOldPin;
+  final String? errorMessage;
+
+  @override
+  List<Object?> get props => [
+    mode,
+    discovery,
+    selectedSource,
+    needsOldPin,
+    errorMessage,
+  ];
+}
+
+/// Restoring chat backup (with progress) and vault key; photo restore runs in background.
+final class OnboardingRestoringBackup extends OnboardingState {
+  const OnboardingRestoringBackup({
+    required this.mode,
+    required this.source,
+    this.chatProgress,
+    this.restoreChat = true,
+  });
+
+  final UserMode mode;
+  final OnboardingRestoreSource source;
+  final ChatRestoreProgress? chatProgress;
+  final bool restoreChat;
+
+  @override
+  List<Object?> get props => [mode, source, chatProgress, restoreChat];
+}
+
 /// Vault creation is in progress — show animated progress UI.
 final class OnboardingCreatingVault extends OnboardingState {
   const OnboardingCreatingVault({
@@ -108,20 +162,30 @@ enum VaultCreationStep {
   done,
 }
 
-/// Vault created successfully. Navigation to gallery happens in this state.
+/// Vault created successfully. Navigation to chat happens in this state.
 final class OnboardingVaultCreated extends OnboardingState {
   const OnboardingVaultCreated({
     required this.mode,
     required this.vaultId,
     this.vmkBackupPending = false,
+    this.restoredMessages = 0,
+    this.backgroundPhotoRestoreStarted = false,
   });
   final UserMode mode;
   final String vaultId;
 
   /// True when Google VMK backup was attempted but failed — show a warning.
   final bool vmkBackupPending;
+  final int restoredMessages;
+  final bool backgroundPhotoRestoreStarted;
   @override
-  List<Object?> get props => [mode, vaultId, vmkBackupPending];
+  List<Object?> get props => [
+    mode,
+    vaultId,
+    vmkBackupPending,
+    restoredMessages,
+    backgroundPhotoRestoreStarted,
+  ];
 }
 
 /// Terminal error state. [canRetry] controls whether the UI shows a retry.

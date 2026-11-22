@@ -1,8 +1,10 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import '../../domain/entities/app_note.dart';
 import '../../domain/entities/chat_message.dart';
 import '../../domain/repositories/notes_repository.dart';
 import '../screens/note_editor_screen.dart';
+import 'rich_note_controller.dart';
 import 'package:photo_vault/core/presentation/theme/app_spacing.dart';
 
 /// Interactive chat bubble displaying a shared note or checklist.
@@ -27,29 +29,63 @@ class SharedNoteBubble extends StatefulWidget {
 class _SharedNoteBubbleState extends State<SharedNoteBubble> {
   AppNote? _note;
   bool _loading = true;
+  StreamSubscription<AppNote?>? _noteSub;
+  Stream<List<String>>? _editorsStream;
 
   @override
   void initState() {
     super.initState();
-    _loadNote();
+    _subscribeNote();
   }
 
-  Future<void> _loadNote() async {
+  @override
+  void didUpdateWidget(covariant SharedNoteBubble oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.message.sharedNoteId != widget.message.sharedNoteId ||
+        oldWidget.message.threadId != widget.message.threadId) {
+      _subscribeNote();
+    }
+  }
+
+  @override
+  void dispose() {
+    _noteSub?.cancel();
+    super.dispose();
+  }
+
+  void _subscribeNote() {
+    _noteSub?.cancel();
+    _noteSub = null;
     final noteId = widget.message.sharedNoteId;
     if (noteId == null || noteId.isEmpty) {
-      if (mounted) setState(() => _loading = false);
+      if (mounted) {
+        setState(() {
+          _note = null;
+          _loading = false;
+        });
+      }
       return;
     }
 
-    final note = await widget.notesRepository.getThreadNote(
+    _editorsStream = widget.notesRepository.watchThreadNoteEditors(
       threadId: widget.message.threadId,
       noteId: noteId,
     );
-    if (!mounted) return;
-    setState(() {
-      _note = note;
-      _loading = false;
-    });
+    _noteSub = widget.notesRepository
+        .watchThreadNote(threadId: widget.message.threadId, noteId: noteId)
+        .listen(
+          (note) {
+            if (!mounted) return;
+            setState(() {
+              _note = note;
+              _loading = false;
+            });
+          },
+          onError: (_) {
+            if (!mounted) return;
+            setState(() => _loading = false);
+          },
+        );
   }
 
   void _openEditor() {
@@ -71,7 +107,7 @@ class _SharedNoteBubbleState extends State<SharedNoteBubble> {
     );
   }
 
-  void _toggleItem(ChecklistItem item) async {
+  Future<void> _toggleItem(ChecklistItem item) async {
     final note = _note;
     if (note == null) return;
 
@@ -94,7 +130,19 @@ class _SharedNoteBubbleState extends State<SharedNoteBubble> {
     );
 
     setState(() => _note = updatedNote);
-    await widget.notesRepository.saveThreadNote(updatedNote);
+    try {
+      final saved = await widget.notesRepository.saveThreadNote(
+        updatedNote,
+        baseNote: note,
+      );
+      if (mounted) {
+        setState(() => _note = saved);
+      }
+    } on NoteDeletedException {
+      if (mounted) {
+        setState(() => _note = null);
+      }
+    }
   }
 
   @override
@@ -190,6 +238,38 @@ class _SharedNoteBubbleState extends State<SharedNoteBubble> {
                 ),
               ],
             ),
+            if (_editorsStream != null)
+              StreamBuilder<List<String>>(
+                stream: _editorsStream,
+                builder: (context, snapshot) {
+                  final hasOtherEditor =
+                      snapshot.data?.any(
+                        (uid) => uid != widget.currentUserId,
+                      ) ??
+                      false;
+                  if (!hasOtherEditor) return const SizedBox.shrink();
+                  return Padding(
+                    padding: const EdgeInsets.only(top: AppSpacing.xs),
+                    child: Row(
+                      children: [
+                        Icon(
+                          Icons.edit_outlined,
+                          size: 12,
+                          color: theme.colorScheme.primary,
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          'Editing now',
+                          style: theme.textTheme.labelSmall?.copyWith(
+                            color: theme.colorScheme.primary,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              ),
             if (isChecklist) ...[
               const SizedBox(height: AppSpacing.sm),
               ClipRRect(
@@ -260,14 +340,25 @@ class _SharedNoteBubbleState extends State<SharedNoteBubble> {
                 ),
             ] else ...[
               const SizedBox(height: AppSpacing.xs),
-              Text(
-                note.content.isNotEmpty ? note.content : 'Tap to write note…',
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
+              if (note.content.isNotEmpty)
+                RichNoteTextEditingController.buildReadOnlyRichText(
+                  context,
+                  text: note.content,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                  maxLines: 3,
+                  overflow: TextOverflow.ellipsis,
+                )
+              else
+                Text(
+                  'Tap to write note…',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                  maxLines: 3,
+                  overflow: TextOverflow.ellipsis,
                 ),
-                maxLines: 3,
-                overflow: TextOverflow.ellipsis,
-              ),
             ],
           ],
         ),

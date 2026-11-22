@@ -30,9 +30,14 @@ import java.util.concurrent.TimeUnit
 object ChatUploadRuntime {
     private val gate = Any()
     private val running = mutableMapOf<String, UploadTask>()
+    private val activeDrain = java.util.concurrent.atomic.AtomicBoolean(false)
+    fun isDraining(): Boolean = activeDrain.get()
     fun <T> locked(action: () -> T): T = synchronized(gate) { action() }
     fun interrupt(id: String, destructive: Boolean = false) {
-        running[id]?.let { if (destructive) it.cancel() else it.pause() }
+        running[id]?.let {
+            if (destructive) it.cancel()
+            else if (!it.isComplete && !it.isPaused) it.pause()
+        }
     }
 
     fun drain(context: Context, shouldStop: () -> Boolean = { false },
@@ -43,6 +48,8 @@ object ChatUploadRuntime {
             RandomAccessFile(java.io.File(store.directory, "owner.lock"), "rw").use { owner ->
                 val claim = try { owner.channel.tryLock() } catch (_: java.nio.channels.OverlappingFileLockException) { null }
                 if (claim == null) return false
+                activeDrain.set(true)
+                try {
                 claim.use {
                     locked { store.reconcile() }
                     val uid = FirebaseAuth.getInstance().currentUser?.uid ?: return true
@@ -120,12 +127,21 @@ object ChatUploadRuntime {
                             }
                         } finally {
                             locked {
-                                running[id]?.let { if (it.isComplete || it.isPaused) running.remove(id) }
+                                running[id]?.let {
+                                    val currentState = store.get(id)?.optString("state")
+                                    if (it.isComplete || it.isPaused ||
+                                        currentState == "paused" || currentState == "cancelled") {
+                                        running.remove(id)
+                                    }
+                                }
                             }
                         }
                     }
                     }
                     return !retry
+                }
+                } finally {
+                    activeDrain.set(false)
                 }
             }
         }
@@ -232,7 +248,7 @@ object ChatUploadRuntime {
                     progress(current)
                 } catch (_: IllegalStateException) {
                     if (store.get(id)?.optString("state") == "cancelled") task.cancel()
-                    else task.pause()
+                    else if (!task.isComplete && !task.isPaused) task.pause()
                 }
             }
         }
@@ -250,7 +266,7 @@ object ChatUploadRuntime {
             // request. Let the in-flight request settle before another owner
             // reattaches to the saved session.
             if (locked { store.get(id)?.optString("state") == "cancelled" }) task.cancel()
-            else if (!task.isComplete) task.pause()
+            else if (!task.isComplete && !task.isPaused) task.pause()
             val pauseDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(35)
             while (!task.isComplete && !task.isPaused && System.nanoTime() < pauseDeadline) {
                 Thread.sleep(25)
@@ -383,13 +399,19 @@ class ChatUploadWorker(context: Context, parameters: WorkerParameters) : Worker(
                 android.util.Log.d("ChatUploads", "Foreground info skipped; continuing in background: ${fgsError.message}")
             }
         }
+        if (!pending) return Result.success()
+        if (ChatUploadRuntime.isDraining()) {
+            // ChatUploadService is already draining in this process and will
+            // re-scan the store before exiting; avoid triggering WorkManager backoff.
+            return Result.success()
+        }
         if (ChatUploadRuntime.drain(applicationContext, { isStopped }) { job ->
             try {
                 applicationContext.getSystemService(NotificationManager::class.java).notify(4727,
                     ChatUploadNotifications.build(applicationContext,
                         "${job.optLong("processedBytes")} / ${job.optLong("totalBytes")} bytes", job.getString("messageId")))
             } catch (_: Exception) {}
-        }) Result.success() else Result.retry()
+        }) Result.success() else if (ChatUploadRuntime.isDraining()) Result.success() else Result.retry()
     } catch (error: Exception) {
         android.util.Log.e("ChatUploads", "Encrypted upload journal unavailable: ${error.javaClass.simpleName}")
         if (runAttemptCount < 8) Result.retry() else Result.failure()
@@ -430,7 +452,18 @@ class ChatUploadService : Service() {
             } } catch (error: Exception) {
                 android.util.Log.e("ChatUploads", "Encrypted upload service interrupted: ${error.javaClass.simpleName}")
             } finally {
-                ChatUploadPlugin.schedule(this)
+                val nextDelay = ChatUploadRuntime.locked {
+                    val uid = FirebaseAuth.getInstance().currentUser?.uid ?: return@locked null
+                    ChatUploadStore(this).use { store ->
+                        val now = System.currentTimeMillis()
+                        store.all()
+                            .filter { it.getString("senderId") == uid && ChatUploadPolicy.runnable(it.getString("state")) }
+                            .minOfOrNull { (it.optLong("eligibleAt") - now).coerceAtLeast(0L) }
+                    }
+                }
+                if (nextDelay != null) {
+                    ChatUploadPlugin.schedule(this, nextDelay)
+                }
                 stopForeground(STOP_FOREGROUND_REMOVE); stopSelf(startId)
             }
         }

@@ -138,6 +138,16 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Explore'), findsOneWidget);
     expect(find.text('My stickers'), findsOneWidget);
+    final sourceSelector = find.byKey(
+      const ValueKey('sticker-source-selector'),
+    );
+    expect(sourceSelector, findsOneWidget);
+    final selectorRect = tester.getRect(sourceSelector);
+    expect(selectorRect.width, lessThan(240));
+    expect(
+      selectorRect.center.dx,
+      closeTo(tester.getRect(find.byType(ChatMediaPickerPanel)).center.dx, 3),
+    );
     expect(tester.getRect(find.text('Explore')).height, lessThan(20));
     expect(tester.getRect(find.text('My stickers')).height, lessThan(20));
     expect(

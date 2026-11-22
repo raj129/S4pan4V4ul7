@@ -7,6 +7,7 @@ import '../../state/onboarding_cubit.dart';
 import '../../state/onboarding_state.dart';
 import 'package:photo_vault/core/presentation/theme/app_colors.dart';
 import 'package:photo_vault/core/presentation/theme/app_spacing.dart';
+import 'onboarding_wizard_header.dart';
 
 /// Screen 7: Vault creation progress screen.
 ///
@@ -44,6 +45,10 @@ class VaultCreationScreen extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
+                  const OnboardingWizardHeader(
+                    currentStep: 4,
+                    stepLabel: 'Finalizing Setup',
+                  ),
                   Expanded(
                     child: SingleChildScrollView(
                       child: Column(

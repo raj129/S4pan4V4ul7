@@ -90,6 +90,9 @@ dependencies:
   file_picker: ^13.1.0
   open_filex: ^5.0.0
   shared_preferences: ^2.5.6
+  # 2.5.x uses a process-global JNI registrar that can be cleared when a
+  # secondary Flutter background engine (Firebase Messaging) detaches.
+  shared_preferences_android: 2.4.28
   provider: ^6.1.5+1
   android_chat_downloads:
     path: packages/android_chat_downloads

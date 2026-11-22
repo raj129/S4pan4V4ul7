@@ -473,8 +473,9 @@ class _ImportScreenState extends State<ImportScreen> {
                                       'Save to vault',
                                       overflow: TextOverflow.ellipsis,
                                     ),
-                                    onPressed:
-                                        _isQueueing ? null : _startImport,
+                                    onPressed: _isQueueing
+                                        ? null
+                                        : _startImport,
                                   ),
                                 ),
                               ],

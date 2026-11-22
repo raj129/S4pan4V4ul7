@@ -15,6 +15,8 @@ class StorageKeys {
       'settings.incoming_chat_alert_text';
   static const String incomingChatAlertTitle =
       'settings.incoming_chat_alert_title';
+  static const String incomingChatAlertPreferences =
+      'settings.incoming_chat_alert_preferences';
   static const String backgroundLocationAlertTitle =
       'settings.background_location_alert_title';
   static const String backgroundLocationAlertText =
@@ -30,10 +32,28 @@ class StorageKeys {
       'settings.external_storage_mirror_enabled';
   static const String driveEncryptedBackupEnabled =
       'settings.drive_encrypted_backup_enabled';
+  static const String backupChatsEnabled = 'settings.backup_chats_enabled';
+  static const String backupVaultPhotosEnabled =
+      'settings.backup_vault_photos_enabled';
+  static const String backupSettingsEnabled =
+      'settings.backup_settings_enabled';
+  static const String backupCloudEnabled = 'settings.backup_cloud_enabled';
+  static const String backupWifiOnly = 'settings.backup_wifi_only';
+  static const String lastVaultPhotoBackupAt =
+      'settings.last_vault_photo_backup_at';
+  static const String lastSettingsBackupAt =
+      'settings.last_settings_backup_at';
+  static const String lastVaultPhotoBackupVaultId =
+      'settings.last_vault_photo_backup_vault_id';
+  static const String vaultPhotoBackupCloudPending =
+      'settings.vault_photo_backup_cloud_pending';
+  static const String legacyPhotoSyncMigrated =
+      'settings.legacy_photo_sync_migrated';
   static const String chatImageQuality = 'settings.chat_image_quality';
   static const String themePalette = 'settings.theme_palette';
   static const String themeMode = 'settings.theme_mode';
   static const String mockLocationPrefs = 'settings.mock_location_prefs';
+  static const String secretEntryConfig = 'settings.secret_entry_config';
   static const String unlockFailures = 'vault.unlock_failures';
   static const String unlockLockedUntil = 'vault.unlock_locked_until';
 }

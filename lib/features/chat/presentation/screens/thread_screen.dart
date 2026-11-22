@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 
 import '../../application/media/chat_share_inbox.dart';
 import '../../application/media/chat_camera_recovery.dart';
@@ -52,16 +53,19 @@ import '../../domain/repositories/notes_repository.dart';
 import '../screens/notes_screen.dart';
 import 'package:photo_vault/features/vault/domain/repositories/settings_repository.dart';
 import 'package:photo_vault/core/widgets/app_state_views.dart';
+import '../widgets/chat_attachment_panel.dart';
+import '../widgets/composer_panel_host.dart';
 import '../state/active_thread_cubit.dart';
 import '../state/thread_list_cubit.dart';
 import 'package:photo_vault/core/presentation/theme/app_colors.dart';
 import 'package:photo_vault/core/presentation/theme/app_spacing.dart';
 import '../widgets/chat_day_divider.dart';
 import '../widgets/chat_media_preview.dart';
+import '../widgets/media_editor/media_editor_models.dart';
+import 'chat_media_editor_screen.dart';
 import '../widgets/chat_scrollbar.dart';
 import '../widgets/chat_wallpaper.dart';
-import '../widgets/image_quality_sheet.dart';
-import '../widgets/video_quality_sheet.dart';
+
 import '../widgets/contact_info_sheet.dart';
 import '../widgets/data_sms_number_dialog.dart';
 import '../widgets/message_bubble.dart';
@@ -191,12 +195,9 @@ class _ThreadScreenState extends State<ThreadScreen>
   final _secureMedia = const AndroidChatSecureMediaService();
   final _uuid = const Uuid();
   final _inputFocus = FocusNode();
-  final _pickerInputFocus = FocusNode();
-  final _emojiPickerController = ChatMediaPickerSheetController();
+  final _panelController = ComposerPanelController();
 
-  bool _showEmojiPicker = false;
   bool _useDataSms = false;
-  Future<void>? _emojiPickerRoute;
   bool _searching = false;
   final _searchCtrl = TextEditingController();
   ChatMessage? _editingMessage;
@@ -269,6 +270,7 @@ class _ThreadScreenState extends State<ThreadScreen>
   void _toggleMessageSelection(String messageId) {
     if (_searching) _stopSearch();
     _inputFocus.unfocus();
+    _panelController.closePanel();
     setState(() {
       if (_selectedMessageIds.contains(messageId)) {
         _selectedMessageIds.remove(messageId);
@@ -587,9 +589,27 @@ class _ThreadScreenState extends State<ThreadScreen>
 
     final images = shared.where((f) => !isVideo(f)).toList();
     final videos = shared.where(isVideo).toList();
-    if (images.isNotEmpty) await _sendImages(cubit, images, messenger);
+    final editorItems = <MediaEditorItem>[];
+    for (final image in images) {
+      if (await image.length() > ActiveThreadCubit.maxAttachmentBytes) {
+        messenger.showSnackBar(
+          const SnackBar(
+            content: Text('Attachments must be smaller than 64 MB.'),
+          ),
+        );
+        continue;
+      }
+      editorItems.add(
+        MediaEditorItem(
+          id: _uuid.v4(),
+          originalBytes: Uint8List.fromList(await image.readAsBytes()),
+          isVideo: false,
+          filename: image.name,
+          sourceUri: _originalSourceUri(image),
+        ),
+      );
+    }
     for (final video in videos) {
-      if (!mounted) return;
       if (await video.length() > ActiveThreadCubit.maxAttachmentBytes) {
         messenger.showSnackBar(
           const SnackBar(
@@ -598,41 +618,63 @@ class _ThreadScreenState extends State<ThreadScreen>
         );
         continue;
       }
-      final bytes = Uint8List.fromList(await video.readAsBytes());
-      try {
-        if (!mounted) return;
-        await cubit.sendMedia(
-          messageId: _uuid.v4(),
-          rawBytes: bytes,
-          type: MessageType.video,
+      editorItems.add(
+        MediaEditorItem(
+          id: _uuid.v4(),
+          originalBytes: Uint8List.fromList(await video.readAsBytes()),
+          isVideo: true,
+          filename: video.name,
           sourceUri: _originalSourceUri(video),
-        );
-      } finally {
-        bytes.fillRange(0, bytes.length, 0);
-      }
+        ),
+      );
     }
-  }
-
-  Future<void> _dismissEmojiSheet({bool focusComposer = false}) async {
-    if (!_showEmojiPicker) return;
-    setState(() => _showEmojiPicker = false);
-    final pickerRoute = _emojiPickerRoute;
-    _emojiPickerController.close();
-    if (pickerRoute != null) await pickerRoute;
-    if (focusComposer && mounted) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) {
-          _inputFocus.requestFocus();
-        }
-      });
+    if (editorItems.isEmpty || !mounted) return;
+    try {
+      final result = await _openMediaEditor(cubit, editorItems);
+      if (result == null || !mounted) return;
+      final editedImages = result.items.where((i) => !i.isVideo).toList();
+      final editedVideos = result.items.where((i) => i.isVideo).toList();
+      if (editedImages.isNotEmpty) {
+        await cubit.sendMultipleImages(
+          items: editedImages
+              .map(
+                (i) => OutgoingImageItem(
+                  messageId: i.id,
+                  bytes: i.bytes,
+                  filename: i.filename,
+                  sourceUri: i.sourceUri,
+                  sourceFlags: i.sourceFlags,
+                ),
+              )
+              .toList(growable: false),
+          quality: result.imageQuality,
+        );
+      }
+      if (editedVideos.isNotEmpty) {
+        await cubit.sendMultipleVideos(
+          items: editedVideos
+              .map(
+                (i) => OutgoingVideoItem(
+                  messageId: i.id,
+                  bytes: i.bytes,
+                  filename: i.filename,
+                  sourceUri: i.sourceUri,
+                  sourceFlags: i.sourceFlags,
+                ),
+              )
+              .toList(growable: false),
+          quality: result.videoQuality,
+        );
+      }
+    } finally {
+      for (final item in editorItems) {
+        item.originalBytes.fillRange(0, item.originalBytes.length, 0);
+      }
     }
   }
 
   void _onTextControllerChanged() {
     _hasText.value = _textCtrl.text.trim().isNotEmpty;
-    if (_showEmojiPicker && _inputFocus.hasFocus) {
-      unawaited(_dismissEmojiSheet(focusComposer: true));
-    }
     if (!_isEditing && !_restoringDraft && !_suppressDraftChanges) {
       _scheduleDraftSave();
     }
@@ -831,8 +873,8 @@ class _ThreadScreenState extends State<ThreadScreen>
       widget.profileService?.nameFor(user) ?? user.displayName;
 
   void _onInputFocusChanged() {
-    if (_inputFocus.hasFocus && _showEmojiPicker && mounted) {
-      unawaited(_dismissEmojiSheet(focusComposer: true));
+    if (mounted) {
+      _panelController.handleInputFocusChanged(_inputFocus.hasFocus);
     }
   }
 
@@ -873,7 +915,10 @@ class _ThreadScreenState extends State<ThreadScreen>
     widget.vaultBridge.vaultSessionChanges.removeListener(
       _recoverOnVaultUnlock,
     );
-    widget.notificationService?.setActiveThread(null);
+    if (widget.notificationService?.isActiveThread(widget.thread.threadId) ==
+        true) {
+      widget.notificationService!.setActiveThread(null);
+    }
     _textCtrl.removeListener(_onTextControllerChanged);
     _itemPositions.itemPositions.removeListener(_onScroll);
     _scrollbarHide?.cancel();
@@ -888,7 +933,7 @@ class _ThreadScreenState extends State<ThreadScreen>
     _textCtrl.dispose();
     _searchCtrl.dispose();
     _inputFocus.dispose();
-    _pickerInputFocus.dispose();
+    _panelController.dispose();
     super.dispose();
   }
 
@@ -990,13 +1035,20 @@ class _ThreadScreenState extends State<ThreadScreen>
           },
         ),
       ],
-      child: PopScope(
-        canPop: !_isSelectionMode,
-        onPopInvokedWithResult: (didPop, _) {
-          if (!didPop && _isSelectionMode) {
-            _clearMessageSelection();
-          }
-        },
+      child: AnimatedBuilder(
+        animation: _panelController,
+        builder: (context, child) => PopScope(
+          canPop: !_isSelectionMode && !_panelController.isOpen,
+          onPopInvokedWithResult: (didPop, _) {
+            if (didPop) return;
+            if (_isSelectionMode) {
+              _clearMessageSelection();
+            } else if (_panelController.isOpen) {
+              _panelController.closePanel();
+            }
+          },
+          child: child!,
+        ),
         child: Scaffold(
           appBar: _buildAppBar(context),
           body: Column(
@@ -1036,7 +1088,15 @@ class _ThreadScreenState extends State<ThreadScreen>
                 ),
               ),
               _buildOfflineBanner(),
-              if (!_isSelectionMode) _buildComposerSurface(context),
+              if (!_isSelectionMode)
+                AnimatedBuilder(
+                  animation: _panelController,
+                  builder: (context, _) => _buildComposerSurface(
+                    context,
+                    applyBottomSafeArea: !_panelController.isOpen,
+                  ),
+                ),
+              if (!_isSelectionMode) _buildBottomPanelHost(context),
             ],
           ),
         ),
@@ -1352,7 +1412,6 @@ class _ThreadScreenState extends State<ThreadScreen>
   void _cancelEdit() {
     if (!_isEditing) return;
     final draft = _draftBeforeEdit ?? '';
-    final keepEmojiPickerOpen = _emojiPickerRoute != null;
     _draftBeforeEdit = null;
     setState(() {
       _editingMessage = null;
@@ -1364,10 +1423,7 @@ class _ThreadScreenState extends State<ThreadScreen>
       );
       _restoringDraft = false;
       _hasText.value = draft.trim().isNotEmpty;
-      _showEmojiPicker = keepEmojiPickerOpen;
-      if (keepEmojiPickerOpen) {
-        _pickerInputFocus.unfocus();
-      } else {
+      if (!_panelController.isOpen) {
         _inputFocus.unfocus();
       }
     });
@@ -1599,7 +1655,9 @@ class _ThreadScreenState extends State<ThreadScreen>
                           msg.isGeoShare
                       ? null
                       : () => _promptForward(msg),
-                  onRetry: msg.status == MessageStatus.failed
+                  onRetry:
+                      msg.status == MessageStatus.failed ||
+                          sendStatus?.lifecycle == MediaUploadLifecycle.failed
                       ? () => cubit.retryMessage(msg.messageId)
                       : null,
                   onDiscard: msg.status == MessageStatus.failed
@@ -1946,9 +2004,9 @@ class _ThreadScreenState extends State<ThreadScreen>
       _textCtrl.selection = TextSelection.fromPosition(
         TextPosition(offset: _textCtrl.text.length),
       );
-      _showEmojiPicker = false;
       _hasText.value = _textCtrl.text.trim().isNotEmpty;
     });
+    _panelController.closePanel();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _inputFocus.requestFocus();
     });
@@ -2721,7 +2779,6 @@ class _ThreadScreenState extends State<ThreadScreen>
   Widget _buildComposerSurface(
     BuildContext context, {
     bool applyBottomSafeArea = true,
-    FocusNode? inputFocusNode,
   }) {
     final cs = Theme.of(context).colorScheme;
     return DecoratedBox(
@@ -2742,7 +2799,6 @@ class _ThreadScreenState extends State<ThreadScreen>
           _buildInputBar(
             context,
             applyBottomSafeArea: applyBottomSafeArea,
-            inputFocusNode: inputFocusNode,
           ),
         ],
       ),
@@ -2759,9 +2815,7 @@ class _ThreadScreenState extends State<ThreadScreen>
         }
         await cubit.dataSms!.enable();
         if (!mounted) return;
-        if (_showEmojiPicker) {
-          await _dismissEmojiSheet(focusComposer: false);
-        }
+        _panelController.closePanel();
         cubit.clearReplyTarget();
         unawaited(cubit.setTyping(false));
       } catch (error) {
@@ -2880,12 +2934,12 @@ class _ThreadScreenState extends State<ThreadScreen>
   Widget _buildInputBar(
     BuildContext context, {
     bool applyBottomSafeArea = true,
-    FocusNode? inputFocusNode,
   }) {
     final cs = Theme.of(context).colorScheme;
     final cubit = context.read<ActiveThreadCubit>();
-    final composerFocusNode = inputFocusNode ?? _inputFocus;
     final canUseSms = cubit.dataSms != null && !_isEditing;
+    final emojiOpen = _panelController.isEmojiOpen;
+    final attachmentOpen = _panelController.isAttachmentOpen;
     return SafeArea(
       top: false,
       bottom: applyBottomSafeArea,
@@ -2900,10 +2954,10 @@ class _ThreadScreenState extends State<ThreadScreen>
           crossAxisAlignment: CrossAxisAlignment.end,
           children: [
             _ComposerAction(
-              icon: _showEmojiPicker
+              icon: emojiOpen
                   ? Icons.keyboard_outlined
                   : Icons.emoji_emotions_outlined,
-              tooltip: _showEmojiPicker
+              tooltip: emojiOpen
                   ? 'Keyboard'
                   : 'Emoji, stickers, and GIFs',
               onPressed: _useDataSms ? null : _toggleEmojiPicker,
@@ -2936,15 +2990,15 @@ class _ThreadScreenState extends State<ThreadScreen>
                         Expanded(
                           child: TextField(
                             controller: _textCtrl,
-                            focusNode: composerFocusNode,
+                            focusNode: _inputFocus,
                             maxLines: 5,
                             minLines: 1,
                             textCapitalization: TextCapitalization.sentences,
                             style: Theme.of(context).textTheme.bodyLarge,
                             onTap: () {
-                              if (_showEmojiPicker) {
-                                unawaited(
-                                  _dismissEmojiSheet(focusComposer: true),
+                              if (_panelController.isOpen) {
+                                _panelController.switchToKeyboard(
+                                  inputFocus: _inputFocus,
                                 );
                               }
                             },
@@ -2986,7 +3040,9 @@ class _ThreadScreenState extends State<ThreadScreen>
                           )
                         else
                           _ComposerAction(
-                            icon: Icons.add_rounded,
+                            icon: attachmentOpen
+                                ? Icons.close_rounded
+                                : Icons.add_rounded,
                             tooltip: 'Attach',
                             onPressed: () => _pickMedia(context),
                           ),
@@ -3278,18 +3334,28 @@ class _ThreadScreenState extends State<ThreadScreen>
           if (attach == false) {
             await recovery.remove(uid, thread, id);
           } else if (attach == true) {
-            final quality = await _askImageQuality(
-              bytes.length,
-              imageBytes: bytes,
+            final result = await _openMediaEditor(
+              cubit,
+              [
+                MediaEditorItem(
+                  id: id,
+                  originalBytes: bytes,
+                  isVideo: false,
+                ),
+              ],
             );
-            if (quality == null || !mounted || !widget.vaultBridge.isUnlocked) {
+            if (result == null ||
+                result.items.isEmpty ||
+                !mounted ||
+                !widget.vaultBridge.isUnlocked) {
               continue;
             }
+            final edited = result.items.first;
             await cubit.sendMedia(
               messageId: id,
-              rawBytes: bytes,
+              rawBytes: edited.bytes,
               type: MessageType.image,
-              quality: quality,
+              quality: result.imageQuality,
               propagateFailure: true,
             );
             await recovery.remove(uid, thread, id);
@@ -3515,68 +3581,70 @@ class _ThreadScreenState extends State<ThreadScreen>
     }
   }
 
-  Future<void> _toggleEmojiPicker() async {
-    if (_showEmojiPicker) {
-      await _dismissEmojiSheet(focusComposer: true);
-      return;
-    }
-    _inputFocus.unfocus();
-    setState(() => _showEmojiPicker = true);
+  Widget _buildBottomPanelHost(BuildContext context) {
     final cubit = context.read<ActiveThreadCubit>();
-    final pickerRoute = showChatMediaPickerSheet(
-      context,
-      stickerPack: _stickerPackFor(cubit.myUid),
-      controller: _emojiPickerController,
-      composer: ValueListenableBuilder<bool>(
-        valueListenable: _editingMode,
-        builder: (_, _, _) => BlocProvider.value(
-          value: cubit,
-          child: _buildComposerSurface(
-            context,
-            applyBottomSafeArea: false,
-            inputFocusNode: _pickerInputFocus,
-          ),
+    final attachmentOptions = defaultChatAttachmentOptions(
+      includeAndroidLocationOptions: Platform.isAndroid,
+    );
+    final attachmentHeight = ChatAttachmentPanel.preferredHeight(
+      optionCount: attachmentOptions.length,
+      maxWidth: MediaQuery.sizeOf(context).width,
+    );
+    return ComposerPanelHost(
+      controller: _panelController,
+      attachmentHeight: attachmentHeight,
+      emojiBuilder: (context, height) => ChatMediaPickerPanel(
+        stickerPack: _stickerPackFor(cubit.myUid),
+        onDragDelta: (deltaY) {
+          final maxHeight = math.max(
+            ComposerPanelController.minPanelHeight,
+            MediaQuery.sizeOf(context).height * 0.72,
+          );
+          _panelController.adjustEmojiHeight(
+            deltaY,
+            maxAvailableHeight: maxHeight,
+          );
+        },
+        buildEmojiPicker: (pickerHeight, pickerKey) => ThemedEmojiPicker(
+          pickerKey: pickerKey,
+          textEditingController: _textCtrl,
+          height: pickerHeight,
+          searchHeight: pickerHeight * 0.7,
+          showSearchButton: false,
+          showBackspace: false,
+          columns: 9,
+          onEmojiSelected: (category, emoji) {
+            cubit.onTextChanged(_textCtrl.text);
+          },
         ),
+        onSend: (bytes, type, fileName) => cubit.sendMedia(
+          messageId: _uuid.v4(),
+          rawBytes: bytes,
+          type: type,
+          filename: fileName,
+          propagateFailure: true,
+          scrollToLatest: _isNearLatest(),
+        ),
+        onInsertEmoji: _insertEmoji,
+        onBackspace: _backspaceComposerText,
       ),
-      buildEmojiPicker: (height, pickerKey) => ThemedEmojiPicker(
-        pickerKey: pickerKey,
-        textEditingController: _textCtrl,
-        height: height,
-        searchHeight: height * 0.7,
-        showSearchButton: false,
-        showBackspace: false,
-        columns: 9,
-        onEmojiSelected: (category, emoji) {
-          context.read<ActiveThreadCubit>().onTextChanged(_textCtrl.text);
+      attachmentBuilder: (context) => ChatAttachmentPanel(
+        options: defaultChatAttachmentOptions(
+          includeAndroidLocationOptions: Platform.isAndroid,
+        ),
+        onSelect: (choice) {
+          _panelController.closePanel();
+          unawaited(_handleAttachmentChoice(context, choice));
         },
       ),
-      onSend: (bytes, type, fileName) => cubit.sendMedia(
-        messageId: _uuid.v4(),
-        rawBytes: bytes,
-        type: type,
-        filename: fileName,
-        propagateFailure: true,
-        scrollToLatest: _isNearLatest(),
-      ),
-      onInsertEmoji: _insertEmoji,
-      onBackspace: _backspaceComposerText,
     );
-    _emojiPickerRoute = pickerRoute;
-    try {
-      await pickerRoute;
-    } finally {
-      if (identical(_emojiPickerRoute, pickerRoute)) {
-        _emojiPickerRoute = null;
-      }
-      if (mounted) {
-        setState(() => _showEmojiPicker = false);
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted && !_isEditing) {
-            _inputFocus.requestFocus();
-          }
-        });
-      }
-    }
+  }
+
+  void _toggleEmojiPicker() {
+    _panelController.togglePanel(
+      ComposerPanel.emoji,
+      inputFocus: _inputFocus,
+    );
   }
 
   void _insertEmoji(String emoji) {
@@ -3634,141 +3702,21 @@ class _ThreadScreenState extends State<ThreadScreen>
     return _stickerPackRepository!;
   }
 
-  Future<void> _pickMedia(BuildContext context) async {
+  void _pickMedia(BuildContext context) {
+    _panelController.togglePanel(
+      ComposerPanel.attachment,
+      inputFocus: _inputFocus,
+    );
+  }
+
+  Future<void> _handleAttachmentChoice(
+    BuildContext context,
+    String choice,
+  ) async {
     // Capture before any await to satisfy use_build_context_synchronously.
     final cubit = context.read<ActiveThreadCubit>();
     final messenger = ScaffoldMessenger.of(context);
-    final choice = await showModalBottomSheet<String>(
-      context: context,
-      showDragHandle: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      builder: (sheetContext) {
-        final options =
-            <({IconData icon, String label, Color color, String choice})>[
-              (
-                icon: Icons.photo_library_rounded,
-                label: 'Gallery',
-                color: const Color(0xFF7C4DFF),
-                choice: 'photo',
-              ),
-              (
-                icon: Icons.camera_alt_rounded,
-                label: 'Camera',
-                color: const Color(0xFFE91E63),
-                choice: 'camera',
-              ),
-              (
-                icon: Icons.lock_rounded,
-                label: 'From Vault',
-                color: const Color(0xFFFF9800),
-                choice: 'vault',
-              ),
-              (
-                icon: Icons.videocam_rounded,
-                label: 'Video',
-                color: const Color(0xFF2196F3),
-                choice: 'video',
-              ),
-              (
-                icon: Icons.video_camera_back_rounded,
-                label: 'Record Video',
-                color: const Color(0xFF00A896),
-                choice: 'recordVideo',
-              ),
-              (
-                icon: Icons.insert_drive_file_rounded,
-                label: 'Files, GIFs & HDR media',
-                color: const Color(0xFF009688),
-                choice: 'document',
-              ),
-              (
-                icon: Icons.mic_rounded,
-                label: 'Audio',
-                color: const Color(0xFFFF5722),
-                choice: 'audio',
-              ),
-              (
-                icon: Icons.folder_special_rounded,
-                label: 'Saved Files',
-                color: const Color(0xFF673AB7),
-                choice: 'saved',
-              ),
-              (
-                icon: Icons.library_books_outlined,
-                label: 'Notes & Lists',
-                color: const Color(0xFF607D8B),
-                choice: 'notes',
-              ),
-            ];
-        if (Platform.isAndroid) {
-          options.addAll([
-            (
-              icon: Icons.location_on_rounded,
-              label: 'Live Location',
-              color: const Color(0xFF4CAF50),
-              choice: 'liveLocation',
-            ),
-            (
-              icon: Icons.pin_drop_rounded,
-              label: 'Pin / Route',
-              color: const Color(0xFFE53935),
-              choice: 'pinRoute',
-            ),
-            (
-              icon: Icons.notifications_active_rounded,
-              label: 'Arrival alert',
-              color: const Color(0xFF3949AB),
-              choice: 'arrival',
-            ),
-          ]);
-        }
-
-        return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.only(bottom: 16),
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                final columns = constraints.maxWidth >= 600
-                    ? (options.length + 1) ~/ 2
-                    : (options.length + 2) ~/ 3;
-                final rows = (options.length + columns - 1) ~/ columns;
-                final desiredHeight = (rows * 112 + (rows - 1) * 8).toDouble();
-                final gridHeight =
-                    constraints.maxHeight.isFinite &&
-                        constraints.maxHeight < desiredHeight
-                    ? constraints.maxHeight
-                    : desiredHeight;
-                return SizedBox(
-                  height: gridHeight,
-                  child: GridView.builder(
-                    key: const ValueKey('attachment-options-grid'),
-                    padding: EdgeInsets.zero,
-                    gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                      crossAxisCount: columns,
-                      mainAxisSpacing: 8,
-                      mainAxisExtent: 112,
-                    ),
-                    itemCount: options.length,
-                    itemBuilder: (context, index) {
-                      final option = options[index];
-                      return _AttachmentOption(
-                        icon: option.icon,
-                        label: option.label,
-                        color: option.color,
-                        onTap: () => Navigator.pop(sheetContext, option.choice),
-                      );
-                    },
-                  ),
-                );
-              },
-            ),
-          ),
-        );
-      },
-    );
-    if (choice == null || !mounted || !context.mounted) return;
+    if (!mounted || !context.mounted) return;
     if (choice == 'notes') {
       final repository = widget.notesRepository;
       if (repository == null) {
@@ -3890,18 +3838,27 @@ class _ThreadScreenState extends State<ThreadScreen>
         }
         bytes = Uint8List.fromList(await file.readAsBytes());
         if (!mounted || !context.mounted) return;
-        final quality = await VideoQualitySheet.show(
-          context,
-          originalBytes: bytes.length,
-          selected: VideoQuality.high,
-          videoBytes: bytes,
+        final result = await _openMediaEditor(
+          cubit,
+          [
+            MediaEditorItem(
+              id: _uuid.v4(),
+              originalBytes: bytes,
+              isVideo: true,
+              filename: file.name,
+            ),
+          ],
         );
-        if (quality == null || !mounted || !context.mounted) return;
+        if (result == null || result.items.isEmpty || !mounted || !context.mounted) {
+          return;
+        }
+        final edited = result.items.first;
         await cubit.sendMedia(
-          messageId: _uuid.v4(),
-          rawBytes: bytes,
+          messageId: edited.id,
+          rawBytes: edited.bytes,
           type: MessageType.video,
-          videoQuality: quality,
+          videoQuality: result.videoQuality,
+          filename: edited.filename,
         );
       } catch (error) {
         if (mounted) {
@@ -3942,25 +3899,39 @@ class _ThreadScreenState extends State<ThreadScreen>
               ),
             );
           }
-          final quality = await _askImageQuality(
-            photos.first.bytes.length,
-            imageBytes: photos.first.bytes,
+          final result = await _openMediaEditor(
+            cubit,
+            photos
+                .map(
+                  (att) => MediaEditorItem(
+                    id: _uuid.v4(),
+                    originalBytes: att.bytes,
+                    isVideo: false,
+                    filename: att.fileName,
+                    sourceUri: att.sourceUri,
+                    sourceFlags: att.sourceFlags,
+                  ),
+                )
+                .toList(growable: false),
           );
-          if (quality == null || !mounted) return;
+          if (result == null || !mounted) return;
 
-          final items = photos
+          final items = result.items
               .map(
                 (att) => OutgoingImageItem(
-                  messageId: _uuid.v4(),
+                  messageId: att.id,
                   bytes: att.bytes,
                   sourceUri: att.sourceUri,
                   sourceFlags: att.sourceFlags,
-                  filename: att.fileName,
+                  filename: att.filename,
                 ),
               )
               .toList(growable: false);
 
-          await cubit.sendMultipleImages(items: items, quality: quality);
+          await cubit.sendMultipleImages(
+            items: items,
+            quality: result.imageQuality,
+          );
           return;
         }
 
@@ -3976,27 +3947,35 @@ class _ThreadScreenState extends State<ThreadScreen>
         }
 
         if (choice == 'video') {
-          final selectedQuality = await VideoQualitySheet.show(
-            context,
-            originalBytes: selected.first.bytes.length,
-            selected: VideoQuality.high,
-            videoBytes: selected.length == 1 ? selected.first.bytes : null,
-            showEstimates: selected.length == 1,
-          );
-          if (selectedQuality == null || !mounted || !context.mounted) return;
-          await cubit.sendMultipleVideos(
-            items: selected
+          final result = await _openMediaEditor(
+            cubit,
+            selected
                 .map(
-                  (attachment) => OutgoingVideoItem(
-                    messageId: _uuid.v4(),
-                    bytes: attachment.bytes,
+                  (attachment) => MediaEditorItem(
+                    id: _uuid.v4(),
+                    originalBytes: attachment.bytes,
+                    isVideo: true,
                     filename: attachment.fileName,
                     sourceUri: attachment.sourceUri,
                     sourceFlags: attachment.sourceFlags,
                   ),
                 )
                 .toList(growable: false),
-            quality: selectedQuality,
+          );
+          if (result == null || !mounted || !context.mounted) return;
+          await cubit.sendMultipleVideos(
+            items: result.items
+                .map(
+                  (attachment) => OutgoingVideoItem(
+                    messageId: attachment.id,
+                    bytes: attachment.bytes,
+                    filename: attachment.filename,
+                    sourceUri: attachment.sourceUri,
+                    sourceFlags: attachment.sourceFlags,
+                  ),
+                )
+                .toList(growable: false),
+            quality: result.videoQuality,
           );
           return;
         }
@@ -4074,19 +4053,32 @@ class _ThreadScreenState extends State<ThreadScreen>
       final bytes = Uint8List.fromList(await file.readAsBytes());
       try {
         if (!mounted || !context.mounted) return;
-        final quality = await VideoQualitySheet.show(
-          context,
-          originalBytes: bytes.length,
-          selected: VideoQuality.high,
-          videoBytes: bytes,
+        final result = await _openMediaEditor(
+          cubit,
+          [
+            MediaEditorItem(
+              id: _uuid.v4(),
+              originalBytes: bytes,
+              isVideo: true,
+              filename: file.name,
+              sourceUri: _originalSourceUri(file),
+            ),
+          ],
         );
-        if (quality == null || !mounted || !context.mounted) return;
+        if (result == null ||
+            result.items.isEmpty ||
+            !mounted ||
+            !context.mounted) {
+          return;
+        }
+        final edited = result.items.first;
         await cubit.sendMedia(
-          messageId: _uuid.v4(),
-          rawBytes: bytes,
+          messageId: edited.id,
+          rawBytes: edited.bytes,
           type: MessageType.video,
-          videoQuality: quality,
-          sourceUri: _originalSourceUri(file),
+          videoQuality: result.videoQuality,
+          filename: edited.filename,
+          sourceUri: edited.sourceUri,
         );
       } finally {
         bytes.fillRange(0, bytes.length, 0);
@@ -4433,7 +4425,32 @@ class _ThreadScreenState extends State<ThreadScreen>
   /// than queueing an unbounded amount of compression work.
   static const _maxPhotosPerSend = 10;
 
-  /// Asks for a quality once, then sends every picked photo.
+  /// Opens the Signal-style media editor for [items] and persists the chosen
+  /// image quality if updated.
+  Future<MediaEditorResult?> _openMediaEditor(
+    ActiveThreadCubit cubit,
+    List<MediaEditorItem> items,
+  ) async {
+    final settings = widget.settingsRepository;
+    final remembered = ImageQualityX.parse(
+      await settings?.getChatImageQuality(),
+    );
+    if (!mounted) return null;
+    final result = await ChatMediaEditorScreen.open(
+      context,
+      items: items,
+      initialImageQuality: remembered,
+      initialVideoQuality: VideoQuality.high,
+      stickerPack: _stickerPackFor(cubit.myUid),
+    );
+    if (result == null) return null;
+    if (result.imageQuality != remembered) {
+      await settings?.setChatImageQuality(result.imageQuality.name);
+    }
+    return result;
+  }
+
+  /// Opens the media editor for picked photos, then sends every edited photo.
   Future<void> _sendImages(
     ActiveThreadCubit cubit,
     List<XFile> files,
@@ -4448,74 +4465,65 @@ class _ThreadScreenState extends State<ThreadScreen>
       );
     }
 
-    // The sheet is sized from the first photo and applies to the whole batch,
-    // so picking ten photos is still one decision.
-    final firstBytes = Uint8List.fromList(await picked.first.readAsBytes());
-    if (!mounted) return;
-    final quality = await _askImageQuality(
-      firstBytes.length,
-      imageBytes: firstBytes,
-    );
-    if (quality == null || !mounted) return;
-
-    final items = <OutgoingImageItem>[];
-    for (var i = 0; i < picked.length; i++) {
-      final bytes = i == 0
-          ? firstBytes
-          : Uint8List.fromList(await picked[i].readAsBytes());
-      items.add(
-        OutgoingImageItem(
-          messageId: _uuid.v4(),
-          bytes: bytes,
-          sourceUri: retainSource ? _originalSourceUri(picked[i]) : null,
-          filename: picked[i].name,
+    final editorItems = <MediaEditorItem>[];
+    for (final file in picked) {
+      editorItems.add(
+        MediaEditorItem(
+          id: _uuid.v4(),
+          originalBytes: Uint8List.fromList(await file.readAsBytes()),
+          isVideo: false,
+          sourceUri: retainSource ? _originalSourceUri(file) : null,
+          filename: file.name,
         ),
       );
     }
+    if (!mounted) return;
+    final result = await _openMediaEditor(cubit, editorItems);
+    if (result == null || !mounted) return;
 
-    await cubit.sendMultipleImages(items: items, quality: quality);
+    final items = result.items
+        .map(
+          (i) => OutgoingImageItem(
+            messageId: i.id,
+            bytes: i.bytes,
+            sourceUri: i.sourceUri,
+            sourceFlags: i.sourceFlags,
+            filename: i.filename,
+          ),
+        )
+        .toList(growable: false);
+
+    await cubit.sendMultipleImages(items: items, quality: result.imageQuality);
   }
 
-  /// Shows the quality sheet, seeded with the last choice and remembering a
-  /// new one. Returns null if the sheet was dismissed.
-  Future<ImageQuality?> _askImageQuality(
-    int originalBytes, {
-    Uint8List? imageBytes,
-  }) async {
-    final settings = widget.settingsRepository;
-    final remembered = ImageQualityX.parse(
-      await settings?.getChatImageQuality(),
-    );
-    if (!mounted) return null;
-    final chosen = await ImageQualitySheet.show(
-      context,
-      originalBytes: originalBytes,
-      selected: remembered,
-      imageBytes: imageBytes,
-    );
-    if (chosen == null) return null;
-    if (chosen != remembered) {
-      await settings?.setChatImageQuality(chosen.name);
-    }
-    return chosen;
-  }
-
-  /// Asks which quality to send a single photo at, then sends it.
+  /// Opens the media editor for a single photo, then sends it.
   Future<void> _sendImageWithQuality(
     ActiveThreadCubit cubit,
     Uint8List bytes, {
     String? sourceUri,
     int sourceFlags = 0,
   }) async {
-    final quality = await _askImageQuality(bytes.length, imageBytes: bytes);
-    if (quality == null || !mounted) return;
+    final result = await _openMediaEditor(
+      cubit,
+      [
+        MediaEditorItem(
+          id: _uuid.v4(),
+          originalBytes: bytes,
+          isVideo: false,
+          sourceUri: sourceUri,
+          sourceFlags: sourceFlags,
+        ),
+      ],
+    );
+    if (result == null || result.items.isEmpty || !mounted) return;
+    final edited = result.items.first;
     await cubit.sendMedia(
-      messageId: _uuid.v4(),
-      rawBytes: bytes,
+      messageId: edited.id,
+      rawBytes: edited.bytes,
       type: MessageType.image,
-      quality: quality,
-      sourceUri: sourceUri,
-      sourceFlags: sourceFlags,
+      quality: result.imageQuality,
+      sourceUri: edited.sourceUri,
+      sourceFlags: edited.sourceFlags,
     );
   }
 
@@ -4563,22 +4571,36 @@ class _ThreadScreenState extends State<ThreadScreen>
         return;
       }
       if (videoExtensions.contains(extension)) {
-        final quality = isHdrVideo(bytes)
-            ? VideoQuality.original
-            : await VideoQualitySheet.show(
-                context,
-                originalBytes: bytes.length,
-                selected: VideoQuality.high,
-                videoBytes: bytes,
-              );
-        if (quality == null || !mounted) return;
-        await cubit.sendMedia(
-          messageId: _uuid.v4(),
-          rawBytes: bytes,
-          type: MessageType.video,
-          videoQuality: quality,
-          filename: picked.name,
-        );
+        if (isHdrVideo(bytes)) {
+          await cubit.sendMedia(
+            messageId: _uuid.v4(),
+            rawBytes: bytes,
+            type: MessageType.video,
+            videoQuality: VideoQuality.original,
+            filename: picked.name,
+          );
+        } else {
+          final result = await _openMediaEditor(
+            cubit,
+            [
+              MediaEditorItem(
+                id: _uuid.v4(),
+                originalBytes: bytes,
+                isVideo: true,
+                filename: picked.name,
+              ),
+            ],
+          );
+          if (result == null || result.items.isEmpty || !mounted) return;
+          final edited = result.items.first;
+          await cubit.sendMedia(
+            messageId: edited.id,
+            rawBytes: edited.bytes,
+            type: MessageType.video,
+            videoQuality: result.videoQuality,
+            filename: edited.filename,
+          );
+        }
         return;
       }
       await cubit.sendMedia(
@@ -4612,22 +4634,36 @@ class _ThreadScreenState extends State<ThreadScreen>
       );
       if (!mounted) return;
       if (photo.mimeType.startsWith('video/')) {
-        final quality = isHdrVideo(bytes)
-            ? VideoQuality.original
-            : await VideoQualitySheet.show(
-                context,
-                originalBytes: bytes.length,
-                selected: VideoQuality.high,
-                videoBytes: bytes,
-              );
-        if (quality == null || !mounted) return;
-        await cubit.sendMedia(
-          messageId: _uuid.v4(),
-          rawBytes: bytes,
-          type: MessageType.video,
-          videoQuality: quality,
-          filename: photo.originalFilename,
-        );
+        if (isHdrVideo(bytes)) {
+          await cubit.sendMedia(
+            messageId: _uuid.v4(),
+            rawBytes: bytes,
+            type: MessageType.video,
+            videoQuality: VideoQuality.original,
+            filename: photo.originalFilename,
+          );
+        } else {
+          final result = await _openMediaEditor(
+            cubit,
+            [
+              MediaEditorItem(
+                id: _uuid.v4(),
+                originalBytes: bytes,
+                isVideo: true,
+                filename: photo.originalFilename,
+              ),
+            ],
+          );
+          if (result == null || result.items.isEmpty || !mounted) return;
+          final edited = result.items.first;
+          await cubit.sendMedia(
+            messageId: edited.id,
+            rawBytes: edited.bytes,
+            type: MessageType.video,
+            videoQuality: result.videoQuality,
+            filename: edited.filename,
+          );
+        }
       } else if (isGif(bytes) || isHdrOrMotionPhoto(bytes)) {
         await cubit.sendMedia(
           messageId: _uuid.v4(),
@@ -4978,56 +5014,6 @@ class _SendButton extends StatelessWidget {
           ),
         );
       },
-    );
-  }
-}
-
-class _AttachmentOption extends StatelessWidget {
-  const _AttachmentOption({
-    required this.icon,
-    required this.label,
-    required this.color,
-    required this.onTap,
-  });
-
-  final IconData icon;
-  final String label;
-  final Color color;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(16),
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.symmetric(vertical: 8),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 52,
-              height: 52,
-              decoration: BoxDecoration(
-                color: color.withValues(alpha: 0.14),
-                shape: BoxShape.circle,
-              ),
-              child: Icon(icon, color: color, size: 24),
-            ),
-            const SizedBox(height: 6),
-            Text(
-              label,
-              textAlign: TextAlign.center,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: Theme.of(
-                context,
-              ).textTheme.labelSmall?.copyWith(fontWeight: FontWeight.w600),
-            ),
-          ],
-        ),
-      ),
     );
   }
 }

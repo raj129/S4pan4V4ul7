@@ -5,6 +5,45 @@ import org.junit.Test
 
 class RingAlertPolicyTest {
     @Test
+    fun chatVibrationIsOneShotWhileRingVibrationRepeats() {
+        assertEquals(-1, RingAlertPolicy.vibrationRepeatIndex(repeat = false))
+        assertEquals(0, RingAlertPolicy.vibrationRepeatIndex(repeat = true))
+    }
+
+    @Test
+    fun customChatVibrationUsesAppControlledAlarmUsage() {
+        assertEquals(
+            RingVibrationUsage.ALARM,
+            RingAlertPolicy.vibrationUsage(
+                source = RingAlertSource.CUSTOM,
+                notificationAudioUsage = true,
+            ),
+        )
+    }
+
+    @Test
+    fun systemChatVibrationUsesNotificationUsage() {
+        assertEquals(
+            RingVibrationUsage.NOTIFICATION,
+            RingAlertPolicy.vibrationUsage(
+                source = RingAlertSource.SYSTEM,
+                notificationAudioUsage = true,
+            ),
+        )
+    }
+
+    @Test
+    fun systemRingVibrationUsesRingtoneUsage() {
+        assertEquals(
+            RingVibrationUsage.RINGTONE,
+            RingAlertPolicy.vibrationUsage(
+                source = RingAlertSource.SYSTEM,
+                notificationAudioUsage = false,
+            ),
+        )
+    }
+
+    @Test
     fun customRingAndVibrateOverridesPhoneVibrateMode() {
         assertEquals(
             RingAlertOutput.RING_AND_VIBRATE,

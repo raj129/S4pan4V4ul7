@@ -70,7 +70,8 @@ abstract final class AppTheme {
         shape: RoundedRectangleBorder(
           borderRadius: AppRadius.all(AppRadius.sm),
         ),
-        titleTextStyle: text.titleSmall,
+        textColor: scheme.onSurface,
+        titleTextStyle: text.titleSmall?.copyWith(color: scheme.onSurface),
         subtitleTextStyle: text.bodySmall?.copyWith(
           color: scheme.onSurfaceVariant,
         ),
@@ -292,6 +293,28 @@ abstract final class AppTheme {
               ? scheme.onPrimary
               : scheme.outline,
         ),
+        trackColor: WidgetStateProperty.resolveWith(
+          (states) => states.contains(WidgetState.selected)
+              ? scheme.primary
+              : scheme.surfaceContainerHighest,
+        ),
+        trackOutlineColor: WidgetStateProperty.resolveWith(
+          (states) => states.contains(WidgetState.selected)
+              ? Colors.transparent
+              : scheme.outline,
+        ),
+        thumbIcon: WidgetStateProperty.resolveWith(
+          (states) => states.contains(WidgetState.selected)
+              ? Icon(Icons.check_rounded, size: 16, color: scheme.primary)
+              : null,
+        ),
+      ),
+
+      checkboxTheme: CheckboxThemeData(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(5),
+        ),
+        side: BorderSide(color: scheme.outline, width: 1.75),
       ),
 
       progressIndicatorTheme: ProgressIndicatorThemeData(

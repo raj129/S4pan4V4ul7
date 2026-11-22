@@ -9,7 +9,10 @@ enum SystemMockAvailability {
   /// Not Android, or the native plugin is missing.
   unsupported,
 
-  /// Android, but this app isn't chosen in Developer options →
+  /// Android, but Developer options are turned off in system Settings.
+  developerModeDisabled,
+
+  /// Android with Developer options on, but this app isn't chosen under
   /// "Select mock location app".
   notSelected,
   ready,
@@ -41,6 +44,12 @@ class SystemMockBridge {
   Future<SystemMockAvailability> availability() async {
     if (!isSupportedPlatform) return SystemMockAvailability.unsupported;
     try {
+      final devEnabled = await _channel.invokeMethod<bool>(
+        'isDeveloperModeEnabled',
+      );
+      if (devEnabled == false) {
+        return SystemMockAvailability.developerModeDisabled;
+      }
       final selected = await _channel.invokeMethod<bool>('isMockAppSelected');
       return selected == true
           ? SystemMockAvailability.ready
@@ -55,6 +64,11 @@ class SystemMockBridge {
   Future<void> openDeveloperSettings() async {
     if (!isSupportedPlatform) return;
     await _channel.invokeMethod<void>('openDeveloperSettings');
+  }
+
+  Future<void> openPhoneSettings() async {
+    if (!isSupportedPlatform) return;
+    await _channel.invokeMethod<void>('openPhoneSettings');
   }
 
   /// Starts the foreground service and registers the test providers.

@@ -46,7 +46,8 @@ class _FakeThreadRepo implements ThreadRepository {
 
 class _FakeUserRepo implements UserRepository {
   @override
-  Future<ChatUser?> getUserById(String uid) async => null;
+  Future<ChatUser?> getUserById(String uid, {bool preferCache = false}) async =>
+      null;
 
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
@@ -109,7 +110,6 @@ void main() {
         authRepository: deps.authRepository,
         createVaultUseCase: deps.createVaultUseCase,
         pinValidator: deps.pinValidator,
-        restoreFlowService: deps.restoreFlowService,
       );
       final router = buildAppRouter(
         deps: deps,
@@ -184,7 +184,6 @@ void main() {
         authRepository: deps.authRepository,
         createVaultUseCase: deps.createVaultUseCase,
         pinValidator: deps.pinValidator,
-        restoreFlowService: deps.restoreFlowService,
       );
 
       final router = buildAppRouter(

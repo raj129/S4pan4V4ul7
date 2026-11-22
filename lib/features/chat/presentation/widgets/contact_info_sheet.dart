@@ -77,11 +77,7 @@ class _ContactInfoSheet extends StatefulWidget {
 }
 
 class _ContactInfoSheetState extends State<_ContactInfoSheet> {
-  late final TextEditingController _controller;
   late String? _savedAlias;
-  bool _editing = false;
-  bool _saving = false;
-  bool _suppressControllerListener = false;
   String? _smsNumber;
   String? _smsError;
   bool _smsLoading = false;
@@ -91,8 +87,6 @@ class _ContactInfoSheetState extends State<_ContactInfoSheet> {
   void initState() {
     super.initState();
     _savedAlias = widget.service.aliasFor(widget.user.uid);
-    _controller = TextEditingController(text: _savedAlias ?? '')
-      ..addListener(_onControllerChanged);
     if (widget.dataSms != null && widget.threadId != null) {
       unawaited(_loadSmsNumber());
     }
@@ -134,12 +128,6 @@ class _ContactInfoSheetState extends State<_ContactInfoSheet> {
     }
   }
 
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
   String? _normalizedAlias(String value) {
     final trimmed = value.trim();
     return trimmed.isEmpty || trimmed == widget.user.displayName
@@ -147,61 +135,22 @@ class _ContactInfoSheetState extends State<_ContactInfoSheet> {
         : trimmed;
   }
 
-  void _onControllerChanged() {
-    if (mounted && !_suppressControllerListener) setState(() {});
-  }
-
-  void _setControllerText(String value) {
-    _suppressControllerListener = true;
-    _controller.text = value;
-    _suppressControllerListener = false;
-  }
-
-  bool get _hasPendingChanges =>
-      _normalizedAlias(_controller.text) != _savedAlias;
-
-  void _startEditing() {
-    _setControllerText(_savedAlias ?? '');
-    setState(() {
-      _editing = true;
-    });
-  }
-
-  void _cancelEditing() {
-    _setControllerText(_savedAlias ?? '');
-    setState(() {
-      _editing = false;
-    });
-  }
-
-  void _useRealName() {
-    _controller.clear();
-  }
-
-  Future<void> _saveAlias() async {
-    if (_saving) return;
-    if (!_hasPendingChanges) {
-      setState(() => _editing = false);
-      return;
-    }
-    final next = _normalizedAlias(_controller.text);
-    setState(() => _saving = true);
-    try {
-      await widget.service.setAlias(widget.user.uid, next);
-    } catch (error) {
-      if (!mounted) return;
-      setState(() => _saving = false);
-      _showSnack('Could not save nickname: $error');
-      return;
-    }
-    if (!mounted) return;
-    _setControllerText(next ?? '');
-    setState(() {
-      _savedAlias = next;
-      _editing = false;
-      _saving = false;
-    });
-    _showSnack(next == null ? 'Nickname removed.' : 'Nickname saved.');
+  Future<void> _editNicknameDialog() async {
+    final result = await showDialog<({String? alias})>(
+      context: context,
+      builder: (_) => _EditNicknameDialog(
+        realName: widget.user.displayName,
+        currentAlias: _savedAlias,
+        onSave: (raw) async {
+          final next = _normalizedAlias(raw);
+          await widget.service.setAlias(widget.user.uid, next);
+          return next;
+        },
+      ),
+    );
+    if (result == null || !mounted) return;
+    setState(() => _savedAlias = result.alias);
+    _showSnack(result.alias == null ? 'Nickname removed.' : 'Nickname saved.');
   }
 
   Future<void> _openMediaManager() async {
@@ -217,31 +166,6 @@ class _ContactInfoSheetState extends State<_ContactInfoSheet> {
       threadId: threadId,
       title: 'Media in this chat',
     );
-  }
-
-  Future<void> _handleBack() async {
-    if (_saving || !_editing || !_hasPendingChanges) return;
-    final discard = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Discard nickname changes?'),
-        content: const Text('Your nickname changes have not been saved.'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext, false),
-            child: const Text('Keep editing'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(dialogContext, true),
-            child: const Text('Discard'),
-          ),
-        ],
-      ),
-    );
-    if (discard != true || !mounted) return;
-    _cancelEditing();
-    await WidgetsBinding.instance.endOfFrame;
-    if (mounted) Navigator.of(context).pop();
   }
 
   void _showSnack(String message) {
@@ -296,24 +220,14 @@ class _ContactInfoSheetState extends State<_ContactInfoSheet> {
         widget.mediaManagerService != null &&
         widget.threadId != null;
 
-    return PopScope(
-      canPop: !_saving && !(_editing && _hasPendingChanges),
-      onPopInvokedWithResult: (didPop, _) {
-        if (!didPop) unawaited(_handleBack());
-      },
-      child: AnimatedPadding(
-        duration: const Duration(milliseconds: 100),
-        padding: EdgeInsets.only(
-          bottom: MediaQuery.viewInsetsOf(context).bottom,
-        ),
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(
-            AppSpacing.lg,
-            AppSpacing.xs,
-            AppSpacing.lg,
-            AppSpacing.lg,
-          ),
-          child: Column(
+    return SingleChildScrollView(
+      padding: const EdgeInsets.fromLTRB(
+        AppSpacing.lg,
+        AppSpacing.xs,
+        AppSpacing.lg,
+        AppSpacing.lg,
+      ),
+      child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
@@ -412,7 +326,7 @@ class _ContactInfoSheetState extends State<_ContactInfoSheet> {
                             ? _loadSmsNumber
                             : _editSmsNumber,
                       ),
-                      if (canManageMedia || !_editing)
+                      if (canManageMedia)
                         Divider(
                           height: 1,
                           indent: 56,
@@ -441,135 +355,158 @@ class _ContactInfoSheetState extends State<_ContactInfoSheet> {
                         ),
                         onTap: _openMediaManager,
                       ),
-                      if (!_editing)
-                        Divider(
-                          height: 1,
-                          indent: 56,
-                          endIndent: 16,
-                          color: colors.outlineVariant.withValues(alpha: 0.3),
-                        ),
-                    ],
-                    if (!_editing)
-                      ListTile(
-                        leading: CircleAvatar(
-                          radius: 20,
-                          backgroundColor: colors.tertiaryContainer,
-                          child: Icon(
-                            Icons.badge_outlined,
-                            color: colors.onTertiaryContainer,
-                            size: 20,
-                          ),
-                        ),
-                        title: Text(
-                          _savedAlias ?? 'No nickname',
-                          style: theme.textTheme.titleSmall,
-                        ),
-                        subtitle: const Text('Nickname visible only to you'),
+                      Divider(
+                        height: 1,
+                        indent: 56,
+                        endIndent: 16,
+                        color: colors.outlineVariant.withValues(alpha: 0.3),
                       ),
+                    ],
+                    ListTile(
+                      leading: CircleAvatar(
+                        radius: 20,
+                        backgroundColor: colors.tertiaryContainer,
+                        child: Icon(
+                          Icons.badge_outlined,
+                          color: colors.onTertiaryContainer,
+                          size: 20,
+                        ),
+                      ),
+                      title: Text(
+                        _savedAlias ?? 'No nickname',
+                        style: theme.textTheme.titleSmall,
+                      ),
+                      subtitle: const Text('Nickname visible only to you'),
+                      trailing: const Icon(Icons.edit_outlined, size: 20),
+                      onTap: _editNicknameDialog,
+                    ),
                   ],
                 ),
               ),
-              const SizedBox(height: AppSpacing.md),
-              if (_editing) ...[
-                Card(
-                  elevation: 0,
-                  color: colors.surfaceContainerLow,
-                  margin: EdgeInsets.zero,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(16),
-                    side: BorderSide(
-                      color: colors.outlineVariant.withValues(alpha: 0.4),
-                    ),
-                  ),
-                  child: Padding(
-                    padding: const EdgeInsets.all(AppSpacing.lg),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        TextField(
-                          controller: _controller,
-                          enabled: !_saving,
-                          maxLength: ProfileService.maxNameLength,
-                          textCapitalization: TextCapitalization.words,
-                          textInputAction: TextInputAction.done,
-                          onSubmitted: (_) => _saveAlias(),
-                          decoration: InputDecoration(
-                            labelText: 'Nickname',
-                            hintText: user.displayName,
-                            helperText: 'Visible only to you on this device.',
-                            prefixIcon: const Icon(Icons.edit_outlined),
-                            focusedBorder: OutlineInputBorder(
-                              borderRadius: AppRadius.all(AppRadius.md),
-                              borderSide: BorderSide.none,
-                            ),
-                            suffixIcon: ListenableBuilder(
-                              listenable: _controller,
-                              builder: (_, _) => _controller.text.isEmpty
-                                  ? const SizedBox.shrink()
-                                  : IconButton(
-                                      tooltip: 'Clear',
-                                      icon: const Icon(Icons.close_rounded),
-                                      onPressed: _saving
-                                          ? null
-                                          : _controller.clear,
-                                    ),
-                            ),
+            ],
+          ),
+        );
+  }
+}
+
+class _EditNicknameDialog extends StatefulWidget {
+  const _EditNicknameDialog({
+    required this.realName,
+    required this.currentAlias,
+    required this.onSave,
+  });
+
+  final String realName;
+  final String? currentAlias;
+  final Future<String?> Function(String raw) onSave;
+
+  @override
+  State<_EditNicknameDialog> createState() => _EditNicknameDialogState();
+}
+
+class _EditNicknameDialogState extends State<_EditNicknameDialog> {
+  late final TextEditingController _controller = TextEditingController(
+    text: widget.currentAlias ?? '',
+  );
+  String? _error;
+  bool _saving = false;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save({bool clear = false}) async {
+    if (_saving) return;
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      final saved = await widget.onSave(clear ? '' : _controller.text);
+      if (mounted) Navigator.of(context).pop((alias: saved));
+    } catch (error) {
+      if (mounted) {
+        setState(() {
+          _error = 'Could not save nickname: $error';
+          _saving = false;
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    return PopScope(
+      canPop: !_saving,
+      child: AlertDialog(
+        icon: const Icon(Icons.badge_outlined),
+        title: const Text('Nickname'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                'Visible only to you on this device.',
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: cs.onSurfaceVariant,
+                ),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: _controller,
+                enabled: !_saving,
+                autofocus: true,
+                maxLength: ProfileService.maxNameLength,
+                textCapitalization: TextCapitalization.words,
+                textInputAction: TextInputAction.done,
+                onChanged: (_) {
+                  if (_error != null) setState(() => _error = null);
+                },
+                onSubmitted: (_) => _save(),
+                decoration: InputDecoration(
+                  labelText: 'Nickname',
+                  hintText: widget.realName,
+                  errorText: _error,
+                  suffixIcon: ListenableBuilder(
+                    listenable: _controller,
+                    builder: (_, _) => _controller.text.isEmpty || _saving
+                        ? const SizedBox.shrink()
+                        : IconButton(
+                            tooltip: 'Clear',
+                            icon: const Icon(Icons.close_rounded),
+                            onPressed: _controller.clear,
                           ),
-                        ),
-                        Align(
-                          alignment: AlignmentDirectional.centerStart,
-                          child: TextButton.icon(
-                            onPressed: _saving || _controller.text.isEmpty
-                                ? null
-                                : _useRealName,
-                            icon: const Icon(Icons.person_outline_rounded),
-                            label: const Text('Use real name'),
-                          ),
-                        ),
-                        const SizedBox(height: AppSpacing.sm),
-                        Row(
-                          children: [
-                            Expanded(
-                              child: TextButton(
-                                style: TextButton.styleFrom(
-                                  backgroundColor:
-                                      colors.surfaceContainerHighest,
-                                  foregroundColor: colors.onSurface,
-                                ),
-                                onPressed: _saving ? null : _cancelEditing,
-                                child: const Text('Cancel'),
-                              ),
-                            ),
-                            const SizedBox(width: AppSpacing.sm),
-                            Expanded(
-                              child: FilledButton(
-                                onPressed: _saving ? null : _saveAlias,
-                                child: _saving
-                                    ? const SizedBox.square(
-                                        dimension: 18,
-                                        child: CircularProgressIndicator(
-                                          strokeWidth: 2,
-                                        ),
-                                      )
-                                    : const Text('Save'),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
                   ),
                 ),
-              ] else ...[
-                FilledButton.tonalIcon(
-                  onPressed: _startEditing,
-                  icon: const Icon(Icons.edit_outlined),
-                  label: const Text('Edit nickname'),
-                ),
-              ],
+              ),
             ],
           ),
         ),
+        actions: [
+          if (widget.currentAlias != null)
+            TextButton(
+              onPressed: _saving ? null : () => _save(clear: true),
+              child: const Text('Use real name'),
+            ),
+          TextButton(
+            onPressed: _saving ? null : () => Navigator.of(context).pop(),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: _saving ? null : () => _save(),
+            child: _saving
+                ? const SizedBox.square(
+                    dimension: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Text('Save'),
+          ),
+        ],
       ),
     );
   }

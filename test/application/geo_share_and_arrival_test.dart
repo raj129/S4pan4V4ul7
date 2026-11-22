@@ -524,5 +524,29 @@ void main() {
       expect(errors, isNotEmpty);
       expect(failing.alertsFor('me', 't').single.isArmed, isTrue);
     });
+
+    test('concurrent processPendingArrivals calls coalesce and send once', () async {
+      final cafe = await addPlace('Cafe', const GeoPoint(10, 10));
+      fences.pending = [event(cafe.id)];
+      var sendCount = 0;
+      final slowService = ArrivalAlertService(
+        store: kv,
+        sender: (alert) async {
+          sendCount++;
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+          sent.add(alert);
+        },
+        geofences: fences,
+      );
+      addTearDown(slowService.dispose);
+
+      final results = await Future.wait([
+        slowService.processPendingArrivals(),
+        slowService.processPendingArrivals(),
+      ]);
+      expect(results, [true, true]);
+      expect(sendCount, 1);
+      expect(sent, hasLength(1));
+    });
   });
 }

@@ -32,6 +32,7 @@ class ChatCryptoService {
   static const _privateKeyStorageKey = 'chat_ecdh_private_key';
   static const _publicKeyStorageKey = 'chat_ecdh_public_key';
   static const _threadKeyPrefix = 'chat_thread_key_';
+  static const _threadPeerKeyPrefix = 'chat_thread_peer_key_';
   static const _accountStorageKey = 'chat_key_account';
 
   /// Iteration count for the PIN → key-encryption-key derivation. Deliberately
@@ -203,13 +204,25 @@ class ChatCryptoService {
 
   /// Derive and store the shared AES key for a thread using ECDH + HKDF.
   /// [otherPublicKeyB64] is the remote user's public key from Firestore.
+  /// Re-derives automatically if the peer's public key has changed.
   Future<void> deriveAndStoreThreadKey({
     required String threadId,
     required String otherPublicKeyB64,
   }) async {
     final storageKey = '$_threadKeyPrefix$threadId';
+    final peerStorageKey = '$_threadPeerKeyPrefix$threadId';
     final existing = await _storage.read(key: storageKey);
-    if (existing != null) return; // Already derived.
+    if (existing != null) {
+      final storedPeer = await _storage.read(key: peerStorageKey);
+      if (storedPeer == null) {
+        await _storage.write(key: peerStorageKey, value: otherPublicKeyB64);
+        return;
+      }
+      if (storedPeer == otherPublicKeyB64) return;
+      _threadKeyCache.remove(threadId);
+      _searchKeyCache.remove(threadId);
+      _plaintextCache.removeWhere((k, _) => k.startsWith('$threadId:'));
+    }
 
     final localPair = await _loadLocalKeyPair();
     final remotePublicKeyBytes = base64.decode(otherPublicKeyB64);
@@ -234,6 +247,7 @@ class ChatCryptoService {
     );
     final keyBytes = await threadKey.extractBytes();
     await _storage.write(key: storageKey, value: base64.encode(keyBytes));
+    await _storage.write(key: peerStorageKey, value: otherPublicKeyB64);
   }
 
   Future<bool> hasThreadKey(String threadId) async =>
@@ -280,6 +294,7 @@ class ChatCryptoService {
   /// Delete the stored thread key (triggers rekeying on next message).
   Future<void> deleteThreadKey(String threadId) async {
     await _storage.delete(key: '$_threadKeyPrefix$threadId');
+    await _storage.delete(key: '$_threadPeerKeyPrefix$threadId');
     _threadKeyCache.remove(threadId);
     _searchKeyCache.remove(threadId);
     _plaintextCache.clear();
@@ -289,7 +304,8 @@ class ChatCryptoService {
   Future<void> clearThreadKeys() async {
     final all = await _storage.readAll();
     for (final key in all.keys) {
-      if (key.startsWith(_threadKeyPrefix)) {
+      if (key.startsWith(_threadKeyPrefix) ||
+          key.startsWith(_threadPeerKeyPrefix)) {
         await _storage.delete(key: key);
       }
     }

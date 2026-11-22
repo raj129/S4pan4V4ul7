@@ -108,7 +108,7 @@ class ChatMediaCache {
           if (await wasMoved(storagePath)) return;
           await temp.rename(file.path);
           if (await wasMoved(storagePath)) {
-            await remove(storagePath);
+            await _removeFile(storagePath);
             return;
           }
           await _evictIfNeeded();
@@ -117,17 +117,20 @@ class ChatMediaCache {
         }
       });
 
-  Future<void> remove(String storagePath) async {
+  Future<void> _removeFile(String storagePath) async {
     final file = await _fileFor(storagePath);
     if (await file.exists()) await file.delete();
   }
+
+  Future<void> remove(String storagePath) =>
+      _serialize(() => _removeFile(storagePath));
 
   /// The marker precedes deletion: a crash cannot trigger a new full download.
   /// Only call after the vault has durably committed the imported attachment.
   Future<void> markMoved(String storagePath) => _serialize(() async {
     final file = await _fileFor(storagePath);
     await File('${file.path}.moved').writeAsString('1', flush: true);
-    await remove(storagePath);
+    await _removeFile(storagePath);
   });
 
   Future<void> _evictIfNeeded() async {

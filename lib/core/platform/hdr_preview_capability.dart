@@ -13,7 +13,7 @@ class HdrPreviewCapability {
   Future<bool> load() => _load ??= _loadAvailability();
 
   Future<bool> _loadAvailability() async {
-    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) {
+    if (defaultTargetPlatform != TargetPlatform.android) {
       available.value = false;
       return false;
     }

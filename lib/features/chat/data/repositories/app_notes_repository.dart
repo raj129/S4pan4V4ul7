@@ -6,6 +6,7 @@ import 'package:firebase_core/firebase_core.dart';
 
 import '../../application/crypto/chat_crypto_service.dart';
 import '../../domain/entities/app_note.dart';
+import '../../domain/entities/note_merge.dart';
 import '../../domain/repositories/notes_repository.dart';
 import 'package:photo_vault/features/vault/data/repositories/storage_string_kv.dart';
 
@@ -78,6 +79,29 @@ class AppNotesRepository implements NotesRepository {
   }
 
   @override
+  Stream<AppNote?> watchThreadNote({
+    required String threadId,
+    required String noteId,
+  }) {
+    return _noteDoc(threadId, noteId).snapshots().asyncMap((doc) async {
+      if (!doc.exists) return null;
+      final data = doc.data();
+      if (data == null) return null;
+      final encryptedPayload = data['encryptedPayload'] as String?;
+      if (encryptedPayload == null) return null;
+      try {
+        final decryptedJson = await _crypto.decryptMessage(
+          threadId: threadId,
+          encryptedB64: encryptedPayload,
+        );
+        return AppNote.deserialize(decryptedJson);
+      } catch (_) {
+        return null;
+      }
+    });
+  }
+
+  @override
   Future<AppNote?> getThreadNote({
     required String threadId,
     required String noteId,
@@ -100,27 +124,76 @@ class AppNotesRepository implements NotesRepository {
   }
 
   @override
-  Future<void> saveThreadNote(AppNote note) async {
+  Future<AppNote> saveThreadNote(AppNote note, {AppNote? baseNote}) async {
     final threadId = note.threadId;
     if (threadId == null || threadId.isEmpty) {
       throw ArgumentError('Shared note must have non-empty threadId');
     }
-    final noteJson = note.serialize();
-    final encryptedPayload = await _crypto.encryptMessage(
-      threadId: threadId,
-      plaintext: noteJson,
-    );
 
-    await _noteDoc(threadId, note.id).set({
-      'id': note.id,
-      'threadId': threadId,
-      'creatorId': note.creatorId,
-      'type': note.type.name,
-      'isChecklist': note.isChecklist,
-      'updatedAt': note.updatedAt.toUtc().millisecondsSinceEpoch,
-      'lastEditedBy': note.lastEditedBy ?? note.creatorId,
-      'encryptedPayload': encryptedPayload,
-    }, SetOptions(merge: true));
+    final docRef = _noteDoc(threadId, note.id);
+
+    if (baseNote == null) {
+      final encryptedPayload = await _crypto.encryptMessage(
+        threadId: threadId,
+        plaintext: note.serialize(),
+      );
+      await docRef.set({
+        'id': note.id,
+        'threadId': threadId,
+        'creatorId': note.creatorId,
+        'type': note.type.name,
+        'isChecklist': note.isChecklist,
+        'updatedAt': note.updatedAt.toUtc().millisecondsSinceEpoch,
+        'lastEditedBy': note.lastEditedBy ?? note.creatorId,
+        'encryptedPayload': encryptedPayload,
+      }, SetOptions(merge: true));
+      return note;
+    }
+
+    return _db.runTransaction<AppNote>((tx) async {
+      final snapshot = await tx.get(docRef);
+      if (!snapshot.exists) {
+        throw NoteDeletedException(note.id);
+      }
+
+      AppNote noteToSave = note;
+      final data = snapshot.data();
+      final remoteEncrypted = data?['encryptedPayload'] as String?;
+      if (remoteEncrypted != null) {
+        try {
+          final decryptedJson = await _crypto.decryptMessage(
+            threadId: threadId,
+            encryptedB64: remoteEncrypted,
+          );
+          final remoteNote = AppNote.deserialize(decryptedJson);
+          noteToSave = mergeAppNotes(
+            base: baseNote,
+            remote: remoteNote,
+            local: note,
+          );
+        } catch (_) {
+          // If remote payload cannot be decrypted, fall back to local note.
+        }
+      }
+
+      final encryptedPayload = await _crypto.encryptMessage(
+        threadId: threadId,
+        plaintext: noteToSave.serialize(),
+      );
+
+      tx.set(docRef, {
+        'id': noteToSave.id,
+        'threadId': threadId,
+        'creatorId': noteToSave.creatorId,
+        'type': noteToSave.type.name,
+        'isChecklist': noteToSave.isChecklist,
+        'updatedAt': noteToSave.updatedAt.toUtc().millisecondsSinceEpoch,
+        'lastEditedBy': noteToSave.lastEditedBy ?? noteToSave.creatorId,
+        'encryptedPayload': encryptedPayload,
+      }, SetOptions(merge: true));
+
+      return noteToSave;
+    });
   }
 
   @override
@@ -128,21 +201,66 @@ class AppNotesRepository implements NotesRepository {
     required String threadId,
     required String noteId,
   }) {
+    return watchThreadNoteEditorPresences(
+      threadId: threadId,
+      noteId: noteId,
+    ).map(
+      (presences) => presences.map((p) => p.userId).toList(growable: false),
+    );
+  }
+
+  @override
+  Stream<List<NoteEditorPresence>> watchThreadNoteEditorPresences({
+    required String threadId,
+    required String noteId,
+  }) {
     return Stream.multi((controller) {
       QuerySnapshot<Map<String, dynamic>>? latestSnapshot;
+      // Track local arrival time per (uid, heartbeatAt) so client clock skew
+      // between participants does not prematurely expire an active lease.
+      final seenHeartbeats = <String, int>{};
+      final localExpiries = <String, int>{};
+
       void emitActiveEditors() {
         final snapshot = latestSnapshot;
         if (snapshot == null) return;
         final now = DateTime.now().millisecondsSinceEpoch;
-        controller.add(
-          snapshot.docs
-              .where((doc) {
-                final expiresAt = (doc.data()['expiresAt'] as num?)?.toInt();
-                return expiresAt != null && expiresAt > now;
-              })
-              .map((doc) => doc.id)
-              .toList(growable: false),
-        );
+        final active = <NoteEditorPresence>[];
+        final currentIds = <String>{};
+
+        for (final doc in snapshot.docs) {
+          currentIds.add(doc.id);
+          final data = doc.data();
+          final heartbeatAt = (data['heartbeatAt'] as num?)?.toInt();
+          final expiresAt = (data['expiresAt'] as num?)?.toInt();
+          if (heartbeatAt == null || expiresAt == null || expiresAt <= heartbeatAt) {
+            continue;
+          }
+
+          if (seenHeartbeats[doc.id] != heartbeatAt) {
+            seenHeartbeats[doc.id] = heartbeatAt;
+            final ttlMs = (expiresAt - heartbeatAt).clamp(5000, 60000);
+            localExpiries[doc.id] = now + ttlMs;
+          }
+
+          final localExpiry = localExpiries[doc.id] ?? 0;
+          if (localExpiry > now) {
+            active.add(
+              NoteEditorPresence(
+                userId: doc.id,
+                editingTarget: data['editingTarget'] as String?,
+                editingItemId: data['editingItemId'] as String?,
+                editingLine: (data['editingLine'] as num?)?.toInt(),
+                cursorOffset: (data['cursorOffset'] as num?)?.toInt(),
+              ),
+            );
+          }
+        }
+
+        seenHeartbeats.removeWhere((id, _) => !currentIds.contains(id));
+        localExpiries.removeWhere((id, _) => !currentIds.contains(id));
+
+        controller.add(active);
       }
 
       final subscription = _noteEditorsRef(threadId, noteId).snapshots().listen(
@@ -169,6 +287,10 @@ class AppNotesRepository implements NotesRepository {
     required String noteId,
     required String uid,
     required bool isEditing,
+    String? editingTarget,
+    String? editingItemId,
+    int? editingLine,
+    int? cursorOffset,
   }) async {
     final ref = _noteEditorsRef(threadId, noteId).doc(uid);
     if (!isEditing) {
@@ -181,6 +303,11 @@ class AppNotesRepository implements NotesRepository {
       'userId': uid,
       'heartbeatAt': now,
       'expiresAt': now + const Duration(seconds: 45).inMilliseconds,
+      'editingTarget': ?editingTarget,
+      'editingItemId': ?editingItemId,
+      if (editingLine != null && editingLine >= 0) 'editingLine': editingLine,
+      if (cursorOffset != null && cursorOffset >= 0)
+        'cursorOffset': cursorOffset,
     });
   }
 

@@ -1,17 +1,17 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:go_router/go_router.dart';
 
 import '../../state/onboarding_cubit.dart';
 import '../../state/onboarding_state.dart';
 import 'package:photo_vault/core/presentation/theme/app_spacing.dart';
 import 'mode_info_sheet.dart';
+import 'onboarding_wizard_header.dart';
 
 /// Screen 1: Welcome screen.
 ///
-/// First thing the user sees when the user sets up the private vault.
-/// Presents the vault value proposition and lets the user choose local-only
-/// or Google-enabled mode with a single tap.
+/// First thing the user sees when setting up the app.
+/// Presents Secure Chat & Private Vault with Gmail (Google) sign-in as the
+/// default path, and local-only mode as a secondary option.
 class WelcomeScreen extends StatelessWidget {
   const WelcomeScreen({super.key});
 
@@ -28,6 +28,7 @@ class WelcomeScreen extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                const OnboardingWizardHeader(currentStep: 1),
                 Expanded(
                   child: SingleChildScrollView(
                     child: Column(
@@ -36,13 +37,13 @@ class WelcomeScreen extends StatelessWidget {
                         const _AppLogo(),
                         const SizedBox(height: AppSpacing.xxl),
                         Text(
-                          'Set up your private vault',
+                          'Set up Secure Chat & Vault',
                           textAlign: TextAlign.center,
                           style: theme.textTheme.headlineLarge,
                         ),
                         const SizedBox(height: AppSpacing.md),
                         Text(
-                          'Create a PIN-protected encrypted photo vault hidden behind the calculator.',
+                          'End-to-end encrypted messaging and a private vault hidden behind the calculator. Sign in with Gmail to chat and restore backups.',
                           textAlign: TextAlign.center,
                           style: theme.textTheme.bodyLarge?.copyWith(
                             color: theme.colorScheme.onSurfaceVariant,
@@ -52,27 +53,22 @@ class WelcomeScreen extends StatelessWidget {
                     ),
                   ),
                 ),
-                FilledButton(
-                  onPressed: () =>
-                      context.read<OnboardingCubit>().selectLocalMode(),
-                  child: const Text('Continue locally'),
-                ),
-                const SizedBox(height: AppSpacing.md),
-                OutlinedButton.icon(
+                FilledButton.icon(
                   onPressed: () =>
                       context.read<OnboardingCubit>().selectGoogleMode(),
                   icon: const Icon(Icons.account_circle_outlined),
                   label: const Text('Sign in with Google'),
                 ),
+                const SizedBox(height: AppSpacing.md),
+                OutlinedButton(
+                  onPressed: () =>
+                      context.read<OnboardingCubit>().selectLocalMode(),
+                  child: const Text('Continue locally'),
+                ),
                 const SizedBox(height: AppSpacing.sm),
                 TextButton(
                   onPressed: () => _showModeInfo(context),
                   child: const Text('What\'s the difference?'),
-                ),
-                TextButton.icon(
-                  onPressed: () => context.push('/restore'),
-                  icon: const Icon(Icons.restore_rounded),
-                  label: const Text('Restore from Google backup'),
                 ),
               ],
             ),

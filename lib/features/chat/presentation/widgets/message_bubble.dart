@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:intl/intl.dart';
 
+import 'package:photo_vault/core/storage/shared_preferences_readiness.dart';
 import '../../domain/entities/chat_message.dart';
 import '../../application/media/android_chat_local_media.dart';
 import '../../domain/entities/message_metadata.dart';
@@ -262,11 +263,7 @@ class MessageBubble extends StatelessWidget {
     // render bare without an outer bubble border/background for both sent and
     // received messages.
     final bare = message.isEmojiOnly && !message.isDataSms;
-    final bareAttachment =
-        message.mediaType == MessageType.image ||
-        message.mediaType == MessageType.video ||
-        message.mediaType == MessageType.gif ||
-        message.mediaType == MessageType.sticker;
+    final bareAttachment = isVisualChatAttachment(message.mediaType);
 
     final shape = ChatBubbleShape(
       isMine: isMine,
@@ -339,6 +336,7 @@ class MessageBubble extends StatelessWidget {
               onPauseUpload: onPauseUpload,
               onResumeUpload: onResumeUpload,
               onRetry: onRetry,
+              onDiscard: onDiscard,
               onTapQuote: onTapQuote,
               textColor: cs.onSurface,
               metaColor: cs.onSurfaceVariant,
@@ -374,6 +372,7 @@ class MessageBubble extends StatelessWidget {
                 onPauseUpload: onPauseUpload,
                 onResumeUpload: onResumeUpload,
                 onRetry: onRetry,
+                onDiscard: onDiscard,
                 onTapQuote: onTapQuote,
                 textColor: highlighted ? cs.onTertiaryContainer : textColor,
                 metaColor: highlighted ? cs.onTertiaryContainer : textColor,
@@ -469,13 +468,74 @@ class MessageBubble extends StatelessWidget {
                   child: messageRow,
                 ),
               ),
-              if (sendStatus != null && message.mediaType != MessageType.audio)
+              if (isVisualChatAttachment(message.mediaType)) ...[
+                if (sendStatus != null)
+                  AttachmentTransferActions(
+                    status: sendStatus!,
+                    onPause: onPauseUpload,
+                    onResume: onResumeUpload,
+                    onRetry: onRetry,
+                    onCancel: onCancelUpload,
+                  )
+                else if (message.status == MessageStatus.failed &&
+                    (onRetry != null || onDiscard != null))
+                  AttachmentTransferActions(
+                    status: MediaSendStatus(
+                      phase: MediaSendPhase.uploading,
+                      progress: 0,
+                      lifecycle: MediaUploadLifecycle.failed,
+                      totalBytes: message.mediaMeta?.sizeBytes,
+                    ),
+                    onRetry: onRetry,
+                    onCancel: onDiscard,
+                  )
+                else if (mediaLoader.downloads != null &&
+                    message.previewRef != null)
+                  AnimatedBuilder(
+                    animation: mediaLoader.downloads!,
+                    builder: (context, _) {
+                      final ref = message.previewRef!;
+                      final downloads = mediaLoader.downloads!;
+                      final job = downloads.job(ref);
+                      if (job == null ||
+                          job.state == MediaUploadLifecycle.completed ||
+                          mediaLoader.cached(ref) != null) {
+                        return const SizedBox.shrink();
+                      }
+                      return AttachmentTransferActions(
+                        status: job.progress,
+                        actionError: 'Download action failed. Please retry.',
+                        retryCancelled: true,
+                        onPause: () => downloads.command(ref, 'pause'),
+                        onResume: () => downloads.command(ref, 'resume'),
+                        onRetry: () => downloads.command(ref, 'retry'),
+                        onCancel: () => downloads.command(ref, 'cancel'),
+                      );
+                    },
+                  ),
+              ] else if (sendStatus != null &&
+                  message.mediaType != MessageType.audio)
                 AttachmentUploadProgress(
                   status: sendStatus!,
                   onPause: onPauseUpload,
                   onResume: onResumeUpload,
                   onRetry: onRetry,
                   onCancel: onCancelUpload,
+                )
+              else if (sendStatus == null &&
+                  message.status == MessageStatus.failed &&
+                  message.isMedia &&
+                  message.mediaType != MessageType.audio &&
+                  (onRetry != null || onDiscard != null))
+                AttachmentUploadProgress(
+                  status: MediaSendStatus(
+                    phase: MediaSendPhase.uploading,
+                    progress: 0,
+                    lifecycle: MediaUploadLifecycle.failed,
+                    totalBytes: message.mediaMeta?.sizeBytes,
+                  ),
+                  onRetry: onRetry,
+                  onCancel: onDiscard,
                 ),
               if (grouped.isNotEmpty && !message.isDataSms)
                 _ReactionRow(grouped: grouped, myUid: myUid, onTap: onReact),
@@ -617,6 +677,15 @@ class MessageBubble extends StatelessWidget {
                     onForward!();
                   },
                 ),
+              if (isMine && !message.isDataSms)
+                ListTile(
+                  leading: const Icon(Icons.info_outline_rounded),
+                  title: const Text('Message info'),
+                  onTap: () {
+                    Navigator.pop(sheetContext);
+                    _showMessageInfoSheet(context);
+                  },
+                ),
               if (onSaveToVault != null)
                 ListTile(
                   leading: const Icon(Icons.archive_outlined),
@@ -670,6 +739,117 @@ class MessageBubble extends StatelessWidget {
       ),
     );
   }
+
+  void _showMessageInfoSheet(BuildContext context) {
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) => SafeArea(
+        child: SingleChildScrollView(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(
+              AppSpacing.md,
+              0,
+              AppSpacing.md,
+              AppSpacing.lg,
+            ),
+            child: _MessageInfoContent(message: message, otherUid: otherUid),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _MessageInfoContent extends StatelessWidget {
+  const _MessageInfoContent({required this.message, required this.otherUid});
+
+  final ChatMessage message;
+  final String otherUid;
+
+  @override
+  Widget build(BuildContext context) {
+    final status =
+        message.status ??
+        MessageStatusX.forOneToOne(
+          readByRecipient: message.isReadBy(otherUid),
+          deliveredToRecipient: message.deliveredTo.contains(otherUid),
+        );
+    final sentValue = switch (status) {
+      MessageStatus.sending => 'Sending',
+      MessageStatus.failed => 'Not sent',
+      _ => _messageInfoTimeFormat.format(message.sentAt.toLocal()),
+    };
+    final deliveredAt = message.deliveredAtBy[otherUid];
+    final readAt = message.readAtBy[otherUid];
+    final deliveredValue = deliveredAt != null
+        ? _messageInfoTimeFormat.format(deliveredAt.toLocal())
+        : message.deliveredTo.contains(otherUid)
+        ? 'Delivered (time unavailable)'
+        : 'Not delivered yet';
+    final readValue = readAt != null
+        ? _messageInfoTimeFormat.format(readAt.toLocal())
+        : message.isReadBy(otherUid)
+        ? 'Read (time unavailable)'
+        : 'Not read yet';
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(bottom: AppSpacing.sm),
+          child: Text(
+            'Message info',
+            style: Theme.of(context).textTheme.titleLarge,
+          ),
+        ),
+        _MessageInfoRow(
+          icon: Icons.done_rounded,
+          label: 'Sent',
+          value: sentValue,
+        ),
+        _MessageInfoRow(
+          icon: Icons.done_all_rounded,
+          label: 'Delivered',
+          value: deliveredValue,
+        ),
+        _MessageInfoRow(
+          icon: Icons.done_all_rounded,
+          iconColor: context.chatColors.readTick,
+          label: 'Read',
+          value: readValue,
+        ),
+      ],
+    );
+  }
+}
+
+class _MessageInfoRow extends StatelessWidget {
+  const _MessageInfoRow({
+    required this.icon,
+    required this.label,
+    required this.value,
+    this.iconColor,
+  });
+
+  final IconData icon;
+  final String label;
+  final String value;
+  final Color? iconColor;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      leading: Icon(icon, color: iconColor),
+      title: Text(label),
+      subtitle: Text(
+        value,
+        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+          color: Theme.of(context).colorScheme.onSurfaceVariant,
+        ),
+      ),
+    );
+  }
 }
 
 /// Inner layout of a bubble: forwarded marker, quote, media, text, meta row.
@@ -696,6 +876,7 @@ class _BubbleContent extends StatelessWidget {
     this.onPauseUpload,
     this.onResumeUpload,
     this.onRetry,
+    this.onDiscard,
     this.loadLinkedVaultMedia,
     this.loadLinkedVaultThumbnail,
   });
@@ -718,10 +899,11 @@ class _BubbleContent extends StatelessWidget {
 
   /// Send progress of this attachment, null once it is sent.
   final MediaSendStatus? sendStatus;
-  final VoidCallback? onCancelUpload;
-  final VoidCallback? onPauseUpload;
-  final VoidCallback? onResumeUpload;
+  final FutureOr<void> Function()? onCancelUpload;
+  final FutureOr<void> Function()? onPauseUpload;
+  final FutureOr<void> Function()? onResumeUpload;
   final FutureOr<void> Function()? onRetry;
+  final VoidCallback? onDiscard;
 
   @override
   Widget build(BuildContext context) {
@@ -784,6 +966,8 @@ class _BubbleContent extends StatelessWidget {
                 otherUid: otherUid,
                 isOffline: isOffline,
                 textColor: metaColor,
+                mediaLoader: mediaLoader,
+                sendStatus: sendStatus,
               ),
             ],
           ),
@@ -877,7 +1061,11 @@ class _BubbleContent extends StatelessWidget {
               message: message,
               loader: mediaLoader,
               sendStatus: sendStatus,
+              onPause: onPauseUpload,
+              onResume: onResumeUpload,
+              onRetry: onRetry,
               onCancel: onCancelUpload,
+              onDiscard: onDiscard,
               loadLinkedVaultThumbnail: loadLinkedVaultThumbnail,
               onTap:
                   isSelectionMode ||
@@ -938,6 +1126,8 @@ class _BubbleContent extends StatelessWidget {
               otherUid: otherUid,
               isOffline: isOffline,
               textColor: metaColor,
+              mediaLoader: mediaLoader,
+              sendStatus: sendStatus,
             ),
           ],
         ),
@@ -991,6 +1181,7 @@ class ThemedEmojiPicker extends StatefulWidget {
     this.showBackspace = true,
     this.showSearchButton = true,
     this.columns = 8,
+    this.preferencesReadiness,
   });
 
   final OnEmojiSelected onEmojiSelected;
@@ -1001,6 +1192,7 @@ class ThemedEmojiPicker extends StatefulWidget {
   final bool showBackspace;
   final bool showSearchButton;
   final int columns;
+  final SharedPreferencesReadiness? preferencesReadiness;
 
   @override
   State<ThemedEmojiPicker> createState() => _ThemedEmojiPickerState();
@@ -1008,6 +1200,16 @@ class ThemedEmojiPicker extends StatefulWidget {
 
 class _ThemedEmojiPickerState extends State<ThemedEmojiPicker> {
   final _searching = ValueNotifier<bool>(false);
+  late SharedPreferencesReadiness _preferencesReadiness;
+  late Future<void> _preferencesReady;
+
+  @override
+  void initState() {
+    super.initState();
+    _preferencesReadiness =
+        widget.preferencesReadiness ?? SharedPreferencesReadiness.instance;
+    _preferencesReady = _preferencesReadiness.ensureInitialized();
+  }
 
   @override
   void dispose() {
@@ -1015,17 +1217,28 @@ class _ThemedEmojiPickerState extends State<ThemedEmojiPicker> {
     super.dispose();
   }
 
-  Config _config(BuildContext context, double height) {
+  Config _config(BuildContext context) {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
     final bg = cs.surfaceContainerHigh;
     return Config(
-      height: height,
+      height: null,
       checkPlatformCompatibility: true,
       emojiViewConfig: EmojiViewConfig(
         columns: widget.columns,
         emojiSizeMax: 28,
         backgroundColor: bg,
+        noRecents: Text(
+          'No Recents',
+          style: theme.textTheme.titleMedium?.copyWith(
+            color: cs.onSurfaceVariant,
+          ),
+          textAlign: TextAlign.center,
+        ),
+      ),
+      skinToneConfig: SkinToneConfig(
+        dialogBackgroundColor: cs.surfaceContainerHighest,
+        indicatorColor: cs.primary,
       ),
       categoryViewConfig: CategoryViewConfig(
         recentTabBehavior: RecentTabBehavior.RECENT,
@@ -1046,7 +1259,9 @@ class _ThemedEmojiPickerState extends State<ThemedEmojiPicker> {
       searchViewConfig: SearchViewConfig(
         backgroundColor: bg,
         buttonIconColor: cs.onSurfaceVariant,
-        inputTextStyle: theme.textTheme.bodyLarge,
+        inputTextStyle: theme.textTheme.bodyLarge?.copyWith(
+          color: cs.onSurface,
+        ),
         hintText: 'Search emoji',
         hintTextStyle: theme.textTheme.bodyLarge?.copyWith(
           color: cs.onSurfaceVariant,
@@ -1059,6 +1274,44 @@ class _ThemedEmojiPickerState extends State<ThemedEmojiPicker> {
 
   @override
   Widget build(BuildContext context) {
+    return FutureBuilder<void>(
+      future: _preferencesReady,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState != ConnectionState.done) {
+          return SizedBox(
+            height: widget.height,
+            child: const Center(child: Text('Loading emoji...')),
+          );
+        }
+        if (snapshot.hasError) {
+          return SizedBox(
+            height: widget.height,
+            child: Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text('Emoji history is unavailable.'),
+                  const SizedBox(height: 8),
+                  FilledButton(
+                    onPressed: () {
+                      setState(() {
+                        _preferencesReady = _preferencesReadiness
+                            .ensureInitialized();
+                      });
+                    },
+                    child: const Text('Retry'),
+                  ),
+                ],
+              ),
+            ),
+          );
+        }
+        return _buildPicker();
+      },
+    );
+  }
+
+  Widget _buildPicker() {
     return ValueListenableBuilder<bool>(
       valueListenable: _searching,
       builder: (context, searching, _) {
@@ -1069,7 +1322,7 @@ class _ThemedEmojiPickerState extends State<ThemedEmojiPicker> {
             key: widget.pickerKey,
             textEditingController: widget.textEditingController,
             onEmojiSelected: widget.onEmojiSelected,
-            config: _config(context, h),
+            config: _config(context),
           ),
         );
       },
@@ -1304,6 +1557,8 @@ class _MetaRow extends StatelessWidget {
     required this.otherUid,
     required this.isOffline,
     required this.textColor,
+    required this.mediaLoader,
+    this.sendStatus,
   });
 
   final ChatMessage message;
@@ -1311,6 +1566,8 @@ class _MetaRow extends StatelessWidget {
   final String otherUid;
   final bool isOffline;
   final Color textColor;
+  final ChatMediaLoader mediaLoader;
+  final MediaSendStatus? sendStatus;
 
   @override
   Widget build(BuildContext context) {
@@ -1328,8 +1585,35 @@ class _MetaRow extends StatelessWidget {
         ],
       );
     }
-    // Prefer the locally-supplied status (outbox: sending/failed); otherwise
-    // derive it from whether the recipient has actually read the message.
+    if (!isVisualChatAttachment(message.mediaType)) {
+      return _buildRow(context, paused: false);
+    }
+    final downloads = mediaLoader.downloads;
+    if (downloads == null) {
+      return _buildRow(
+        context,
+        paused: sendStatus?.lifecycle == MediaUploadLifecycle.paused,
+      );
+    }
+    return AnimatedBuilder(
+      animation: downloads,
+      builder: (context, _) {
+        final ref = message.previewRef;
+        final downloadPaused =
+            ref != null &&
+            downloads.job(ref)?.state == MediaUploadLifecycle.paused;
+        return _buildRow(
+          context,
+          paused:
+              sendStatus?.lifecycle == MediaUploadLifecycle.paused ||
+              downloadPaused,
+        );
+      },
+    );
+  }
+
+  Widget _buildRow(BuildContext context, {required bool paused}) {
+    final faded = textColor.withValues(alpha: 0.65);
     final status =
         message.status ??
         MessageStatusX.forOneToOne(
@@ -1355,27 +1639,32 @@ class _MetaRow extends StatelessWidget {
           style: AppTypography.bubbleMeta(faded),
         ),
         if (isMine) ...[
+          const SizedBox(width: AppSpacing.xs),
           if (waitingForConnection ||
               status == MessageStatus.sending ||
-              status == MessageStatus.failed)
-            Padding(
-              padding: const EdgeInsets.only(right: AppSpacing.xs),
-              child: Text(
-                statusLabel ??
-                    (status == MessageStatus.sending ? 'Sending' : 'Not sent'),
-                style: AppTypography.bubbleMeta(
-                  status == MessageStatus.failed && !waitingForConnection
-                      ? Theme.of(context).colorScheme.error
-                      : faded,
-                ),
+              status == MessageStatus.failed) ...[
+            Text(
+              statusLabel ??
+                  (status == MessageStatus.sending ? 'Sending' : 'Not sent'),
+              style: AppTypography.bubbleMeta(
+                status == MessageStatus.failed && !waitingForConnection
+                    ? Theme.of(context).colorScheme.error
+                    : faded,
               ),
             ),
-          const SizedBox(width: AppSpacing.xs),
+            const SizedBox(width: AppSpacing.xs),
+          ],
           _StatusTicks(
             status: visibleStatus,
             color: textColor,
             labelOverride: statusLabel,
           ),
+        ],
+        if (paused) ...[
+          const SizedBox(width: AppSpacing.xs),
+          Icon(Icons.pause_circle_outline_rounded, size: 13, color: faded),
+          const SizedBox(width: 2),
+          Text('Paused', style: AppTypography.bubbleMeta(faded)),
         ],
       ],
     );
@@ -1625,6 +1914,7 @@ class _TombstoneBubble extends StatelessWidget {
 /// Shared across rows: building a [DateFormat] parses its pattern, which is
 /// measurable when hundreds of bubbles build during a fast scroll.
 final DateFormat _bubbleTimeFormat = DateFormat.jm();
+final DateFormat _messageInfoTimeFormat = DateFormat.yMMMd().add_jm();
 
 /// Compiled once; matching every row's text against a fresh [RegExp] showed
 /// up in scroll profiles.

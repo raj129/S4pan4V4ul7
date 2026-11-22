@@ -8,7 +8,7 @@ import 'package:photo_vault/core/media/animated_media.dart';
 import 'package:photo_vault/core/widgets/animated_media_image.dart';
 import 'package:photo_vault/core/widgets/hdr_preview_toggle_button.dart';
 import 'package:photo_vault/core/widgets/inline_media_preview.dart';
-import 'package:photo_vault/features/chat/application/media/android_chat_secure_media_service.dart';
+import 'package:photo_vault/core/widgets/secure_video_player.dart';
 import 'package:photo_vault/features/vault/application/usecases/export_photo_usecase.dart';
 import 'package:photo_vault/features/vault/application/usecases/unlock_vault_usecase.dart';
 import 'package:photo_vault/features/vault/application/services/import_manager.dart';
@@ -63,6 +63,7 @@ class _GalleryPhotoViewerScreenState extends State<GalleryPhotoViewerScreen> {
   Uint8List? _videoBytes;
   Uint8List? _motionPhotoVideo;
   bool _containsHdrPhoto = false;
+  bool _playingVideo = false;
   bool _loading = true;
   String? _error;
 
@@ -179,9 +180,13 @@ class _GalleryPhotoViewerScreenState extends State<GalleryPhotoViewerScreen> {
               actions: [
                 if (_videoBytes != null)
                   IconButton(
-                    tooltip: 'Play video',
+                    tooltip: _playingVideo ? 'Stop video' : 'Play video',
                     onPressed: _playVaultVideo,
-                    icon: const Icon(Icons.play_circle_outline_rounded),
+                    icon: Icon(
+                      _playingVideo
+                          ? Icons.stop_circle_outlined
+                          : Icons.play_circle_outline_rounded,
+                    ),
                   ),
                 if (_containsHdrPhoto) const HdrPreviewToggleButton(),
                 if (widget.isTrashPreview) ...[
@@ -257,6 +262,17 @@ class _GalleryPhotoViewerScreenState extends State<GalleryPhotoViewerScreen> {
       );
     }
 
+    if (_playingVideo && _videoBytes != null) {
+      return SecureVideoPlayer(
+        bytes: _videoBytes!,
+        title: widget.photo.originalFilename,
+        showTopBar: false,
+        onClose: () {
+          if (mounted) setState(() => _playingVideo = false);
+        },
+      );
+    }
+
     if (_photoBytes == null) {
       return const EmptyView(
         icon: Icons.image_not_supported_outlined,
@@ -289,7 +305,7 @@ class _GalleryPhotoViewerScreenState extends State<GalleryPhotoViewerScreen> {
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        return GestureDetector(
+        final viewer = GestureDetector(
           onDoubleTapDown: (details) {
             _handleDoubleTap(details.localPosition, constraints);
           },
@@ -306,24 +322,51 @@ class _GalleryPhotoViewerScreenState extends State<GalleryPhotoViewerScreen> {
             ),
           ),
         );
+        if (_videoBytes == null) return viewer;
+        return Stack(
+          fit: StackFit.expand,
+          children: [
+            viewer,
+            Center(
+              child: Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  onTap: _playVaultVideo,
+                  borderRadius: BorderRadius.circular(40),
+                  child: Container(
+                    width: 76,
+                    height: 76,
+                    decoration: BoxDecoration(
+                      color: Theme.of(
+                        context,
+                      ).colorScheme.primary.withValues(alpha: 0.9),
+                      shape: BoxShape.circle,
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.45),
+                          blurRadius: 20,
+                          offset: const Offset(0, 6),
+                        ),
+                      ],
+                    ),
+                    child: Icon(
+                      Icons.play_arrow_rounded,
+                      color: Theme.of(context).colorScheme.onPrimary,
+                      size: 44,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        );
       },
     );
   }
 
-  Future<void> _playVaultVideo() async {
-    final bytes = _videoBytes;
-    if (bytes == null) return;
-    final playerBytes = Uint8List.fromList(bytes);
-    try {
-      await const AndroidChatSecureMediaService().showVideo(playerBytes);
-    } catch (error) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Could not play this media: $error')),
-      );
-    } finally {
-      playerBytes.fillRange(0, playerBytes.length, 0);
-    }
+  void _playVaultVideo() {
+    if (_videoBytes == null) return;
+    setState(() => _playingVideo = !_playingVideo);
   }
 
   void _handleDoubleTap(Offset localPosition, BoxConstraints constraints) {

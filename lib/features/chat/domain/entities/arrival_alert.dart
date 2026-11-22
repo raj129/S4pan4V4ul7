@@ -83,8 +83,7 @@ class ArrivalAlert extends Equatable {
       recipientUid: to,
       label: json['label'] as String? ?? '',
       point: point,
-      radiusMeters:
-          (json['radius'] as num?)?.toDouble() ?? defaultRadiusMeters,
+      radiusMeters: (json['radius'] as num?)?.toDouble() ?? defaultRadiusMeters,
       status: json['status'] == ArrivalAlertStatus.triggered.name
           ? ArrivalAlertStatus.triggered
           : ArrivalAlertStatus.armed,

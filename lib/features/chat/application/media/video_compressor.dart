@@ -170,6 +170,42 @@ class VideoCompressor {
     );
   }
 
+  /// Exports a video with crop, 90-degree rotation, and transparent PNG overlay
+  /// burned into every frame via Media3 Transformer.
+  Future<Uint8List> exportEdited({
+    required Uint8List bytes,
+    Uint8List? overlayPng,
+    int rotationQuarterTurns = 0,
+    double cropLeft = 0.0,
+    double cropTop = 0.0,
+    double cropRight = 1.0,
+    double cropBottom = 1.0,
+    int? targetHeight,
+  }) async {
+    try {
+      final result = await _channel.invokeMapMethod<Object?, Object?>(
+        'exportEditedVideo',
+        {
+          'bytes': bytes,
+          'overlayPng': overlayPng,
+          'rotationQuarterTurns': rotationQuarterTurns,
+          'cropLeft': cropLeft,
+          'cropTop': cropTop,
+          'cropRight': cropRight,
+          'cropBottom': cropBottom,
+          'targetHeight': targetHeight ?? 0,
+        },
+      );
+      final exportedBytes = result?['bytes'] as Uint8List?;
+      if (exportedBytes != null && exportedBytes.isNotEmpty) {
+        return exportedBytes;
+      }
+    } catch (_) {
+      // Fallback to original bytes if native export fails or channel unavailable
+    }
+    return bytes;
+  }
+
   /// Estimates output sizes for each quality option given original byte length and duration.
   Map<VideoQuality, int> estimateAllSizes({
     required int originalBytes,

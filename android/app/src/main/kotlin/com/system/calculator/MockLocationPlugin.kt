@@ -46,9 +46,23 @@ class MockLocationPlugin : FlutterPlugin {
         ch.setMethodCallHandler { call, result ->
             try {
                 when (call.method) {
+                    "isDeveloperModeEnabled" -> {
+                        val enabled = Settings.Global.getInt(
+                            context.contentResolver,
+                            Settings.Global.DEVELOPMENT_SETTINGS_ENABLED,
+                            0,
+                        ) == 1
+                        result.success(enabled)
+                    }
                     "isMockAppSelected" -> result.success(MockLocationEngine.isMockAppSelected(context))
                     "openDeveloperSettings" -> {
                         openDeveloperSettings(context)
+                        result.success(null)
+                    }
+                    "openPhoneSettings" -> {
+                        context.startActivity(
+                            Intent(Settings.ACTION_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        )
                         result.success(null)
                     }
                     "start" -> {

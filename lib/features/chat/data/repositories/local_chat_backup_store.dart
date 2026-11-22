@@ -1,63 +1,56 @@
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:external_path/external_path.dart';
-import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
-
+import 'package:photo_vault/features/backup/data/local_backup_blob_store.dart';
+import 'package:photo_vault/features/backup/domain/backup_blob_store.dart';
 import '../../domain/repositories/chat_backup_store.dart';
 
-/// Keeps the chat backup in a user-visible folder that survives "Clear app
-/// data" (public Documents on Android, the Documents folder on desktop).
+/// Keeps the chat backup on this device, where it survives "Clear app data".
+///
+/// Delegates to [LocalBackupBlobStore] so chat backups share the exact same
+/// `Android/media` recovery folder, legacy `Documents` fallback, and atomic
+/// `.tmp` writes as vault photo and VMK backups.
 class LocalChatBackupStore implements ChatBackupStore {
-  LocalChatBackupStore({Future<Directory> Function()? baseDirectory})
-    : _baseDirectory = baseDirectory ?? _defaultBaseDirectory;
+  LocalChatBackupStore({
+    Future<Directory> Function()? baseDirectory,
+    Future<Directory?> Function()? legacyDirectory,
+    BackupByteStore? store,
+  }) : _store =
+           store ??
+           LocalBackupBlobStore(
+             baseDirectory: baseDirectory,
+             legacyDirectory: legacyDirectory,
+           );
 
-  final Future<Directory> Function() _baseDirectory;
-
-  static const _folderName = 'PhotoVault_Recovery';
+  final BackupByteStore _store;
 
   @override
-  String get label => 'This device';
+  String get label => _store.label;
 
   @override
-  bool get requiresNetwork => false;
+  bool get requiresNetwork => _store.requiresNetwork;
 
-  static Future<Directory> _defaultBaseDirectory() async {
-    if (Platform.isAndroid) {
-      final docs = await ExternalPath.getExternalStoragePublicDirectory(
-        ExternalPath.DIRECTORY_DOCUMENTS,
-      );
-      return Directory(docs);
-    }
-    return getApplicationDocumentsDirectory();
-  }
+  @override
+  bool get isCloud => _store.isCloud;
 
-  Future<File> _file(String accountId) async {
-    final base = await _baseDirectory();
-    final dir = Directory(p.join(base.path, _folderName));
-    if (!await dir.exists()) await dir.create(recursive: true);
-    return File(p.join(dir.path, 'chat_backup_$accountId.enc'));
-  }
+  static String _fileName(String accountId) => 'chat_backup_$accountId.enc';
 
   @override
   Future<void> write(
     String accountId,
     Uint8List blob, {
     bool interactive = false,
-  }) async {
-    final file = await _file(accountId);
-    // Write-then-rename so a crash mid-write never leaves a torn backup.
-    final tmp = File('${file.path}.tmp');
-    await tmp.writeAsBytes(blob, flush: true);
-    if (await file.exists()) await file.delete();
-    await tmp.rename(file.path);
-  }
+  }) => _store.writeBytes(
+    _fileName(accountId),
+    blob,
+    interactive: interactive,
+  );
 
   @override
-  Future<Uint8List?> read(String accountId, {bool interactive = false}) async {
-    final file = await _file(accountId);
-    if (!await file.exists()) return null;
-    return file.readAsBytes();
-  }
+  Future<void> delete(String accountId, {bool interactive = false}) =>
+      _store.delete(_fileName(accountId), interactive: interactive);
+
+  @override
+  Future<Uint8List?> read(String accountId, {bool interactive = false}) =>
+      _store.readBytes(_fileName(accountId), interactive: interactive);
 }

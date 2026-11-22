@@ -160,18 +160,31 @@ class MockLocationController extends ChangeNotifier {
   }
 
   Future<void> _startSystemWide() async {
-    if (_systemWideRunning || !_systemWide) return;
+    if (_systemWideRunning || !_systemWide || !isActive) return;
     final availability = await _bridge.availability();
+    if (_disposed || !_systemWide || !isActive) return;
     if (availability != SystemMockAvailability.ready) {
-      _systemWideError = availability == SystemMockAvailability.unsupported
-          ? 'System-wide mock is only available on Android.'
-          : 'Select this app under Developer options → '
-                'Select mock location app.';
+      _systemWideError = switch (availability) {
+        SystemMockAvailability.unsupported =>
+          'System-wide mock is only available on Android.',
+        SystemMockAvailability.developerModeDisabled =>
+          'Developer mode is not enabled. Enable it in Settings → About phone '
+              '(tap Build number 7 times), then select this app as the mock '
+              'location app.',
+        SystemMockAvailability.notSelected =>
+          'Developer mode is enabled, but this app is not selected. Open '
+              'Developer options → Select mock location app → Calculator.',
+        SystemMockAvailability.ready => null,
+      };
       _systemWide = false;
       return;
     }
     try {
       await _bridge.start(status: statusLabel);
+      if (_disposed || !_systemWide || !isActive) {
+        await _bridge.stop();
+        return;
+      }
       _systemWideRunning = true;
       final fix = _latest;
       if (fix != null) await _bridge.push(fix, status: statusLabel);

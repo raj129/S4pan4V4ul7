@@ -359,4 +359,42 @@ void main() {
       expect(await crypto.hasIdentityKey(), isFalse);
     });
   });
+
+  group('peer rekeying', () {
+    test('re-derives thread key when peer public key changes', () async {
+      await crypto.getOrCreatePublicKey();
+      final peerOld = ChatCryptoService(storage: _FakeSecureStorage());
+      final oldPub = await peerOld.getOrCreatePublicKey();
+      await crypto.deriveAndStoreThreadKey(
+        threadId: 't1',
+        otherPublicKeyB64: oldPub,
+      );
+      final oldThreadKey = storage.values['chat_thread_key_t1'];
+
+      final peerNew = ChatCryptoService(storage: _FakeSecureStorage());
+      final newPub = await peerNew.getOrCreatePublicKey();
+      await crypto.deriveAndStoreThreadKey(
+        threadId: 't1',
+        otherPublicKeyB64: newPub,
+      );
+
+      expect(storage.values['chat_thread_key_t1'], isNot(oldThreadKey));
+      expect(storage.values['chat_thread_peer_key_t1'], newPub);
+
+      // New peer can decrypt messages encrypted after rekeying.
+      final myPub = await crypto.getOrCreatePublicKey();
+      await peerNew.deriveAndStoreThreadKey(
+        threadId: 't1',
+        otherPublicKeyB64: myPub,
+      );
+      final cipher = await crypto.encryptMessage(
+        threadId: 't1',
+        plaintext: 'after reset',
+      );
+      expect(
+        await peerNew.decryptMessage(threadId: 't1', encryptedB64: cipher),
+        'after reset',
+      );
+    });
+  });
 }

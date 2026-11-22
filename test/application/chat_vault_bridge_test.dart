@@ -277,9 +277,10 @@ void main() {
     'mirror failure is not success and leaves no committed attachment',
     () async {
       final vault = Directory(
-        '${directory.path}${Platform.pathSeparator}vault',
+        '${directory.path}${Platform.pathSeparator}vault'
+        '${Platform.pathSeparator}vault-a',
       );
-      await vault.create();
+      await vault.create(recursive: true);
       await File(
         '${vault.path}${Platform.pathSeparator}manifest',
       ).writeAsString('block');

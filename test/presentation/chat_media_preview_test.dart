@@ -7,9 +7,11 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:provider/provider.dart';
 import 'package:image/image.dart' as img;
 import 'package:photo_vault/features/chat/application/crypto/chat_crypto_service.dart';
+import 'package:photo_vault/features/chat/application/media/android_chat_downloads.dart';
 import 'package:photo_vault/features/chat/application/media/android_chat_local_media.dart';
 import 'package:photo_vault/features/chat/application/media/media_send_status.dart';
 import 'package:photo_vault/features/chat/domain/entities/chat_message.dart';
+import 'package:photo_vault/features/chat/domain/entities/message_metadata.dart';
 import 'package:photo_vault/features/chat/domain/repositories/message_repository.dart';
 import 'package:photo_vault/features/chat/presentation/screens/chat_image_viewer_screen.dart';
 import 'package:photo_vault/features/chat/presentation/widgets/attachment_upload_progress.dart';
@@ -28,7 +30,7 @@ class _UnusedCrypto implements ChatCryptoService {
 }
 
 class _Loader extends ChatMediaLoader {
-  _Loader()
+  _Loader({super.downloads})
     : super(mediaRepository: _UnusedMedia(), cryptoService: _UnusedCrypto());
   int calls = 0;
   final List<String?> senders = [];
@@ -49,6 +51,21 @@ class _Loader extends ChatMediaLoader {
       ownedResults.add(owned);
       return owned;
     });
+  }
+}
+
+class _Downloads extends AndroidChatDownloads {
+  _Downloads() : super(currentUid: () => 'me', pollInterval: Duration.zero);
+
+  AndroidDownloadJob? currentJob;
+
+  @override
+  AndroidDownloadJob? job(String path) =>
+      currentJob?.storagePath == path ? currentJob : null;
+
+  void update(AndroidDownloadJob job) {
+    currentJob = job;
+    notifyListeners();
   }
 }
 
@@ -142,7 +159,185 @@ void main() {
     loader.dispose();
   });
 
-  testWidgets('other attachment upload progress remains outside the bubble', (
+  testWidgets(
+    'image upload renders circular progress overlay and below-bubble actions',
+    (tester) async {
+      final loader = _Loader();
+      var pauses = 0;
+      var cancels = 0;
+      const measuredUpload = MediaSendStatus(
+        phase: MediaSendPhase.uploading,
+        progress: .25,
+        lifecycle: MediaUploadLifecycle.uploading,
+        processedBytes: 256,
+        totalBytes: 1024,
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: AppTheme.light,
+          home: Scaffold(
+            body: MessageBubble(
+              message: message,
+              isMine: true,
+              myUid: 'me',
+              otherUid: 'alice',
+              mediaLoader: loader,
+              onDeleteForMe: () {},
+              sendStatus: measuredUpload,
+              onPauseUpload: () => pauses++,
+              onCancelUpload: () => cancels++,
+            ),
+          ),
+        ),
+      );
+
+      expect(find.byType(LinearProgressIndicator), findsNothing);
+      expect(
+        find.descendant(
+          of: find.byType(ChatMediaPreview),
+          matching: find.byType(CircularProgressIndicator),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: find.byType(ChatMediaPreview),
+          matching: find.text('25%'),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: find.byType(ChatMediaPreview),
+          matching: find.text('256 B / 1.0 KB'),
+        ),
+        findsOneWidget,
+      );
+      expect(find.byType(AttachmentTransferActions), findsOneWidget);
+      await tester.tap(find.text('Pause'));
+      await tester.pump();
+      expect(pauses, 1);
+      await tester.tap(find.text('Cancel'));
+      await tester.pump();
+      expect(cancels, 1);
+      await tester.pumpWidget(const SizedBox.shrink());
+      loader.dispose();
+    },
+  );
+
+  for (final mediaType in [MessageType.gif, MessageType.sticker]) {
+    testWidgets('$mediaType upload uses the visual attachment controls', (
+      tester,
+    ) async {
+      final loader = _Loader();
+      const pausedUpload = MediaSendStatus(
+        phase: MediaSendPhase.uploading,
+        progress: .4,
+        lifecycle: MediaUploadLifecycle.paused,
+        processedBytes: 400,
+        totalBytes: 1000,
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: AppTheme.light,
+          home: Scaffold(
+            body: MessageBubble(
+              message: message.copyWith(
+                mediaType: mediaType,
+                status: MessageStatus.sending,
+              ),
+              isMine: true,
+              myUid: 'me',
+              otherUid: 'alice',
+              mediaLoader: loader,
+              onDeleteForMe: () {},
+              sendStatus: pausedUpload,
+              onResumeUpload: () {},
+              onCancelUpload: () {},
+            ),
+          ),
+        ),
+      );
+
+      expect(find.byType(LinearProgressIndicator), findsNothing);
+      expect(
+        find.descendant(
+          of: find.byType(ChatMediaPreview),
+          matching: find.byType(CircularProgressIndicator),
+        ),
+        findsOneWidget,
+      );
+      expect(find.byType(AttachmentTransferActions), findsOneWidget);
+      expect(find.text('Sending'), findsOneWidget);
+      expect(find.text('Paused'), findsOneWidget);
+      expect(find.byIcon(Icons.pause_circle_outline_rounded), findsOneWidget);
+
+      final sending = tester.getTopLeft(find.text('Sending'));
+      final paused = tester.getTopLeft(find.text('Paused'));
+      final metaRow = find
+          .ancestor(of: find.text('Sending'), matching: find.byType(Row))
+          .first;
+      final timestamp = tester
+          .widget<Row>(metaRow)
+          .children
+          .whereType<Text>()
+          .first;
+      final gap = sending.dx - tester.getTopRight(find.byWidget(timestamp)).dx;
+      expect(gap, greaterThanOrEqualTo(4));
+      expect(paused.dx, greaterThan(sending.dx));
+      await tester.pumpWidget(const SizedBox.shrink());
+      loader.dispose();
+    });
+  }
+
+  testWidgets('paused visual download appears after message status', (
+    tester,
+  ) async {
+    final downloads = _Downloads();
+    final loader = _Loader(downloads: downloads);
+    downloads.update(
+      const AndroidDownloadJob(
+        uid: 'me',
+        storagePath: 'preview',
+        threadId: 't',
+        state: MediaUploadLifecycle.paused,
+        processedBytes: 250,
+        totalBytes: 1000,
+      ),
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light,
+        home: Scaffold(
+          body: MessageBubble(
+            message: message.copyWith(
+              mediaType: MessageType.gif,
+              status: MessageStatus.sending,
+              mediaMeta: const MediaMeta(thumbRef: 'preview'),
+            ),
+            isMine: true,
+            myUid: 'me',
+            otherUid: 'alice',
+            mediaLoader: loader,
+            onDeleteForMe: () {},
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('Sending'), findsOneWidget);
+    expect(find.text('Paused'), findsOneWidget);
+    final sending = tester.getTopLeft(find.text('Sending'));
+    final paused = tester.getTopLeft(find.text('Paused'));
+    expect(paused.dx, greaterThan(sending.dx));
+    expect(find.byType(AttachmentTransferActions), findsOneWidget);
+    await tester.pumpWidget(const SizedBox.shrink());
+    loader.dispose();
+    downloads.dispose();
+  });
+
+  testWidgets('document upload renders only one AttachmentUploadProgress', (
     tester,
   ) async {
     final loader = _Loader();
@@ -151,7 +346,10 @@ void main() {
         theme: AppTheme.light,
         home: Scaffold(
           body: MessageBubble(
-            message: message,
+            message: message.copyWith(
+              mediaType: MessageType.file,
+              localDecryptedText: 'report.pdf',
+            ),
             isMine: true,
             myUid: 'me',
             otherUid: 'alice',
@@ -164,6 +362,48 @@ void main() {
     );
 
     expect(find.byType(AttachmentUploadProgress), findsOneWidget);
+    await tester.pumpWidget(const SizedBox.shrink());
+    loader.dispose();
+  });
+
+  testWidgets('failed media attachment exposes retry and cancel actions', (
+    tester,
+  ) async {
+    final loader = _Loader();
+    var retries = 0;
+    var discards = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light,
+        home: Scaffold(
+          body: MessageBubble(
+            message: message.copyWith(status: MessageStatus.failed),
+            isMine: true,
+            myUid: 'me',
+            otherUid: 'alice',
+            mediaLoader: loader,
+            onDeleteForMe: () {},
+            onRetry: () => retries++,
+            onDiscard: () => discards++,
+          ),
+        ),
+      ),
+    );
+
+    expect(find.byType(AttachmentTransferActions), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byType(ChatMediaPreview),
+        matching: find.byType(CircularProgressIndicator),
+      ),
+      findsOneWidget,
+    );
+    await tester.tap(find.text('Retry'));
+    await tester.pump();
+    expect(retries, 1);
+    await tester.tap(find.text('Cancel'));
+    await tester.pump();
+    expect(discards, 1);
     await tester.pumpWidget(const SizedBox.shrink());
     loader.dispose();
   });

@@ -211,33 +211,33 @@ void main() {
 
     await open(tester);
     expect(find.byType(TextField), findsNothing);
-    await tester.tap(find.text('Edit nickname'));
+    await tester.tap(find.text('Nickname visible only to you'));
     await tester.pumpAndSettle();
+    expect(find.byType(AlertDialog), findsOneWidget);
     await tester.enterText(find.byType(TextField), 'B');
     await tester.tap(find.text('Save'));
     await tester.pumpAndSettle();
     expect(service.aliasFor('a'), 'B');
-    expect(find.byType(TextField), findsNothing);
+    expect(find.byType(AlertDialog), findsNothing);
     expect(tester.takeException(), isNull);
 
-    await tester.tap(find.text('Edit nickname'));
+    await tester.tap(find.text('Nickname visible only to you'));
     await tester.pumpAndSettle();
     await tester.enterText(find.byType(TextField), 'C');
     await tester.testTextInput.receiveAction(TextInputAction.done);
     await tester.pumpAndSettle();
     expect(service.aliasFor('a'), 'C');
 
-    await tester.tap(find.text('Edit nickname'));
+    await tester.tap(find.text('Nickname visible only to you'));
     await tester.pumpAndSettle();
     await tester.enterText(find.byType(TextField), 'unsaved');
     await tester.tap(find.text('Cancel'));
     await tester.pumpAndSettle();
     expect(service.aliasFor('a'), 'C');
 
-    await tester.tap(find.text('Edit nickname'));
+    await tester.tap(find.text('Nickname visible only to you'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Use real name'));
-    await tester.tap(find.text('Save'));
     await tester.pumpAndSettle();
     expect(service.aliasFor('a'), isNull);
     expect(tester.takeException(), isNull);
@@ -254,7 +254,7 @@ void main() {
     expect(card.elevation, 0);
     expect(find.byType(Card), findsOneWidget);
     expect(find.byType(TextField), findsNothing);
-    expect(find.text('Edit nickname'), findsOneWidget);
+    expect(find.text('Nickname visible only to you'), findsOneWidget);
 
     // Profile picture can be tapped to view full avatar
     await tester.tap(find.byTooltip('View profile picture'));
@@ -269,7 +269,7 @@ void main() {
     await service.setAlias('a', 'B');
 
     await open(tester);
-    await tester.tap(find.text('Edit nickname'));
+    await tester.tap(find.text('Nickname visible only to you'));
     await tester.pumpAndSettle();
     await tester.enterText(find.byType(TextField), '   ');
     await tester.tap(find.text('Save'));
@@ -278,7 +278,7 @@ void main() {
   });
 
   testWidgets(
-    'per-chat media opens over contact profile without saving draft',
+    'per-chat media opens from contact profile',
     (tester) async {
       final loader = ChatMediaLoader(
         mediaRepository: _UnusedMedia(),
@@ -299,46 +299,26 @@ void main() {
         threadId: 'thread-a',
       );
       await open(tester);
-      await tester.tap(find.text('Edit nickname'));
-      await tester.pumpAndSettle();
-      await tester.enterText(find.byType(TextField), 'Draft nickname');
       await tester.tap(find.text('Media in this chat'));
       await tester.pumpAndSettle();
 
       expect(find.text('Media in this chat'), findsWidgets);
       expect(find.text('No media found'), findsOneWidget);
       expect(cache.loadedThreads, ['thread-a']);
-
-      await tester.binding.handlePopRoute();
-      await tester.pumpAndSettle();
-      expect(find.byType(TextField), findsOneWidget);
-      expect(
-        tester.widget<TextField>(find.byType(TextField)).controller!.text,
-        'Draft nickname',
-      );
-      expect(service.aliasFor(user.uid), isNull);
-      await tester.tap(find.text('Cancel'));
-      await tester.pumpAndSettle();
-      expect(service.aliasFor(user.uid), isNull);
     },
   );
 
-  testWidgets('system Back confirms before discarding nickname edits', (
+  testWidgets('Cancel closes nickname dialog without saving', (
     tester,
   ) async {
     await pumpHost(tester);
     await open(tester);
-    await tester.tap(find.text('Edit nickname'));
+    await tester.tap(find.text('Nickname visible only to you'));
     await tester.pumpAndSettle();
     await tester.enterText(find.byType(TextField), 'Draft');
-    await tester.pump();
-
-    await tester.binding.handlePopRoute();
+    await tester.tap(find.text('Cancel'));
     await tester.pumpAndSettle();
-    expect(find.text('Discard nickname changes?'), findsOneWidget);
-    await tester.tap(find.text('Discard'));
-    await tester.pumpAndSettle();
-    expect(find.text('open'), findsOneWidget);
-    expect(service.aliasFor(user.uid), isNull);
+    expect(find.byType(AlertDialog), findsNothing);
+    expect(service.aliasFor('a'), isNull);
   });
 }

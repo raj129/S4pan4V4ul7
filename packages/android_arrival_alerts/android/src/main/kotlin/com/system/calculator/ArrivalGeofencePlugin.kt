@@ -20,6 +20,8 @@ import io.flutter.plugin.common.MethodChannel
 class ArrivalGeofencePlugin : FlutterPlugin {
     private var channel: MethodChannel? = null
     private var appContext: Context? = null
+    private var syncInFlight = false
+    private var pendingSync: Triple<Context, List<Map<String, Any>>, MethodChannel.Result>? = null
 
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         val context = binding.applicationContext
@@ -54,18 +56,38 @@ class ArrivalGeofencePlugin : FlutterPlugin {
 
     /** Replaces every registered fence with [fences]. An empty list clears them. */
     private fun sync(context: Context, fences: List<Map<String, Any>>, result: MethodChannel.Result) {
+        if (syncInFlight) {
+            pendingSync?.third?.success(null)
+            pendingSync = Triple(context, fences, result)
+            return
+        }
+        syncInFlight = true
         val client = LocationServices.getGeofencingClient(context)
         val intent = pendingIntent(context)
         client.removeGeofences(intent).addOnCompleteListener {
             if (fences.isEmpty()) {
-                result.success(null)
+                finishSync(result, null)
                 return@addOnCompleteListener
             }
             val request = GeofencingRequest.Builder()
                 .setInitialTrigger(GeofencingRequest.INITIAL_TRIGGER_ENTER)
-                .addGeofences(fences.map { toGeofence(it) })
+                .addGeofences(fences.take(MAX_GEOFENCES).map { toGeofence(it) })
                 .build()
             addFences(client, request, intent, result)
+        }
+    }
+
+    private fun finishSync(result: MethodChannel.Result, error: Throwable?) {
+        if (error != null) {
+            result.error("geofence_failed", error.message, null)
+        } else {
+            result.success(null)
+        }
+        syncInFlight = false
+        val next = pendingSync
+        pendingSync = null
+        if (next != null) {
+            sync(next.first, next.second, next.third)
         }
     }
 
@@ -76,10 +98,8 @@ class ArrivalGeofencePlugin : FlutterPlugin {
         result: MethodChannel.Result,
     ) {
         client.addGeofences(request, intent)
-            .addOnSuccessListener { result.success(null) }
-            .addOnFailureListener { error ->
-                result.error("geofence_failed", error.message, null)
-            }
+            .addOnSuccessListener { finishSync(result, null) }
+            .addOnFailureListener { error -> finishSync(result, error) }
     }
 
     private fun toGeofence(fence: Map<String, Any>): Geofence {
@@ -124,7 +144,8 @@ class ArrivalGeofencePlugin : FlutterPlugin {
     companion object {
         const val CHANNEL = "photo_vault/arrival_geofence"
         private const val REQUEST_CODE = 4217
-        // Android rejects geofences smaller than 100 m.
+        // Android rejects geofences smaller than 100 m and caps at 100 per app.
         private const val MIN_RADIUS_METERS = 100f
+        private const val MAX_GEOFENCES = 100
     }
 }

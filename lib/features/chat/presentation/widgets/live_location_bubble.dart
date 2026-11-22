@@ -1,9 +1,12 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
+import 'package:photo_vault/core/location/maps/google_api_auth.dart';
+import 'package:photo_vault/core/presentation/theme/app_colors.dart';
 import 'package:photo_vault/core/presentation/theme/app_spacing.dart';
 import '../../domain/entities/chat_message.dart';
 import '../../domain/entities/live_location.dart';
@@ -40,6 +43,8 @@ class _LiveLocationBubbleState extends State<LiveLocationBubble> {
   Timer? _stalenessTimer;
   Timer? _refreshCooldownTimer;
   bool _refreshPending = false;
+  String? _apiKey;
+  Map<String, String> _identityHeaders = const {};
 
   @override
   void initState() {
@@ -47,6 +52,19 @@ class _LiveLocationBubbleState extends State<LiveLocationBubble> {
     _createSessionStream();
     _stalenessTimer = Timer.periodic(const Duration(seconds: 15), (_) {
       if (mounted) setState(() {});
+    });
+    if (Platform.isAndroid) {
+      unawaited(_loadStaticMapAuth());
+    }
+  }
+
+  Future<void> _loadStaticMapAuth() async {
+    final key = await GoogleApiAuth.instance.key;
+    final headers = await GoogleApiAuth.instance.identityHeaders();
+    if (!mounted || key.isEmpty) return;
+    setState(() {
+      _apiKey = key;
+      _identityHeaders = headers;
     });
   }
 
@@ -171,96 +189,110 @@ class _LiveLocationBubbleState extends State<LiveLocationBubble> {
             ? 'Ended'
             : 'Stopped';
 
-        return InkWell(
-          borderRadius: BorderRadius.circular(12),
-          onTap:
-              (sessionUnavailable && !isWaiting) ||
-                  (!isActive && !hasPoint && !isWaiting)
-              ? null
-              : () => Navigator.of(context).push(
-                  MaterialPageRoute<void>(
-                    builder: (_) => LiveLocationMapScreen(
-                      threadId: widget.message.threadId,
-                      userId: widget.message.senderId,
-                      isMine: widget.isMine,
-                      initialSession: session,
-                      sessionStream: sessionStream,
-                      onStopSharing: widget.onStopSharing,
-                      onRefreshLiveLocation: widget.onRefreshLiveLocation,
-                      onRequestLiveLocationRefresh:
-                          widget.onRequestLiveLocationRefresh,
+        return Material(
+          color: Colors.transparent,
+          borderRadius: const BorderRadius.all(AppRadius.bubble),
+          clipBehavior: Clip.antiAlias,
+          child: InkWell(
+            onTap:
+                (sessionUnavailable && !isWaiting) ||
+                    (!isActive && !hasPoint && !isWaiting)
+                ? null
+                : () => Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) => LiveLocationMapScreen(
+                        threadId: widget.message.threadId,
+                        userId: widget.message.senderId,
+                        isMine: widget.isMine,
+                        initialSession: session,
+                        sessionStream: sessionStream,
+                        onStopSharing: widget.onStopSharing,
+                        onRefreshLiveLocation: widget.onRefreshLiveLocation,
+                        onRequestLiveLocationRefresh:
+                            widget.onRequestLiveLocationRefresh,
+                      ),
                     ),
                   ),
-                ),
-          child: Container(
-            width: 250,
-            padding: const EdgeInsets.all(AppSpacing.sm),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  height: 110,
-                  width: double.infinity,
-                  decoration: BoxDecoration(
-                    color: Theme.of(context).colorScheme.surfaceContainerHigh,
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Stack(
-                    alignment: Alignment.center,
-                    children: [
-                      Icon(
-                        Icons.map_outlined,
-                        size: 56,
-                        color: Theme.of(
-                          context,
-                        ).colorScheme.onSurfaceVariant.withValues(alpha: 0.35),
-                      ),
-                      Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
+            child: Container(
+              width: 256,
+              padding: const EdgeInsets.all(AppSpacing.xs),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(14),
+                    child: Container(
+                      height: 128,
+                      width: double.infinity,
+                      color: Theme.of(context).colorScheme.surfaceContainerHigh,
+                      child: Stack(
+                        fit: StackFit.expand,
                         children: [
-                          Icon(
-                            isLive
-                                ? Icons.my_location
-                                : Icons.location_on_outlined,
-                            color: isLive ? Colors.green : null,
-                            size: 30,
+                          _buildMapPreview(
+                            context: context,
+                            point: session?.currentPoint,
+                            isLive: isLive,
+                            statusText: statusText,
                           ),
-                          const SizedBox(height: 4),
-                          Text(
-                            isLive
-                                ? 'Tap to view live map'
-                                : hasPoint
-                                ? 'View last known location'
-                                : 'View location',
-                            style: Theme.of(context).textTheme.labelSmall,
+                          DecoratedBox(
+                            decoration: BoxDecoration(
+                              gradient: LinearGradient(
+                                begin: Alignment.topCenter,
+                                end: Alignment.bottomCenter,
+                                colors: [
+                                  Colors.transparent,
+                                  Theme.of(
+                                    context,
+                                  ).colorScheme.surface.withValues(alpha: 0.78),
+                                ],
+                              ),
+                            ),
                           ),
+                          Positioned(
+                            left: 10,
+                            right: 10,
+                            bottom: 8,
+                            child: Text(
+                              isLive
+                                  ? 'Tap to view live map'
+                                  : hasPoint
+                                  ? 'View last known location'
+                                  : 'View location',
+                              style: Theme.of(context).textTheme.labelMedium
+                                  ?.copyWith(fontWeight: FontWeight.w700),
+                            ),
+                          ),
+                          if (isActive)
+                            Positioned(
+                              top: 8,
+                              right: 8,
+                              child: _LivePill(isStale: isStale),
+                            ),
                         ],
                       ),
-                      if (isActive)
-                        Positioned(
-                          top: 8,
-                          right: 8,
-                          child: _LivePill(isStale: isStale),
+                    ),
+                  ),
+                  const SizedBox(height: AppSpacing.sm),
+                  Row(
+                    children: [
+                      Icon(
+                        Icons.near_me_outlined,
+                        size: 16,
+                        color: Theme.of(context).colorScheme.primary,
+                      ),
+                      const SizedBox(width: AppSpacing.xs),
+                      Expanded(
+                        child: Text(
+                          statusText,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(fontWeight: FontWeight.w600),
                         ),
+                      ),
                     ],
                   ),
-                ),
-                const SizedBox(height: AppSpacing.xs),
-                Row(
-                  children: [
-                    const Icon(Icons.near_me_outlined, size: 16),
-                    const SizedBox(width: AppSpacing.xxs),
-                    Expanded(
-                      child: Text(
-                        statusText,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: Theme.of(context).textTheme.bodySmall,
-                      ),
-                    ),
-                  ],
-                ),
                 if (isActive &&
                     isStale &&
                     (widget.isMine
@@ -346,8 +378,48 @@ class _LiveLocationBubbleState extends State<LiveLocationBubble> {
               ],
             ),
           ),
+        ),
         );
       },
+    );
+  }
+
+  Widget _buildMapPreview({
+    required BuildContext context,
+    required LiveLocationPoint? point,
+    required bool isLive,
+    required String statusText,
+  }) {
+    final fallback = _MapFallbackCard(
+      point: point,
+      isLive: isLive,
+      statusText: statusText,
+    );
+    final apiKey = _apiKey;
+    if (apiKey == null || apiKey.isEmpty || point == null) {
+      return fallback;
+    }
+
+    // Round to 4 decimals (~11 m) so minor GPS jitter reuses the cached tile.
+    final roundedLat = point.latitude.toStringAsFixed(4);
+    final roundedLng = point.longitude.toStringAsFixed(4);
+    final staticMapUrl =
+        'https://maps.googleapis.com/maps/api/staticmap'
+        '?center=$roundedLat,$roundedLng'
+        '&zoom=15'
+        '&size=512x256'
+        '&scale=2'
+        '&markers=color:red|$roundedLat,$roundedLng'
+        '&key=${Uri.encodeQueryComponent(apiKey)}';
+    final cacheKey = 'static_map_${roundedLat}_$roundedLng';
+
+    return CachedNetworkImage(
+      imageUrl: staticMapUrl,
+      httpHeaders: _identityHeaders,
+      cacheKey: cacheKey,
+      fit: BoxFit.cover,
+      placeholder: (_, _) => fallback,
+      errorWidget: (_, _, _) => fallback,
     );
   }
 }
@@ -376,6 +448,104 @@ class _LivePill extends StatelessWidget {
       ),
     );
   }
+}
+
+class _MapFallbackCard extends StatelessWidget {
+  const _MapFallbackCard({
+    required this.point,
+    required this.isLive,
+    required this.statusText,
+  });
+
+  final LiveLocationPoint? point;
+  final bool isLive;
+  final String statusText;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final subtitle = point != null
+        ? '${point!.latitude.toStringAsFixed(4)}, ${point!.longitude.toStringAsFixed(4)}'
+        : statusText;
+
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            colorScheme.surfaceContainerHigh,
+            colorScheme.primaryContainer.withValues(alpha: 0.35),
+          ],
+        ),
+      ),
+      child: CustomPaint(
+        painter: _MapGridPainter(
+          lineColor: colorScheme.outlineVariant.withValues(alpha: 0.35),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.only(bottom: 20, left: 10, right: 10),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: isLive
+                      ? context.semantic.online.withValues(alpha: 0.16)
+                      : colorScheme.primaryContainer,
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(
+                  isLive
+                      ? Icons.my_location_rounded
+                      : Icons.location_on_outlined,
+                  color: isLive
+                      ? context.semantic.online
+                      : colorScheme.onPrimaryContainer,
+                  size: 24,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                subtitle,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                  color: colorScheme.onSurfaceVariant,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _MapGridPainter extends CustomPainter {
+  const _MapGridPainter({required this.lineColor});
+
+  final Color lineColor;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = lineColor
+      ..strokeWidth = 1;
+    const step = 24.0;
+    for (double x = step; x < size.width; x += step) {
+      canvas.drawLine(Offset(x, 0), Offset(x, size.height), paint);
+    }
+    for (double y = step; y < size.height; y += step) {
+      canvas.drawLine(Offset(0, y), Offset(size.width, y), paint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _MapGridPainter oldDelegate) =>
+      oldDelegate.lineColor != lineColor;
 }
 
 class _LocationUnavailableCard extends StatelessWidget {

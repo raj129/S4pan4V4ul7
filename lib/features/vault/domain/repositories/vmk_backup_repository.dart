@@ -2,6 +2,9 @@
 ///
 /// This handles off-device persistence of the recovery key.
 abstract class VmkBackupRepository {
+  /// Whether this repository stores backups in the cloud (e.g. Google Drive).
+  bool get isCloud => false;
+
   /// Backs up the wrapped VMK and its associated metadata.
   ///
   /// [payload] contains the base64-encoded components (wrappedVmk, nonce, mac, salt).

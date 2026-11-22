@@ -16,7 +16,7 @@ String? navigationPathForDestination(int index) => switch (index) {
 };
 
 /// Destinations that open above the current tab instead of replacing it.
-bool isPushedDestination(int index) => index == 7 || index == 8;
+bool isPushedDestination(int index) => index == 6 || index == 7 || index == 8;
 
 /// Tells the drawer, wherever it is hosted, which optional entries apply.
 /// Evaluated when the drawer is built, i.e. each time it is opened.

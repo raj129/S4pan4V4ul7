@@ -5,6 +5,8 @@ import 'package:photo_vault/features/chat/domain/entities/message_metadata.dart'
 ChatMessage _message({
   List<String> deliveredTo = const [],
   List<String> readBy = const [],
+  Map<String, DateTime> deliveredAtBy = const {},
+  Map<String, DateTime> readAtBy = const {},
 }) => ChatMessage(
   messageId: 'message-1',
   threadId: 'sender_recipient',
@@ -14,6 +16,8 @@ ChatMessage _message({
   deletedFor: const [],
   deliveredTo: deliveredTo,
   readBy: readBy,
+  deliveredAtBy: deliveredAtBy,
+  readAtBy: readAtBy,
 );
 
 void main() {
@@ -60,10 +64,32 @@ void main() {
       ]);
     });
 
+    test('round-trips delivered and read timestamps by recipient', () {
+      final deliveredAt = DateTime.utc(2026, 1, 1, 10, 5);
+      final readAt = DateTime.utc(2026, 1, 1, 10, 7);
+      final original = _message(
+        deliveredTo: const ['recipient'],
+        readBy: const ['recipient'],
+        deliveredAtBy: {'recipient': deliveredAt},
+        readAtBy: {'recipient': readAt},
+      );
+
+      final restored = ChatMessage.fromFirestore(original.toFirestore());
+
+      expect(restored.deliveredAtBy['recipient'], deliveredAt);
+      expect(restored.readAtBy['recipient'], readAt);
+      expect(restored.copyWith(readAtBy: const {}).readAtBy, isEmpty);
+    });
+
     test('older documents without receipt data remain compatible', () {
-      final data = _message().toFirestore()..remove('deliveredTo');
+      final data = _message().toFirestore()
+        ..remove('deliveredTo')
+        ..remove('deliveredAtBy')
+        ..remove('readAtBy');
 
       expect(ChatMessage.fromFirestore(data).deliveredTo, isEmpty);
+      expect(ChatMessage.fromFirestore(data).deliveredAtBy, isEmpty);
+      expect(ChatMessage.fromFirestore(data).readAtBy, isEmpty);
     });
 
     test('pending local Firestore writes remain in sending state', () {

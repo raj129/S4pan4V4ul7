@@ -122,6 +122,8 @@ export const onChatMessageCreated = onDocumentCreated(
       vibrationPattern: "standard",
       flashlightEnabled: false,
       flashPattern: "slowBlink",
+      notificationTitle: "",
+      notificationBody: "",
     };
     if (isRingRequest) {
       try {
@@ -148,6 +150,9 @@ export const onChatMessageCreated = onDocumentCreated(
             typeof value.vibrationEnabled === "boolean"
               ? value.vibrationEnabled
               : legacyMode === "ringAndVibrate" || legacyMode === "vibrate";
+          const hasLegacyNotificationDefaults =
+            value.notificationTitle === "Ring request" &&
+            value.notificationBody === "Someone is asking you to ring.";
           ringSettings = {
             enabled: value.enabled !== false,
             source:
@@ -184,6 +189,16 @@ export const onChatMessageCreated = onDocumentCreated(
             ].includes(value.flashPattern)
               ? value.flashPattern
               : "slowBlink",
+            notificationTitle:
+              !hasLegacyNotificationDefaults &&
+                typeof value.notificationTitle === "string"
+                ? value.notificationTitle.slice(0, 80)
+                : "",
+            notificationBody:
+              !hasLegacyNotificationDefaults &&
+                typeof value.notificationBody === "string"
+                ? value.notificationBody.slice(0, 240)
+                : "",
           };
         }
       } catch (error) {
@@ -235,6 +250,8 @@ export const onChatMessageCreated = onDocumentCreated(
                   ? "true"
                   : "false",
                 ringFlashPattern: ringSettings.flashPattern,
+                ringTitle: ringSettings.notificationTitle,
+                ringBody: ringSettings.notificationBody,
               }
             : {}),
         },

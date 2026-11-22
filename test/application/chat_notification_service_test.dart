@@ -1,10 +1,12 @@
 import 'dart:async';
 
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:photo_vault/features/chat/application/services/chat_notification_service.dart';
 import 'package:photo_vault/features/chat/domain/entities/chat_thread.dart';
 import 'package:photo_vault/features/chat/domain/repositories/thread_repository.dart';
 import 'package:photo_vault/core/testing/repositories/in_memory_settings_repository.dart';
+import 'package:photo_vault/features/vault/domain/entities/incoming_chat_alert_preferences.dart';
 
 class _ThreadRepository implements ThreadRepository {
   // ignore: close_sinks - test fake lives for the whole test.
@@ -95,6 +97,91 @@ void main() {
     await repository.updates.close();
   });
 
+  test('tests use the recipient saved header and body', () async {
+    final repository = _ThreadRepository();
+    final settings = InMemorySettingsRepository();
+    await settings.setIncomingChatAlertTitle('Private preview');
+    await settings.setIncomingChatAlertText('Your configured test text');
+    final notifications = <({String title, String body})>[];
+    final service = ChatNotificationService(
+      threadRepository: repository,
+      settingsRepository: settings,
+      presentNotification:
+          ({required threadId, required title, required body}) async {
+            notifications.add((title: title, body: body));
+          },
+    );
+
+    await service.showTestNotification();
+
+    expect(notifications, [
+      (title: 'Private preview', body: 'Your configured test text'),
+    ]);
+
+    await service.dispose();
+    await repository.updates.close();
+  });
+
+  test('uses the system channel only for Follow system chat alerts', () {
+    expect(
+      ChatNotificationService.channelForSource(NotificationAlertSource.system),
+      ChatNotificationService.systemChannelId,
+    );
+    expect(
+      ChatNotificationService.channelForSource(NotificationAlertSource.custom),
+      ChatNotificationService.channelId,
+    );
+  });
+
+  test('uses a vibration channel for custom chat alerts when enabled', () {
+    const preferences = IncomingChatAlertPreferences(
+      source: NotificationAlertSource.custom,
+      vibrationEnabled: true,
+    );
+
+    final details = ChatNotificationService.notificationDetailsFor(
+      preferences: preferences,
+      tag: 'thread',
+    ).android!;
+
+    expect(details.channelId, ChatNotificationService.customVibratingChannelId);
+    expect(details.enableVibration, isTrue);
+    expect(details.playSound, isFalse);
+    expect(details.category, AndroidNotificationCategory.message);
+    expect(details.tag, 'thread');
+  });
+
+  test('uses the silent channel when custom vibration is disabled', () {
+    const preferences = IncomingChatAlertPreferences(
+      source: NotificationAlertSource.custom,
+      vibrationEnabled: false,
+    );
+
+    final details = ChatNotificationService.notificationDetailsFor(
+      preferences: preferences,
+    ).android!;
+
+    expect(details.channelId, ChatNotificationService.channelId);
+    expect(details.enableVibration, isFalse);
+  });
+
+  test('system alerts keep sound and vibration enabled', () {
+    const preferences = IncomingChatAlertPreferences(
+      source: NotificationAlertSource.system,
+      ringSoundEnabled: false,
+      vibrationEnabled: false,
+    );
+
+    final details = ChatNotificationService.notificationDetailsFor(
+      preferences: preferences,
+    ).android!;
+
+    expect(details.channelId, ChatNotificationService.systemChannelId);
+    expect(details.enableVibration, isTrue);
+    expect(details.playSound, isTrue);
+    expect(details.category, AndroidNotificationCategory.message);
+  });
+
   test('keeps a blank body for received and test notifications', () async {
     final repository = _ThreadRepository();
     final settings = InMemorySettingsRepository();
@@ -157,35 +244,38 @@ void main() {
     },
   );
 
-  test('emits an in-app alert outside the visible chat branch', () async {
-    final repository = _ThreadRepository();
-    final service = ChatNotificationService(
-      threadRepository: repository,
-      isAppForeground: () => true,
-      presentNotification:
-          ({required threadId, required title, required body}) async {},
-    );
+  test(
+    'suppresses alerts while foregrounded outside the visible chat branch',
+    () async {
+      final repository = _ThreadRepository();
+      final notifications = <String>[];
+      final service = ChatNotificationService(
+        threadRepository: repository,
+        isAppForeground: () => true,
+        presentNotification:
+            ({required threadId, required title, required body}) async {
+              notifications.add(threadId);
+            },
+      );
 
-    await service.start('alice');
-    repository.updates.add([_thread('alice_bob', 0)]);
-    await service.setActiveThread('alice_bob');
-    repository.updates.add([_thread('alice_bob', 1)]);
-    await Future<void>.delayed(Duration.zero);
-    expect(service.foregroundNotification.value, isNull);
+      await service.start('alice');
+      repository.updates.add([_thread('alice_bob', 0)]);
+      await service.setActiveThread('alice_bob');
+      repository.updates.add([_thread('alice_bob', 1)]);
+      await Future<void>.delayed(Duration.zero);
 
-    service.setChatSectionVisible(false);
-    repository.updates.add([_thread('alice_bob', 2)]);
-    await Future<void>.delayed(Duration.zero);
+      service.setChatSectionVisible(false);
+      repository.updates.add([_thread('alice_bob', 2)]);
+      await Future<void>.delayed(Duration.zero);
 
-    expect(service.foregroundNotification.value, isNotNull);
-    expect(service.foregroundNotification.value!.threadId, 'alice_bob');
-    expect(service.foregroundNotification.value!.title, isEmpty);
-    expect(service.isActiveThread('alice_bob'), isFalse);
+      expect(notifications, isEmpty);
+      expect(service.isActiveThread('alice_bob'), isFalse);
 
-    service.setChatSectionVisible(true);
-    expect(service.isActiveThread('alice_bob'), isTrue);
+      service.setChatSectionVisible(true);
+      expect(service.isActiveThread('alice_bob'), isTrue);
 
-    await service.dispose();
-    await repository.updates.close();
-  });
+      await service.dispose();
+      await repository.updates.close();
+    },
+  );
 }

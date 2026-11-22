@@ -158,12 +158,14 @@ class FirestoreMessageRepository implements MessageRepository {
     required String uid,
   }) async {
     if (messageIds.isEmpty) return;
+    final at = DateTime.now().toUtc().millisecondsSinceEpoch;
     for (var i = 0; i < messageIds.length; i += _maxBatchSize) {
       final chunk = messageIds.skip(i).take(_maxBatchSize);
       final batch = _db.batch();
       for (final id in chunk) {
         batch.update(_messages(threadId).doc(id), {
           'readBy': FieldValue.arrayUnion([uid]),
+          FieldPath(['readAtBy', uid]): at,
         });
       }
       await batch.commit();
@@ -177,12 +179,14 @@ class FirestoreMessageRepository implements MessageRepository {
     required String uid,
   }) async {
     if (messageIds.isEmpty) return;
+    final at = DateTime.now().toUtc().millisecondsSinceEpoch;
     for (var i = 0; i < messageIds.length; i += _maxBatchSize) {
       final chunk = messageIds.skip(i).take(_maxBatchSize);
       final batch = _db.batch();
       for (final id in chunk) {
         batch.update(_messages(threadId).doc(id), {
           'deliveredTo': FieldValue.arrayUnion([uid]),
+          FieldPath(['deliveredAtBy', uid]): at,
         });
       }
       await batch.commit();

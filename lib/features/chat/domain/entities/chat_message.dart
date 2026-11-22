@@ -44,6 +44,8 @@ class ChatMessage extends Equatable {
     this.reactions = const {},
     this.readBy = const [],
     this.deliveredTo = const [],
+    this.readAtBy = const {},
+    this.deliveredAtBy = const {},
     this.deletedForEveryone = false,
     this.editedAt,
     this.isForwarded = false,
@@ -93,6 +95,12 @@ class ChatMessage extends Equatable {
 
   /// UIDs whose devices have acknowledged receiving this message.
   final List<String> deliveredTo;
+
+  /// When each recipient read this message, keyed by UID.
+  final Map<String, DateTime> readAtBy;
+
+  /// When each recipient acknowledged delivery, keyed by UID.
+  final Map<String, DateTime> deliveredAtBy;
 
   /// Tombstone flag. The document is kept so both sides render
   /// "This message was deleted" instead of the message silently vanishing.
@@ -209,6 +217,8 @@ class ChatMessage extends Equatable {
     Map<String, String>? reactions,
     List<String>? readBy,
     List<String>? deliveredTo,
+    Map<String, DateTime>? readAtBy,
+    Map<String, DateTime>? deliveredAtBy,
     List<String>? deletedFor,
     bool? deletedForEveryone,
     DateTime? editedAt,
@@ -243,6 +253,8 @@ class ChatMessage extends Equatable {
       reactions: reactions ?? this.reactions,
       readBy: readBy ?? this.readBy,
       deliveredTo: deliveredTo ?? this.deliveredTo,
+      readAtBy: readAtBy ?? this.readAtBy,
+      deliveredAtBy: deliveredAtBy ?? this.deliveredAtBy,
       deletedForEveryone: deletedForEveryone ?? this.deletedForEveryone,
       editedAt: editedAt ?? this.editedAt,
       isForwarded: isForwarded ?? this.isForwarded,
@@ -269,6 +281,14 @@ class ChatMessage extends Equatable {
     'reactions': reactions,
     'readBy': readBy,
     'deliveredTo': deliveredTo,
+    'readAtBy': {
+      for (final entry in readAtBy.entries)
+        entry.key: entry.value.toUtc().millisecondsSinceEpoch,
+    },
+    'deliveredAtBy': {
+      for (final entry in deliveredAtBy.entries)
+        entry.key: entry.value.toUtc().millisecondsSinceEpoch,
+    },
     if (isDataSms) 'transport': transport.name,
     if (smsSegments != null) 'smsSegments': smsSegments,
     if (smsDeliveryState != null) 'smsDeliveryState': smsDeliveryState,
@@ -301,6 +321,8 @@ class ChatMessage extends Equatable {
     deletedForEveryone: data['deletedForEveryone'] as bool? ?? false,
     readBy: List<String>.from(data['readBy'] as List? ?? const []),
     deliveredTo: List<String>.from(data['deliveredTo'] as List? ?? const []),
+    readAtBy: _receiptTimes(data['readAtBy']),
+    deliveredAtBy: _receiptTimes(data['deliveredAtBy']),
     reactions:
         (data['reactions'] as Map?)?.map(
           (k, v) => MapEntry(k as String, v as String),
@@ -335,6 +357,17 @@ class ChatMessage extends Equatable {
       return DateTime.fromMillisecondsSinceEpoch(value.toInt(), isUtc: true);
     }
     return null;
+  }
+
+  static Map<String, DateTime> _receiptTimes(Object? value) {
+    if (value is! Map) return const {};
+    final result = <String, DateTime>{};
+    for (final entry in value.entries) {
+      final key = entry.key;
+      final at = _timestamp(entry.value);
+      if (key is String && at != null) result[key] = at;
+    }
+    return result;
   }
 
   /// Tolerates media types written by newer app versions.
@@ -373,6 +406,8 @@ class ChatMessage extends Equatable {
     reactions,
     readBy,
     deliveredTo,
+    readAtBy,
+    deliveredAtBy,
     editedAt,
     status,
     transport,

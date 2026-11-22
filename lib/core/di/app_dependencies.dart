@@ -1,15 +1,18 @@
 import 'dart:async';
 
+import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../../features/vault/application/services/import_manager.dart';
 import '../integrations/chat_vault_bridge.dart';
 import '../../features/vault/application/services/restore_flow_service.dart';
+import '../../features/vault/application/services/onboarding_restore_bridge.dart';
 import '../../features/vault/application/services/pin_validator.dart';
 import '../session/vault_session.dart';
 import '../../features/vault/application/usecases/change_pin_usecase.dart';
 import '../../features/vault/application/usecases/create_vault_usecase.dart';
 import '../../features/vault/application/usecases/export_photo_usecase.dart';
+import '../../features/vault/application/usecases/restore_vault_usecase.dart';
 import '../../features/vault/application/usecases/unlock_vault_usecase.dart';
 import '../crypto/services/aes_gcm_crypto_service.dart';
 import '../crypto/services/crypto_service.dart';
@@ -35,7 +38,19 @@ import '../../features/vault/domain/repositories/secure_storage_repository.dart'
 import '../../features/vault/domain/repositories/settings_repository.dart';
 import '../../features/vault/domain/repositories/vault_repository.dart';
 import '../../features/vault/domain/repositories/vmk_backup_repository.dart';
+import '../../features/chat/application/services/chat_identity_service.dart';
 import '../../features/chat/di/chat_dependencies.dart';
+import '../../features/backup/application/backup_coordinator.dart';
+import '../../features/backup/application/backup_manager.dart';
+import '../../features/backup/application/backup_network.dart';
+import '../../features/backup/application/settings_backup_service.dart';
+import '../../features/backup/application/backup_scheduler.dart';
+import '../../features/backup/application/photo_hash_cache.dart';
+import '../../features/backup/application/vault_backup_key_service.dart';
+import '../../features/backup/application/vault_photo_backup_service.dart';
+import '../../features/backup/data/drive_backup_blob_store.dart';
+import '../../features/backup/data/local_backup_blob_store.dart';
+
 import '../location/app_location.dart';
 import '../location/mock/traffic_route_service.dart';
 
@@ -65,7 +80,9 @@ class AppDependencies {
           )
         : InMemorySettingsRepository();
     final PhotoRepository photoRepository = persistentState
-        ? PersistentPhotoRepositoryImpl()
+        ? PersistentPhotoRepositoryImpl(
+            currentVaultId: vaultRepository.getActiveVaultId,
+          )
         : InMemoryPhotoRepository();
     final authRepository = persistentState
         ? FirebaseAuthRepository()
@@ -81,12 +98,15 @@ class AppDependencies {
       GoogleDriveVmkRepository(authRepository: authRepository),
     ];
 
-    final restoreFlowService = BackupRestoreFlowService(
+    final createVaultUseCase = CreateVaultUseCase(
+      cryptoService: cryptoService,
+      kdfService: kdfService,
+      vaultRepository: vaultRepository,
       secureStorageRepository: secureStorageRepository,
+      vaultSession: vaultSession,
       backupRepositories: backupRepositories,
     );
-
-    final createVaultUseCase = CreateVaultUseCase(
+    final restoreVaultUseCase = RestoreVaultUseCase(
       cryptoService: cryptoService,
       kdfService: kdfService,
       vaultRepository: vaultRepository,
@@ -133,8 +153,8 @@ class AppDependencies {
       vaultSession: vaultSession,
       pinValidator: pinValidator,
       backupRepositories: backupRepositories,
-      restoreFlowService: restoreFlowService,
       createVaultUseCase: createVaultUseCase,
+      restoreVaultUseCase: restoreVaultUseCase,
       unlockVaultUseCase: unlockVaultUseCase,
       changePinUseCase: changePinUseCase,
       exportPhotoUseCase: exportPhotoUseCase,
@@ -152,8 +172,8 @@ class AppDependencies {
     required this.vaultSession,
     required this.pinValidator,
     required this.backupRepositories,
-    required this.restoreFlowService,
     required this.createVaultUseCase,
+    required this.restoreVaultUseCase,
     required this.unlockVaultUseCase,
     required this.changePinUseCase,
     required this.exportPhotoUseCase,
@@ -169,8 +189,8 @@ class AppDependencies {
   final VaultSession vaultSession;
   final PinValidator pinValidator;
   final List<VmkBackupRepository> backupRepositories;
-  final RestoreFlowService restoreFlowService;
   final CreateVaultUseCase createVaultUseCase;
+  final RestoreVaultUseCase restoreVaultUseCase;
   final UnlockVaultUseCase unlockVaultUseCase;
   final ChangePinUseCase changePinUseCase;
   final ExportPhotoUseCase exportPhotoUseCase;
@@ -178,6 +198,139 @@ class AppDependencies {
 
   /// Process-wide location provider (real GPS or mock).
   AppLocation get location => AppLocation.instance;
+
+  bool get _canTouchChat =>
+      chatOverride != null || _chatInitialised || Firebase.apps.isNotEmpty;
+
+  /// Vault-bound manifest encryption keys (one-way HKDF-SHA256 from VMK).
+  late final VaultBackupKeyService vaultBackupKeys = VaultBackupKeyService(
+    secureStorageRepository,
+  );
+
+  /// Vault photo backup to this device and Google Drive.
+  late final VaultPhotoBackupService vaultPhotoBackup = VaultPhotoBackupService(
+    stores: [
+      LocalBackupBlobStore(),
+      DriveBackupBlobStore(authRepository: authRepository),
+    ],
+    photoRepository: photoRepository,
+    listPhotos: () => switch (photoRepository) {
+      final VaultAttachmentRepository repository =>
+        repository.listAttachments(),
+      _ => throw StateError('Vault photos are unavailable in this mode.'),
+    },
+    vaultBackupKeys: vaultBackupKeys,
+    legacyCrypto: () => _canTouchChat ? chatDependencies.cryptoService : null,
+    settings: settingsRepository,
+    currentUid: () =>
+        _canTouchChat ? chatDependencies.authService.currentUid : null,
+    networkAllowed: () => backupNetworkAllowed(settingsRepository),
+    currentVaultId: () async =>
+        vaultSession.vaultId ?? await vaultRepository.getActiveVaultId(),
+    hashCache: PhotoHashCache.defaults(),
+    coordinator: BackupCoordinator.shared,
+  );
+
+  /// Versioned backup/restore for portable app settings & saved places.
+  late final SettingsBackupService settingsBackupService = SettingsBackupService(
+    settingsRepository: settingsRepository,
+    stores: [
+      LocalBackupBlobStore(),
+      DriveBackupBlobStore(authRepository: authRepository),
+    ],
+    placesStore: _canTouchChat
+        ? FlutterSecureStringKv(const FlutterSecureStorage())
+        : null,
+    networkAllowed: () => backupNetworkAllowed(settingsRepository),
+  );
+
+  /// App-scoped backup & restore state + background catch-up coordinator.
+  late final BackupManager backupManager = BackupManager(
+    settingsRepository: settingsRepository,
+    chatBackup: () =>
+        _canTouchChat ? chatDependencies.backupService : null,
+    vaultPhotoBackup: () => vaultPhotoBackup,
+    settingsBackup: () => settingsBackupService,
+    authRepository: authRepository,
+    scheduleCatchUp: schedulePendingBackupCatchUp,
+  );
+
+  /// Bridges onboarding PIN creation to Vault & Chat backup discovery/restore.
+  late final OnboardingRestoreBridge onboardingRestoreBridge =
+      DefaultOnboardingRestoreBridge(
+        restoreVaultUseCase: restoreVaultUseCase,
+        createVaultUseCase: createVaultUseCase,
+        vaultRepository: vaultRepository,
+        settingsRepository: settingsRepository,
+        backupManager: backupManager,
+        settingsBackupService: settingsBackupService,
+        chatDependencies: () => _canTouchChat ? chatDependencies : null,
+        authRepository: authRepository,
+      );
+
+  /// Google vault recovery uses the same ID/key and optionally restores photos.
+  late final RestoreFlowService restoreFlowService = BackupRestoreFlowService(
+    restoreVaultUseCase: restoreVaultUseCase,
+    vaultRepository: vaultRepository,
+    onVaultRestored: ({
+      required vaultId,
+      required originalPin,
+      required newPin,
+    }) async {
+      await settingsRepository.setBackupCloudEnabled(true);
+      await settingsRepository.setDriveEncryptedBackupEnabled(true);
+      if (!_canTouchChat) return;
+      try {
+        final uid = chatDependencies.authService.currentUid;
+        if (uid == null) return;
+        final synced = await chatDependencies.identityService.sync(
+          uid: uid,
+          pin: originalPin,
+        );
+        if (newPin != originalPin &&
+            (synced == IdentitySyncResult.restored ||
+                synced == IdentitySyncResult.upToDate)) {
+          await chatDependencies.identityService.rewrapForNewPin(
+            uid: uid,
+            newPin: newPin,
+          );
+        }
+      } catch (_) {
+        // Vault VMK recovery still succeeds even if chat key sync is offline.
+      }
+    },
+    restoreChat: ({onProgress}) async {
+      if (!_canTouchChat) return 0;
+      final backup = chatDependencies.backupService;
+      final snapshot = await backup.findLatestBackup(
+        interactive: true,
+        ignoreCloudSetting: true,
+        onProgress: onProgress,
+      );
+      if (snapshot == null) {
+        await backup.dismissRestoreOffer();
+        return 0;
+      }
+      return backup.restore(snapshot, onProgress: onProgress);
+    },
+    skipChatRestore: () async {
+      if (!_canTouchChat) return;
+      await chatDependencies.backupService.dismissRestoreOffer();
+    },
+    restorePhotos: () async {
+      final result = await vaultPhotoBackup.restore(
+        interactive: true,
+        includeCloud: true,
+      );
+      return RestorePhotosSummary(
+        foundBackup: result.foundBackup,
+        restored: result.restored,
+        alreadyPresent: result.alreadyPresent,
+        unavailable: result.unavailable,
+        failures: result.failures,
+      );
+    },
+  );
 
   /// Traffic-aware routes for the mock route simulator.
   late final TrafficRouteService trafficRouteService = TrafficRouteService();
@@ -241,6 +394,7 @@ class AppDependencies {
   /// Releases resources held by dependencies that need explicit teardown.
   Future<void> dispose() async {
     vaultSession.lock();
+    backupManager.dispose();
     if (_chatInitialised) chat.dispose();
     await _initialization;
     if (photoRepository case final PersistentPhotoRepositoryImpl repository) {

@@ -1,5 +1,7 @@
 import 'package:photo_vault/features/vault/domain/entities/user_mode.dart';
+import 'package:photo_vault/features/vault/domain/entities/incoming_chat_alert_preferences.dart';
 import 'package:photo_vault/features/vault/domain/repositories/settings_repository.dart';
+import 'package:photo_vault/features/calculator/domain/models/secret_entry_config.dart';
 
 class InMemorySettingsRepository implements SettingsRepository {
   UserMode? _selectedMode;
@@ -51,6 +53,94 @@ class InMemorySettingsRepository implements SettingsRepository {
     _driveEncryptedBackupEnabled = enabled;
   }
 
+  bool _backupChatsEnabled = true;
+  bool _backupVaultPhotosEnabled = true;
+  bool _backupSettingsEnabled = true;
+  bool _backupCloudEnabled = false;
+  bool _backupWifiOnly = true;
+  DateTime? _lastVaultPhotoBackupAt;
+  DateTime? _lastSettingsBackupAt;
+  String? _lastVaultPhotoBackupVaultId;
+  bool _vaultPhotoBackupCloudPending = false;
+
+  @override
+  Future<bool> isBackupChatsEnabled() async => _backupChatsEnabled;
+
+  @override
+  Future<void> setBackupChatsEnabled(bool enabled) async {
+    _backupChatsEnabled = enabled;
+  }
+
+  @override
+  Future<bool> isBackupVaultPhotosEnabled() async => _backupVaultPhotosEnabled;
+
+  @override
+  Future<void> setBackupVaultPhotosEnabled(bool enabled) async {
+    _backupVaultPhotosEnabled = enabled;
+  }
+
+  @override
+  Future<bool> isBackupSettingsEnabled() async => _backupSettingsEnabled;
+
+  @override
+  Future<void> setBackupSettingsEnabled(bool enabled) async {
+    _backupSettingsEnabled = enabled;
+  }
+
+  @override
+  Future<DateTime?> getLastSettingsBackupAt() async => _lastSettingsBackupAt;
+
+  @override
+  Future<void> setLastSettingsBackupAt(DateTime? at) async {
+    _lastSettingsBackupAt = at;
+  }
+
+  @override
+  Future<bool> isBackupCloudEnabled() async => _backupCloudEnabled;
+
+  @override
+  Future<void> setBackupCloudEnabled(bool enabled) async {
+    _backupCloudEnabled = enabled;
+  }
+
+  @override
+  Future<bool> isBackupWifiOnly() async => _backupWifiOnly;
+
+  @override
+  Future<void> setBackupWifiOnly(bool enabled) async {
+    _backupWifiOnly = enabled;
+  }
+
+  @override
+  Future<DateTime?> getLastVaultPhotoBackupAt() async =>
+      _lastVaultPhotoBackupAt;
+
+  @override
+  Future<void> setLastVaultPhotoBackupAt(DateTime? at) async {
+    _lastVaultPhotoBackupAt = at;
+  }
+
+  @override
+  Future<String?> getLastVaultPhotoBackupVaultId() async =>
+      _lastVaultPhotoBackupVaultId;
+
+  @override
+  Future<void> setLastVaultPhotoBackupVaultId(String? vaultId) async {
+    _lastVaultPhotoBackupVaultId = vaultId;
+  }
+
+  @override
+  Future<bool> isVaultPhotoBackupCloudPending() async =>
+      _vaultPhotoBackupCloudPending;
+
+  @override
+  Future<void> setVaultPhotoBackupCloudPending(bool pending) async {
+    _vaultPhotoBackupCloudPending = pending;
+  }
+
+  @override
+  Future<void> migrateLegacyPhotoSyncSetting() async {}
+
   String? _chatImageQuality;
   bool _autoLockOnBackground = true;
   int _autoLockTimeoutSeconds =
@@ -59,6 +149,8 @@ class InMemorySettingsRepository implements SettingsRepository {
       SettingsRepository.defaultIncomingChatAlertTitle;
   String _incomingChatAlertText =
       SettingsRepository.defaultIncomingChatAlertText;
+  IncomingChatAlertPreferences _incomingChatAlertPreferences =
+      const IncomingChatAlertPreferences();
   String _backgroundLocationAlertTitle =
       SettingsRepository.defaultBackgroundLocationAlertTitle;
   String _backgroundLocationAlertText =
@@ -111,6 +203,17 @@ class InMemorySettingsRepository implements SettingsRepository {
   @override
   Future<void> setIncomingChatAlertText(String text) async {
     _incomingChatAlertText = text.trim();
+  }
+
+  @override
+  Future<IncomingChatAlertPreferences>
+  getIncomingChatAlertPreferences() async => _incomingChatAlertPreferences;
+
+  @override
+  Future<void> setIncomingChatAlertPreferences(
+    IncomingChatAlertPreferences preferences,
+  ) async {
+    _incomingChatAlertPreferences = preferences;
   }
 
   @override
@@ -177,6 +280,7 @@ class InMemorySettingsRepository implements SettingsRepository {
   }
 
   String? _mockLocationPrefs;
+  SecretEntryConfig _secretEntryConfig = const SecretEntryConfig();
 
   @override
   Future<String?> getMockLocationPrefs() async => _mockLocationPrefs;
@@ -184,5 +288,13 @@ class InMemorySettingsRepository implements SettingsRepository {
   @override
   Future<void> setMockLocationPrefs(String json) async {
     _mockLocationPrefs = json;
+  }
+
+  @override
+  Future<SecretEntryConfig> getSecretEntryConfig() async => _secretEntryConfig;
+
+  @override
+  Future<void> setSecretEntryConfig(SecretEntryConfig config) async {
+    _secretEntryConfig = config;
   }
 }

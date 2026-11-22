@@ -18,22 +18,28 @@ import '../presentation/features/utility_shell/utility_shell.dart';
 import '../../features/chat/presentation/screens/new_chat_screen.dart';
 import '../../features/chat/presentation/screens/my_locations_route.dart';
 import '../../features/chat/presentation/screens/profile_screen.dart';
-import '../../features/chat/presentation/screens/thread_screen.dart';
 import '../../features/chat/presentation/screens/ring_alert_settings_screen.dart';
+import '../../features/chat/presentation/screens/thread_screen.dart';
+import '../../features/chat/application/services/background_location_notification_preview.dart';
 import '../../features/chat/domain/entities/chat_user.dart';
+import '../../features/vault/domain/entities/incoming_chat_alert_preferences.dart';
 import '../../features/vault/presentation/screens/files/files_screen.dart';
 import '../../features/vault/presentation/screens/gallery/gallery_home_screen.dart';
 import '../../features/vault/presentation/screens/gallery/gallery_photo_viewer_screen.dart';
 import '../../features/vault/presentation/screens/import/import_screen.dart';
 import '../../features/vault/presentation/screens/lock/lock_screen.dart';
 import '../../features/vault/presentation/screens/onboarding/google_signin_screen.dart';
+import '../../features/vault/presentation/screens/onboarding/onboarding_restore_screen.dart';
 import '../../features/vault/presentation/screens/onboarding/pin_screens.dart';
 import '../../features/vault/presentation/screens/onboarding/vault_creation_screen.dart';
 import '../../features/vault/presentation/screens/onboarding/welcome_screen.dart';
 import '../../features/vault/presentation/screens/restore/restore_flow_screen.dart';
 import '../../features/vault/presentation/screens/settings/change_pin_screen.dart';
 import '../../features/vault/presentation/screens/settings/notification_settings_screen.dart';
+import '../../features/vault/presentation/screens/settings/notification_type_settings_screen.dart';
+import '../../features/vault/presentation/screens/settings/secret_entry_settings_screen.dart';
 import '../../features/vault/presentation/screens/settings/settings_screen.dart';
+import '../../features/backup/presentation/backup_screen.dart';
 import '../../features/vault/presentation/screens/trash/trash_screen.dart';
 import '../../features/chat/presentation/screens/notes_screen.dart';
 import '../../features/calls/data/phone_contact_source.dart';
@@ -69,13 +75,29 @@ GoRouter buildAppRouter({
         path: '/',
         builder: (context, state) => UtilityShell(
           title: 'Calculator',
-          child: CalculatorFeature(
-            onVaultTriggerRequested: () {
-              final returnTo = deps.importManager.hasPendingShareFiles
-                  ? '/import/share-intent'
-                  : '/chat';
-              context.go('/lock?returnTo=${Uri.encodeComponent(returnTo)}');
-            },
+          child: ListenableBuilder(
+            listenable: session,
+            builder: (context, _) => CalculatorFeature(
+              secretEntryConfig: session.secretEntryConfig,
+              onVaultTriggerRequested: () {
+                final returnTo = deps.importManager.hasPendingShareFiles
+                    ? '/import/share-intent'
+                    : '/chat';
+                context.go('/lock?returnTo=${Uri.encodeComponent(returnTo)}');
+              },
+              onStealthPinSubmitted: (pin) async {
+                final ok = await deps.unlockVaultUseCase.execute(pin);
+                if (!ok) return false;
+                session.unlock();
+                final target = deps.importManager.hasPendingShareFiles
+                    ? '/import/share-intent'
+                    : '/chat';
+                if (context.mounted) {
+                  context.go(target);
+                }
+                return true;
+              },
+            ),
           ),
         ),
       ),
@@ -225,6 +247,9 @@ Widget _buildOnboardingStep(BuildContext context, OnboardingState state) {
     OnboardingPinEntry(mode: final m) => CreatePinScreen(mode: m),
     OnboardingPinConfirm(mode: final m) => ConfirmPinScreen(mode: m),
     OnboardingPinInvalid(mode: final m) => CreatePinScreen(mode: m),
+    OnboardingCheckingBackups() => const OnboardingRestoreScreen(),
+    OnboardingRestoreAvailable() => const OnboardingRestoreScreen(),
+    OnboardingRestoringBackup() => const OnboardingRestoreScreen(),
     OnboardingCreatingVault(mode: final m) => VaultCreationScreen(mode: m),
     OnboardingVaultCreated() => const SizedBox.shrink(),
     OnboardingError() => const WelcomeScreen(),
@@ -244,6 +269,7 @@ GoRoute _galleryRoute(AppDependencies deps, AppSessionState session) {
         photoRepository: deps.photoRepository,
         importManager: deps.importManager,
         photoSyncEnabled: session.photoSyncEnabled,
+        backupManager: deps.backupManager,
         vaultSession: deps.vaultSession,
         exportPhotoUseCase: deps.exportPhotoUseCase,
         unlockVaultUseCase: deps.unlockVaultUseCase,
@@ -516,12 +542,11 @@ GoRoute _settingsRoute(
   return GoRoute(
     path: '/settings',
     builder: (context, state) => SettingsScreen(
-      mode: session.mode,
       settingsRepository: deps.settingsRepository,
       unlockVaultUseCase: deps.unlockVaultUseCase,
       pinValidator: deps.pinValidator,
       onSettingsChanged: onSettingsChanged,
-      chatBackupService: () => deps.chatDependencies.backupService,
+      backupManager: deps.backupManager,
       onShowLastSeenChanged: (show) async {
         try {
           await deps.chatDependencies.presenceService.setShareLastSeen(show);
@@ -533,35 +558,96 @@ GoRoute _settingsRoute(
     ),
     routes: [
       GoRoute(
-        path: 'notifications',
-        builder: (context, state) => NotificationSettingsScreen(
+        path: 'backup',
+        builder: (context, state) => BackupScreen(
           settingsRepository: deps.settingsRepository,
-          onTestNotification: () =>
-              deps.chatDependencies.notificationService.showTestNotification(),
-          onNotificationSettingsChanged: () async {
-            final locationService = deps.chatDependencies.liveLocationService;
-            if (locationService?.isSharing == true) {
-              await locationService!.refreshNotification();
+          chatBackup: () {
+            try {
+              return deps.chatDependencies.backupService;
+            } catch (_) {
+              return null;
             }
           },
+          vaultPhotoBackup: () => deps.vaultPhotoBackup,
+          unlockVaultUseCase: deps.unlockVaultUseCase,
+          pinValidator: deps.pinValidator,
+          backupManager: deps.backupManager,
+          authRepository: deps.authRepository,
         ),
       ),
       GoRoute(
-        path: 'ring-alerts',
-        builder: (context, state) {
-          final uid = deps.chatDependencies.authService.currentUid;
-          if (uid == null) {
-            return const Scaffold(
-              body: Center(
-                child: Text('Sign in to chat to configure ring requests.'),
-              ),
-            );
-          }
-          return RingAlertSettingsScreen(
-            repository: deps.chatDependencies.ringAlertPreferencesRepository,
-            uid: uid,
-          );
-        },
+        path: 'notifications',
+        builder: (context, state) => const NotificationSettingsScreen(),
+        routes: [
+          GoRoute(
+            path: 'messages',
+            builder: (context, state) => NotificationTypeSettingsScreen(
+              type: NotificationConfigurationType.chatMessages,
+              settingsRepository: deps.settingsRepository,
+              onTestChatNotification:
+                  ({required title, required body, required preferences}) =>
+                      deps.chatDependencies.notificationService
+                          .showTestNotification(
+                            title: title,
+                            body: body,
+                            preferences: preferences,
+                          ),
+            ),
+          ),
+          GoRoute(
+            path: 'background-location',
+            builder: (context, state) => NotificationTypeSettingsScreen(
+              type: NotificationConfigurationType.backgroundLocation,
+              settingsRepository: deps.settingsRepository,
+              onTestBackgroundLocation:
+                  BackgroundLocationNotificationPreview.show,
+              onNotificationSettingsChanged: () async {
+                final locationService =
+                    deps.chatDependencies.liveLocationService;
+                if (locationService?.isSharing == true) {
+                  await locationService!.refreshNotification();
+                }
+              },
+            ),
+          ),
+          GoRoute(
+            path: 'ring-requests',
+            builder: (context, state) => RingAlertSettingsScreen(
+              repository: deps.chatDependencies.ringAlertPreferencesRepository,
+              uid: deps.chatDependencies.authService.currentUid,
+              onTestNotification:
+                  ({
+                    required title,
+                    required body,
+                    required preferences,
+                  }) async {
+                    final alertId =
+                        'ring-test-${DateTime.now().millisecondsSinceEpoch}';
+                    await deps.chatDependencies.notificationService
+                        .showRingRequestNotification(
+                          threadId: 'ring-alert-test',
+                          alertId: alertId,
+                          title: title,
+                          body: body,
+                          preferences: IncomingChatAlertPreferences(
+                            source: preferences.source.name == 'custom'
+                                ? NotificationAlertSource.custom
+                                : NotificationAlertSource.system,
+                            vibrationEnabled: preferences.vibrationEnabled,
+                          ),
+                          openThread: false,
+                        );
+                  },
+            ),
+          ),
+        ],
+      ),
+      GoRoute(
+        path: 'secret-entry',
+        builder: (context, state) => SecretEntrySettingsScreen(
+          settingsRepository: deps.settingsRepository,
+          onSettingsChanged: onSettingsChanged,
+        ),
       ),
       GoRoute(
         path: 'change-pin',
@@ -626,18 +712,20 @@ GoRoute _restoreRoute(AppDependencies deps, AppSessionState session) {
     builder: (context, state) => RestoreFlowScreen(
       authRepository: deps.authRepository,
       restoreFlowService: deps.restoreFlowService,
-      onRestoreCompleted: (pin, includePhotos) async {
-        await deps.createVaultUseCase.execute(
-          pin: pin,
-          mode: UserMode.googleEnabled,
-        );
+      onStartBackgroundPhotoRestore: () =>
+          deps.backupManager.startVaultPhotoRestoreInBackground(),
+      onRestoreCompleted: (vaultId) async {
+        if (await deps.vaultRepository.getActiveVaultId() != vaultId) {
+          throw StateError('The restored vault is not active.');
+        }
         session.mode = UserMode.googleEnabled;
         await deps.settingsRepository.saveUserMode(UserMode.googleEnabled);
-        await deps.settingsRepository.setPhotoSyncEnabled(includePhotos);
-        session.photoSyncEnabled = includePhotos;
+        session.photoSyncEnabled = await deps.settingsRepository
+            .isBackupVaultPhotosEnabled();
+        unawaited(deps.backupManager.load());
         session.unlock();
         if (!context.mounted) return;
-        context.go('/gallery', extra: UserMode.googleEnabled);
+        context.go('/chat');
       },
     ),
   );

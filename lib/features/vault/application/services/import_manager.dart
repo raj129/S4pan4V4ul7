@@ -18,6 +18,7 @@ import 'package:photo_vault/core/crypto/services/crypto_service.dart';
 import '../../domain/entities/vault_photo.dart';
 import '../../domain/repositories/photo_repository.dart';
 import 'package:photo_vault/core/session/vault_session.dart';
+import 'vault_storage_root.dart';
 
 enum ImportJobStatus { idle, running, completed, failed }
 
@@ -878,38 +879,12 @@ class ImportManager extends ChangeNotifier {
     return filePath;
   }
 
-  Future<Directory> _resolveVaultRoot() async {
-    if (!_useExternalStorageMirror || !Platform.isAndroid) {
-      final baseDir = await getApplicationSupportDirectory();
-      return Directory(p.join(baseDir.path, 'vault'));
-    }
-    final external = await getExternalStorageDirectory();
-    if (external == null) {
-      final baseDir = await getApplicationSupportDirectory();
-      return Directory(p.join(baseDir.path, 'vault'));
-    }
-
-    final marker =
-        '${Platform.pathSeparator}Android${Platform.pathSeparator}data${Platform.pathSeparator}';
-    final extPath = external.path;
-    if (extPath.contains(marker)) {
-      final split = extPath.split(marker);
-      final packageAndRest = split[1];
-      final packageName = packageAndRest.split(Platform.pathSeparator).first;
-      final mediaRoot = Directory(
-        p.join(split[0], 'Android', 'media', packageName, 'vault'),
-      );
-      if (!await mediaRoot.exists()) {
-        await mediaRoot.create(recursive: true);
-      }
-      return mediaRoot;
-    }
-
-    final fallback = Directory(p.join(external.path, 'vault'));
-    if (!await fallback.exists()) {
-      await fallback.create(recursive: true);
-    }
-    return fallback;
+  Future<Directory> _resolveVaultRoot() {
+    final vaultId = _vaultSession.vaultId ?? (throw VaultLockedException());
+    return resolveVaultRoot(
+      useExternalMirror: _useExternalStorageMirror,
+      vaultId: vaultId,
+    );
   }
 
   Future<void> _upsertExternalManifest({

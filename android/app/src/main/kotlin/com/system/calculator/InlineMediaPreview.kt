@@ -18,8 +18,10 @@ import android.view.TextureView
 import android.widget.FrameLayout
 import android.widget.ImageView
 import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
 import androidx.media3.common.VideoSize
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.datasource.DataSource
@@ -68,7 +70,9 @@ internal class InlineMediaPreview(
     private val hostActivity = context.findActivity()
     private val previousColorMode = hostActivity?.window?.colorMode
     private val kind = parameters["kind"] as? String
-    private var bytes = (parameters["bytes"] as? ByteArray)?.copyOf()
+    internal val isVideo: Boolean get() = kind == "video"
+    // Avoid .copyOf() so large video ByteArrays are not duplicated in native heap.
+    private var bytes = parameters["bytes"] as? ByteArray
     private var loop = parameters["loop"] as? Boolean ?: false
     private var status = "loading"
     private var closed = false
@@ -79,6 +83,16 @@ internal class InlineMediaPreview(
     private var textureView: TextureView? = null
     private var videoContainer: AspectRatioFrameLayout? = null
     private var source: ChatMemoryDataSource? = null
+    private val progressTicker = object : Runnable {
+        override fun run() {
+            if (closed || disposed) return
+            val current = player ?: return
+            emitProgress(current)
+            if (current.isPlaying) {
+                main.postDelayed(this, 200L)
+            }
+        }
+    }
 
     init {
         channel.setMethodCallHandler(this)
@@ -86,6 +100,7 @@ internal class InlineMediaPreview(
         when (kind) {
             "hdrImage" -> createHdrImage()
             "motionPhoto" -> createMotionPlayer()
+            "video" -> createVideoPlayer()
             else -> setError("Unsupported inline media type.")
         }
     }
@@ -100,6 +115,42 @@ internal class InlineMediaPreview(
                     "playing" to (player?.isPlaying == true),
                 ),
             )
+            "getState" -> {
+                val current = player
+                result.success(
+                    mapOf(
+                        "status" to status,
+                        "playing" to (current?.isPlaying == true),
+                        "positionMs" to (current?.currentPosition?.coerceAtLeast(0L) ?: 0L),
+                        "durationMs" to (current?.duration?.takeIf { it > 0L } ?: 0L),
+                        "bufferedMs" to (current?.bufferedPosition?.coerceAtLeast(0L) ?: 0L),
+                        "speed" to (current?.playbackParameters?.speed?.toDouble() ?: 1.0),
+                        "volume" to (current?.volume?.toDouble() ?: 1.0),
+                        "loop" to loop,
+                    ),
+                )
+            }
+            "play" -> {
+                val current = player
+                if (current == null || closed) {
+                    result.error("unavailable", "Inline video is unavailable.", null)
+                } else {
+                    if (current.playbackState == Player.STATE_ENDED) {
+                        current.seekTo(0)
+                    }
+                    current.play()
+                    result.success(null)
+                }
+            }
+            "pause" -> {
+                val current = player
+                if (current == null || closed) {
+                    result.error("unavailable", "Inline video is unavailable.", null)
+                } else {
+                    current.pause()
+                    result.success(null)
+                }
+            }
             "toggle" -> {
                 val current = player
                 if (current == null || closed) {
@@ -112,6 +163,53 @@ internal class InlineMediaPreview(
                             current.seekTo(0)
                         }
                         current.play()
+                    }
+                    result.success(null)
+                }
+            }
+            "seekTo" -> {
+                val current = player
+                val positionMs = call.argument<Number>("positionMs")?.toLong()
+                if (current == null || positionMs == null || closed) {
+                    result.error("unavailable", "Inline video is unavailable.", null)
+                } else {
+                    val duration = current.duration.takeIf { it > 0L } ?: Long.MAX_VALUE
+                    current.seekTo(positionMs.coerceIn(0L, duration))
+                    if (status == "ended") status = "ready"
+                    emitProgress(current)
+                    result.success(null)
+                }
+            }
+            "setSpeed" -> {
+                val current = player
+                val speed = call.argument<Number>("speed")?.toFloat()
+                if (current == null || speed == null || closed) {
+                    result.error("unavailable", "Inline video is unavailable.", null)
+                } else {
+                    current.playbackParameters = PlaybackParameters(speed.coerceIn(0.25f, 3.0f))
+                    result.success(null)
+                }
+            }
+            "setVolume" -> {
+                val current = player
+                val volume = call.argument<Number>("volume")?.toFloat()
+                if (current == null || volume == null || closed) {
+                    result.error("unavailable", "Inline video is unavailable.", null)
+                } else {
+                    current.volume = volume.coerceIn(0f, 1f)
+                    result.success(null)
+                }
+            }
+            "setResizeMode" -> {
+                val container = videoContainer
+                val mode = call.argument<String>("mode")
+                if (container == null || closed) {
+                    result.error("unavailable", "Inline video is unavailable.", null)
+                } else {
+                    container.resizeMode = if (mode == "cover") {
+                        AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                    } else {
+                        AspectRatioFrameLayout.RESIZE_MODE_FIT
                     }
                     result.success(null)
                 }
@@ -196,8 +294,19 @@ internal class InlineMediaPreview(
     }
 
     @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
+    private fun buildInMemoryPlayer(): ExoPlayer {
+        val loadControl = DefaultLoadControl.Builder()
+            .setBufferDurationsMs(1500, 5000, 500, 1000)
+            .build()
+        return ExoPlayer.Builder(context)
+            .setLoadControl(loadControl)
+            .build()
+    }
+
+    @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
     private fun createMotionPlayer() {
         val sourceBytes = bytes
+        bytes = null
         if (sourceBytes == null || sourceBytes.isEmpty()) {
             setError("Motion Photo video is empty.")
             return
@@ -210,7 +319,7 @@ internal class InlineMediaPreview(
             ).createMediaSource(
                 MediaItem.fromUri("chat-memory://inline-motion-photo"),
             )
-            val playback = ExoPlayer.Builder(context).build()
+            val playback = buildInMemoryPlayer()
             player = playback
             playback.repeatMode = if (loop) {
                 Player.REPEAT_MODE_ONE
@@ -279,6 +388,134 @@ internal class InlineMediaPreview(
         }
     }
 
+    @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
+    private fun createVideoPlayer() {
+        val sourceBytes = bytes
+        bytes = null
+        if (sourceBytes == null || sourceBytes.isEmpty()) {
+            setError("Video is empty.")
+            return
+        }
+        val muted = parameters["muted"] as? Boolean ?: false
+        val autoPlay = parameters["autoPlay"] as? Boolean ?: true
+        try {
+            val memorySource = ChatMemoryDataSource(sourceBytes)
+            source = memorySource
+            val mediaSource = ProgressiveMediaSource.Factory(
+                DataSource.Factory { ChatMedia3DataSource(memorySource) },
+            ).createMediaSource(
+                MediaItem.fromUri("chat-memory://inline-video"),
+            )
+            val playback = buildInMemoryPlayer()
+            player = playback
+            playback.repeatMode = if (loop) {
+                Player.REPEAT_MODE_ONE
+            } else {
+                Player.REPEAT_MODE_OFF
+            }
+            if (muted) {
+                playback.volume = 0f
+            }
+            playback.addListener(object : Player.Listener {
+                override fun onIsPlayingChanged(isPlaying: Boolean) {
+                    main.removeCallbacks(progressTicker)
+                    if (isPlaying) {
+                        main.post(progressTicker)
+                    }
+                    emitProgress(playback)
+                    channel.invokeMethod("playingChanged", isPlaying)
+                }
+
+                override fun onVideoSizeChanged(videoSize: VideoSize) {
+                    if (videoSize.width > 0 && videoSize.height > 0) {
+                        var aspectRatio =
+                            videoSize.width * videoSize.pixelWidthHeightRatio /
+                                videoSize.height
+                        if (videoSize.unappliedRotationDegrees % 180 != 0) {
+                            aspectRatio = 1f / aspectRatio
+                        }
+                        videoContainer?.setAspectRatio(aspectRatio)
+                    }
+                }
+
+                override fun onPlaybackStateChanged(playbackState: Int) {
+                    when (playbackState) {
+                        Player.STATE_BUFFERING -> {
+                            status = "buffering"
+                            notifyStatus()
+                        }
+                        Player.STATE_READY -> {
+                            status = "ready"
+                            notifyStatus()
+                            emitProgress(playback)
+                        }
+                        Player.STATE_ENDED -> {
+                            main.removeCallbacks(progressTicker)
+                            if (!loop) {
+                                status = "ended"
+                                emitProgress(playback)
+                                channel.invokeMethod("ended", null)
+                            }
+                        }
+                        else -> {}
+                    }
+                }
+
+                override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                    main.removeCallbacks(progressTicker)
+                    setError(error.message ?: "Video playback failed.")
+                }
+            })
+            val view = TextureView(context).apply { keepScreenOn = true }
+            val container = AspectRatioFrameLayout(context).apply {
+                resizeMode = if (parameters["fit"] == "cover") {
+                    AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                } else {
+                    AspectRatioFrameLayout.RESIZE_MODE_FIT
+                }
+                addView(
+                    view,
+                    FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                    ),
+                )
+            }
+            textureView = view
+            videoContainer = container
+            root.addView(
+                container,
+                FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                    Gravity.CENTER,
+                ),
+            )
+            playback.setVideoTextureView(view)
+            playback.setMediaSource(mediaSource)
+            playback.prepare()
+            playback.playWhenReady = autoPlay
+            status = "loading"
+            notifyStatus()
+        } catch (error: Exception) {
+            sourceBytes.fill(0)
+            setError(error.message ?: "Video playback is unavailable.")
+        }
+    }
+
+    private fun emitProgress(current: ExoPlayer) {
+        if (closed || disposed) return
+        channel.invokeMethod(
+            "positionChanged",
+            mapOf(
+                "positionMs" to current.currentPosition.coerceAtLeast(0L),
+                "durationMs" to (current.duration.takeIf { it > 0L } ?: 0L),
+                "bufferedMs" to current.bufferedPosition.coerceAtLeast(0L),
+                "playing" to current.isPlaying,
+            ),
+        )
+    }
+
     private fun decodeImage(data: ByteArray): Bitmap? {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             try {
@@ -313,6 +550,7 @@ internal class InlineMediaPreview(
     fun close() {
         if (closed) return
         closed = true
+        main.removeCallbacks(progressTicker)
         status = "closed"
         channel.invokeMethod("statusChanged", mapOf("status" to status))
         textureView?.let { player?.clearVideoTextureView(it) }

@@ -548,4 +548,20 @@ void main() {
       expect(restored.events.last['event'], 'storage_test');
     },
   );
+
+  testWidgets('resume does not restart a healthy active location stream', (
+    tester,
+  ) async {
+    final h = _Harness(tester);
+    await h.start();
+    await tester.pump(const Duration(seconds: 15));
+    h.streams.last.add(h.point(latitude: 1.001));
+    await tester.pump();
+    expect(h.streams, hasLength(1));
+
+    h.service.didChangeAppLifecycleState(AppLifecycleState.resumed);
+    await tester.pump();
+    expect(h.streams, hasLength(1));
+    await h.service.stopSharing();
+  });
 }

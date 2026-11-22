@@ -10,6 +10,9 @@ abstract class ChatBackupStore {
   /// Whether this store needs a network connection.
   bool get requiresNetwork;
 
+  /// Cloud stores are gated by the "Back up to Google Drive" setting.
+  bool get isCloud;
+
   /// [interactive] allows prompting the user (e.g. to grant Drive access).
   Future<void> write(
     String accountId,
@@ -19,4 +22,7 @@ abstract class ChatBackupStore {
 
   /// The stored blob for [accountId], or null if none exists.
   Future<Uint8List?> read(String accountId, {bool interactive = false});
+
+  /// Removes the stored blob for [accountId]; a missing blob is not an error.
+  Future<void> delete(String accountId, {bool interactive = false});
 }

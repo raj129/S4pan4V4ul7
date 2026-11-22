@@ -28,7 +28,8 @@ class _FakeUsers implements UserRepository {
   final upserts = <ChatUser>[];
 
   @override
-  Future<ChatUser?> getUserById(String uid) async => remote;
+  Future<ChatUser?> getUserById(String uid, {bool preferCache = false}) async =>
+      remote;
 
   @override
   Future<void> upsertProfile(

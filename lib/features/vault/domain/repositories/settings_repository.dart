@@ -1,4 +1,6 @@
 import '../entities/user_mode.dart';
+import '../entities/incoming_chat_alert_preferences.dart';
+import '../../../calculator/domain/models/secret_entry_config.dart';
 
 abstract class SettingsRepository {
   static const defaultAutoLockTimeoutSeconds = 10;
@@ -6,7 +8,7 @@ abstract class SettingsRepository {
   static const defaultIncomingChatAlertTitle = '';
   static const defaultIncomingChatAlertText = '';
   static const defaultBackgroundLocationAlertTitle = '';
-  static const defaultBackgroundLocationAlertText = 'Syncing in background';
+  static const defaultBackgroundLocationAlertText = '';
 
   Future<UserMode?> getUserMode();
 
@@ -27,6 +29,55 @@ abstract class SettingsRepository {
   Future<bool> isDriveEncryptedBackupEnabled();
 
   Future<void> setDriveEncryptedBackupEnabled(bool enabled);
+
+  /// What the Backup screen controls. Defaults are on so a fresh install
+  /// behaves like WhatsApp: nightly backup of everything to the device and
+  /// Google Drive, Wi-Fi only.
+  Future<bool> isBackupChatsEnabled() async => true;
+
+  Future<void> setBackupChatsEnabled(bool enabled) async {}
+
+  Future<bool> isBackupVaultPhotosEnabled() async => true;
+
+  Future<void> setBackupVaultPhotosEnabled(bool enabled) async {}
+
+  Future<bool> isBackupSettingsEnabled() async => true;
+
+  Future<void> setBackupSettingsEnabled(bool enabled) async {}
+
+  Future<DateTime?> getLastSettingsBackupAt() async => null;
+
+  Future<void> setLastSettingsBackupAt(DateTime? at) async {}
+
+  Future<bool> isBackupCloudEnabled() async => false;
+
+  Future<void> setBackupCloudEnabled(bool enabled) async {}
+
+  Future<bool> isBackupWifiOnly() async => true;
+
+  Future<void> setBackupWifiOnly(bool enabled) async {}
+
+  /// When vault photos were last backed up (for the Backup screen).
+  Future<DateTime?> getLastVaultPhotoBackupAt() async => null;
+
+  /// When vault photos were last backed up; null clears it (e.g. after the
+  /// device copy is deleted).
+  Future<void> setLastVaultPhotoBackupAt(DateTime? at) async {}
+
+  Future<String?> getLastVaultPhotoBackupVaultId() async => null;
+
+  Future<void> setLastVaultPhotoBackupVaultId(String? vaultId) async {}
+
+  /// True when a vault photo backup saved locally while Google Drive was
+  /// deferred (e.g. waiting for Wi-Fi or transient error) and still needs
+  /// cloud upload as soon as network conditions allow.
+  Future<bool> isVaultPhotoBackupCloudPending() async => false;
+
+  Future<void> setVaultPhotoBackupCloudPending(bool pending) async {}
+
+  /// Migrates the legacy standalone `photoSyncEnabled` preference into the
+  /// unified `backupVaultPhotosEnabled` setting once, if needed.
+  Future<void> migrateLegacyPhotoSyncSetting() async {}
 
   /// Last attachment quality the user picked, preselected next time.
   Future<String?> getChatImageQuality();
@@ -54,6 +105,14 @@ abstract class SettingsRepository {
       defaultIncomingChatAlertText;
 
   Future<void> setIncomingChatAlertText(String text) async {}
+
+  Future<IncomingChatAlertPreferences>
+  getIncomingChatAlertPreferences() async =>
+      const IncomingChatAlertPreferences();
+
+  Future<void> setIncomingChatAlertPreferences(
+    IncomingChatAlertPreferences preferences,
+  ) async {}
 
   /// Title and body shown while live location is shared in the background.
   Future<String> getBackgroundLocationAlertTitle() async =>
@@ -97,4 +156,10 @@ abstract class SettingsRepository {
   Future<String?> getMockLocationPrefs() async => null;
 
   Future<void> setMockLocationPrefs(String json) async {}
+
+  /// Calculator secret-entry method & key configuration.
+  Future<SecretEntryConfig> getSecretEntryConfig() async =>
+      const SecretEntryConfig();
+
+  Future<void> setSecretEntryConfig(SecretEntryConfig config) async {}
 }
