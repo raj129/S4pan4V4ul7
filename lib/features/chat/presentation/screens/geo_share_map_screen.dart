@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../application/services/maps_diagnostics.dart';
@@ -31,10 +32,14 @@ class GeoShareMapScreen extends StatefulWidget {
 
 class _GeoShareMapScreenState extends State<GeoShareMapScreen> {
   bool _mapConfigured = true;
+  bool _myLocationEnabled = false;
+  MapType _mapType = MapType.normal;
+  GoogleMapController? _map;
 
   @override
   void initState() {
     super.initState();
+    unawaited(_loadPermissions());
     if (Platform.isAndroid) {
       unawaited(MapsDiagnostics.setMapActive(true));
       unawaited(_checkKey());
@@ -43,8 +48,16 @@ class _GeoShareMapScreenState extends State<GeoShareMapScreen> {
 
   @override
   void dispose() {
+    _map?.dispose();
     if (Platform.isAndroid) unawaited(MapsDiagnostics.setMapActive(false));
     super.dispose();
+  }
+
+  Future<void> _loadPermissions() async {
+    final granted = await Permission.locationWhenInUse.isGranted;
+    if (mounted && granted) {
+      setState(() => _myLocationEnabled = true);
+    }
   }
 
   Future<void> _checkKey() async {
@@ -58,7 +71,10 @@ class _GeoShareMapScreenState extends State<GeoShareMapScreen> {
 
   Future<void> _fit(GoogleMapController c) async {
     final share = widget.share;
-    if (!share.isRoute) return;
+    if (!share.isRoute) {
+      await c.animateCamera(CameraUpdate.newLatLngZoom(_ll(share.point), 15));
+      return;
+    }
     final points = [share.point, share.destination!, ...share.path];
     var south = points.first.latitude;
     var north = south;
@@ -69,6 +85,10 @@ class _GeoShareMapScreenState extends State<GeoShareMapScreen> {
       if (p.latitude > north) north = p.latitude;
       if (p.longitude < west) west = p.longitude;
       if (p.longitude > east) east = p.longitude;
+    }
+    if (south == north && west == east) {
+      await c.animateCamera(CameraUpdate.newLatLngZoom(_ll(share.point), 15));
+      return;
     }
     // Wait a frame so the map has a size before fitting bounds.
     await Future<void>.delayed(const Duration(milliseconds: 300));
@@ -83,10 +103,34 @@ class _GeoShareMapScreenState extends State<GeoShareMapScreen> {
     );
   }
 
+  Future<void> _recenter() async {
+    final controller = _map;
+    if (controller == null) return;
+    await _fit(controller);
+  }
+
+  void _cycleMapType() {
+    setState(() {
+      _mapType = switch (_mapType) {
+        MapType.normal => MapType.satellite,
+        MapType.satellite => MapType.terrain,
+        _ => MapType.normal,
+      };
+    });
+  }
+
+  (IconData, String) _mapTypeMeta(MapType type) => switch (type) {
+    MapType.satellite => (Icons.satellite_alt_rounded, 'Map type: Satellite'),
+    MapType.terrain => (Icons.terrain_rounded, 'Map type: Terrain'),
+    _ => (Icons.layers_outlined, 'Map type: Normal'),
+  };
+
   @override
   Widget build(BuildContext context) {
     final share = widget.share;
     final cs = Theme.of(context).colorScheme;
+    final textTheme = Theme.of(context).textTheme;
+    final (mapIcon, mapTooltip) = _mapTypeMeta(_mapType);
     return Scaffold(
       appBar: AppBar(
         title: Text(share.label.isEmpty ? share.preview : share.label),
@@ -103,47 +147,195 @@ class _GeoShareMapScreenState extends State<GeoShareMapScreen> {
       ),
       body: !_mapConfigured
           ? const Center(child: Text('Google Maps is not configured.'))
-          : GoogleMap(
-              initialCameraPosition: CameraPosition(
-                target: _ll(share.point),
-                zoom: 15,
-              ),
-              onMapCreated: (c) => unawaited(_fit(c)),
-              markers: {
-                Marker(
-                  markerId: const MarkerId('point'),
-                  position: _ll(share.point),
-                  infoWindow: InfoWindow(
-                    title: share.isRoute ? 'Start' : share.label,
+          : Stack(
+              children: [
+                GoogleMap(
+                  initialCameraPosition: CameraPosition(
+                    target: _ll(share.point),
+                    zoom: 15,
                   ),
+                  mapType: _mapType,
+                  onMapCreated: (c) {
+                    _map = c;
+                    if (share.isRoute) unawaited(_fit(c));
+                  },
+                  markers: {
+                    Marker(
+                      markerId: const MarkerId('point'),
+                      position: _ll(share.point),
+                      infoWindow: InfoWindow(
+                        title: share.isRoute ? 'Start' : share.label,
+                      ),
+                    ),
+                    if (share.isRoute)
+                      Marker(
+                        markerId: const MarkerId('destination'),
+                        position: _ll(share.destination!),
+                        infoWindow: const InfoWindow(title: 'Destination'),
+                        icon: BitmapDescriptor.defaultMarkerWithHue(
+                          BitmapDescriptor.hueGreen,
+                        ),
+                      ),
+                  },
+                  polylines: {
+                    if (share.isRoute)
+                      Polyline(
+                        polylineId: const PolylineId('route'),
+                        color: cs.primary,
+                        width: 5,
+                        points: [
+                          for (final p
+                              in share.path.isEmpty
+                                  ? [share.point, share.destination!]
+                                  : share.path)
+                            _ll(p),
+                        ],
+                      ),
+                  },
+                  myLocationEnabled: _myLocationEnabled,
+                  myLocationButtonEnabled: false,
+                  mapToolbarEnabled: false,
                 ),
-                if (share.isRoute)
-                  Marker(
-                    markerId: const MarkerId('destination'),
-                    position: _ll(share.destination!),
-                    infoWindow: const InfoWindow(title: 'Destination'),
-                    icon: BitmapDescriptor.defaultMarkerWithHue(
-                      BitmapDescriptor.hueGreen,
+                Positioned(
+                  top: 12,
+                  right: 12,
+                  child: SafeArea(
+                    bottom: false,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        FloatingActionButton.small(
+                          heroTag: 'geo-share-map-type',
+                          tooltip: mapTooltip,
+                          backgroundColor: cs.surfaceContainerHigh,
+                          foregroundColor: cs.onSurface,
+                          onPressed: _cycleMapType,
+                          child: Icon(mapIcon),
+                        ),
+                        const SizedBox(height: 8),
+                        FloatingActionButton.small(
+                          heroTag: 'geo-share-recenter',
+                          tooltip: 'Re-center',
+                          backgroundColor: cs.surfaceContainerHigh,
+                          foregroundColor: cs.onSurface,
+                          onPressed: _recenter,
+                          child: const Icon(Icons.center_focus_strong_rounded),
+                        ),
+                      ],
                     ),
                   ),
-              },
-              polylines: {
-                if (share.isRoute)
-                  Polyline(
-                    polylineId: const PolylineId('route'),
-                    color: cs.primary,
-                    width: 5,
-                    points: [
-                      for (final p
-                          in share.path.isEmpty
-                              ? [share.point, share.destination!]
-                              : share.path)
-                        _ll(p),
-                    ],
+                ),
+                Positioned(
+                  left: 16,
+                  right: 16,
+                  bottom: 16,
+                  child: SafeArea(
+                    top: false,
+                    child: Material(
+                      color: cs.surfaceContainerHigh,
+                      elevation: 2,
+                      borderRadius: BorderRadius.circular(24),
+                      child: Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Text(
+                                    share.label.isEmpty
+                                        ? (share.isRoute
+                                              ? 'Shared route'
+                                              : 'Pinned location')
+                                        : share.label,
+                                    style: textTheme.titleMedium?.copyWith(
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                  if (share.distanceMeters != null ||
+                                      share.durationSeconds != null) ...[
+                                    const SizedBox(height: 6),
+                                    Wrap(
+                                      spacing: 6,
+                                      runSpacing: 4,
+                                      children: [
+                                        if (share.distanceMeters != null)
+                                          _MetricChip(
+                                            icon: Icons.straighten_rounded,
+                                            label:
+                                                '${(share.distanceMeters! / 1000).toStringAsFixed(1)} km',
+                                          ),
+                                        if (share.durationSeconds != null)
+                                          _MetricChip(
+                                            icon: Icons.schedule_rounded,
+                                            label:
+                                                '${(share.durationSeconds! / 60).round()} min',
+                                          ),
+                                      ],
+                                    ),
+                                  ],
+                                ],
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            FilledButton.icon(
+                              onPressed: () => launchUrl(
+                                GeoShareMapScreen.directionsUri(share),
+                                mode: LaunchMode.externalApplication,
+                              ),
+                              icon: const Icon(
+                                Icons.directions_rounded,
+                                size: 18,
+                              ),
+                              label: const Text('Directions'),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
                   ),
-              },
-              mapToolbarEnabled: false,
+                ),
+              ],
             ),
+    );
+  }
+}
+
+class _MetricChip extends StatelessWidget {
+  const _MetricChip({required this.icon, required this.label});
+
+  final IconData icon;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: cs.secondaryContainer,
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 14, color: cs.onSecondaryContainer),
+            const SizedBox(width: 4),
+            Text(
+              label,
+              style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                color: cs.onSecondaryContainer,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

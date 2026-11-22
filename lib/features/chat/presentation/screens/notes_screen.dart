@@ -6,6 +6,7 @@ import 'package:photo_vault/core/widgets/base_screen_shell.dart';
 import 'package:photo_vault/core/presentation/theme/app_spacing.dart';
 import '../../domain/entities/app_note.dart';
 import '../../domain/repositories/notes_repository.dart';
+import '../widgets/rich_note_controller.dart';
 import 'note_editor_screen.dart';
 
 /// Displays private notes or the shared notes belonging to one chat.
@@ -516,8 +517,9 @@ class _NoteGridCard extends StatelessWidget {
                             ),
                         ],
                       )
-                    : Text(
-                        note.content,
+                    : RichNoteTextEditingController.buildReadOnlyRichText(
+                        context,
+                        text: note.content,
                         style: theme.textTheme.bodySmall?.copyWith(
                           color: theme.colorScheme.onSurfaceVariant,
                         ),

@@ -33,7 +33,20 @@ class ComposerPanelController extends ChangeNotifier {
   bool get isAttachmentOpen => _activePanel == ComposerPanel.attachment;
   double get keyboardHeight => _keyboardHeight;
 
-  double targetEmojiHeight(double maxAvailableHeight) {
+  double targetEmojiHeight(
+    double maxAvailableHeight, {
+    double? attachmentHeight,
+  }) {
+    if (attachmentHeight != null) {
+      final base = attachmentHeight.clamp(
+        minPanelHeight,
+        math.max(minPanelHeight, maxAvailableHeight),
+      );
+      return (base + _emojiExtraHeight).clamp(
+        minPanelHeight,
+        math.max(minPanelHeight, maxAvailableHeight),
+      );
+    }
     final base = _keyboardHeight.clamp(
       minPanelHeight,
       math.max(minPanelHeight, maxAvailableHeight),
@@ -56,7 +69,10 @@ class ComposerPanelController extends ChangeNotifier {
       return 0.0;
     }
     final target = switch (_activePanel) {
-      ComposerPanel.emoji => targetEmojiHeight(maxAvailableHeight),
+      ComposerPanel.emoji => targetEmojiHeight(
+        maxAvailableHeight,
+        attachmentHeight: attachmentHeight,
+      ),
       ComposerPanel.attachment =>
         attachmentHeight ??
             _keyboardHeight.clamp(
@@ -217,12 +233,14 @@ class ComposerPanelHost extends StatelessWidget {
     required this.controller,
     required this.emojiBuilder,
     required this.attachmentBuilder,
+    this.attachmentHeight,
     this.maxHeightFraction = 0.72,
   });
 
   final ComposerPanelController controller;
   final Widget Function(BuildContext context, double height) emojiBuilder;
   final WidgetBuilder attachmentBuilder;
+  final double? attachmentHeight;
   final double maxHeightFraction;
 
   @override
@@ -243,6 +261,7 @@ class ComposerPanelHost extends StatelessWidget {
           final placeholderHeight = controller.currentReservedHeight(
             viewInsetsBottom: viewInsetsBottom,
             maxAvailableHeight: maxAvailableHeight,
+            attachmentHeight: attachmentHeight,
           );
           if (placeholderHeight <= 0) {
             return const SizedBox.shrink();
@@ -261,6 +280,7 @@ class ComposerPanelHost extends StatelessWidget {
         final height = controller.currentReservedHeight(
           viewInsetsBottom: viewInsetsBottom,
           maxAvailableHeight: maxAvailableHeight,
+          attachmentHeight: attachmentHeight,
         );
         if (height <= 0) {
           return const SizedBox.shrink();

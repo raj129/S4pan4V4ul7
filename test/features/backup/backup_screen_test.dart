@@ -284,11 +284,13 @@ void main() {
   testWidgets('shows every backup choice in one place', (tester) async {
     await pump(tester);
 
-    expect(find.text('WHAT TO BACK UP'), findsOneWidget);
-    expect(find.text('WHERE TO BACK UP'), findsOneWidget);
+    expect(find.text('What to back up'), findsOneWidget);
+    expect(find.text('Where to back up'), findsOneWidget);
     expect(find.text('Chats'), findsOneWidget);
     expect(find.text('Vault photos'), findsOneWidget);
+    expect(find.text('App settings'), findsOneWidget);
     expect(find.text('Google Drive'), findsOneWidget);
+    await tester.scrollUntilVisible(find.text('Delete backup'), 200);
     expect(find.text('Restore from backup'), findsOneWidget);
     expect(find.text('Recover a Google vault'), findsOneWidget);
     expect(find.text('Delete backup'), findsOneWidget);
@@ -397,6 +399,7 @@ void main() {
       );
       await pump(tester, chatBackup: () => chat, vaultPhotoBackup: photos);
 
+      await tester.scrollUntilVisible(find.text('Restore from backup'), 200);
       await tester.tap(find.text('Restore from backup'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Restore'));
@@ -439,6 +442,7 @@ void main() {
       vaultPhotoBackup: _StubPhotoBackupService(),
     );
 
+    await tester.scrollUntilVisible(find.text('Restore from backup'), 200);
     await tester.tap(find.text('Restore from backup'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Restore'));
@@ -462,6 +466,7 @@ void main() {
       vaultPhotoBackup: _StubPhotoBackupService(),
     );
 
+    await tester.scrollUntilVisible(find.text('Restore from backup'), 200);
     await tester.tap(find.text('Restore from backup'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Restore'));
@@ -480,13 +485,15 @@ void main() {
     await pump(tester);
     await tester.tap(switchTile('Chats'));
     await tester.tap(switchTile('Vault photos'));
+    await tester.tap(switchTile('App settings'));
     await tester.pumpAndSettle();
 
+    await tester.scrollUntilVisible(find.text('Back up now'), -200);
     await tester.tap(find.text('Back up now'));
     await tester.pumpAndSettle();
 
     expect(
-      find.text('Turn on chats or vault photos to back up.'),
+      find.text('Turn on chats, vault photos, or settings to back up.'),
       findsOneWidget,
     );
   });
@@ -496,7 +503,7 @@ void main() {
   ) async {
     await pump(tester);
 
-    await tester.ensureVisible(find.text('Delete backup'));
+    await tester.scrollUntilVisible(find.text('Delete backup'), 200);
     await tester.pumpAndSettle();
     await tester.tap(find.text('Delete backup'));
     await tester.pumpAndSettle();

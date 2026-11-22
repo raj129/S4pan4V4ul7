@@ -256,9 +256,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   children: [
                     Row(
                       children: [
-                        Icon(
-                          Icons.palette_outlined,
-                          color: cs.onSurfaceVariant,
+                        SettingsIconBadge(
+                          icon: Icons.palette_outlined,
+                          backgroundColor: cs.primaryContainer,
+                          iconColor: cs.onPrimaryContainer,
                         ),
                         const SizedBox(width: AppSpacing.md),
                         Expanded(
@@ -308,9 +309,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   children: [
                     Row(
                       children: [
-                        Icon(
-                          Icons.brightness_6_outlined,
-                          color: cs.onSurfaceVariant,
+                        SettingsIconBadge(
+                          icon: Icons.brightness_6_outlined,
+                          backgroundColor: cs.secondaryContainer,
+                          iconColor: cs.onSecondaryContainer,
                         ),
                         const SizedBox(width: AppSpacing.md),
                         Text(
@@ -358,6 +360,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
             children: [
               _SettingsSwitch(
                 icon: Icons.screen_lock_portrait_outlined,
+                badgeBackgroundColor: cs.tertiaryContainer,
+                badgeIconColor: cs.onTertiaryContainer,
                 title: 'Auto-lock on background',
                 subtitle:
                     'Lock the vault automatically while it stays in the background.',
@@ -371,7 +375,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
               ListTile(
                 enabled: _autoLockOnBackground,
-                leading: const Icon(Icons.timer_outlined),
+                leading: SettingsIconBadge(
+                  icon: Icons.timer_outlined,
+                  backgroundColor: cs.tertiaryContainer,
+                  iconColor: cs.onTertiaryContainer,
+                ),
                 title: const Text('Auto-lock delay'),
                 subtitle: Text(
                   _autoLockOnBackground
@@ -379,29 +387,49 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             'in the background.'
                       : 'Turn on Auto-lock on background to choose a delay.',
                 ),
-                trailing: DropdownButton<int>(
-                  key: const Key('auto-lock-timeout-dropdown'),
-                  value: _autoLockTimeoutSeconds,
-                  onChanged: _autoLockOnBackground
-                      ? (seconds) {
-                          if (seconds != null) {
-                            unawaited(_selectAutoLockTimeout(seconds));
-                          }
-                        }
-                      : null,
-                  items: SettingsRepository.autoLockTimeoutOptionsSeconds
-                      .map(
-                        (seconds) => DropdownMenuItem<int>(
-                          value: seconds,
-                          child: Text(_autoLockTimeoutLabel(seconds)),
-                        ),
-                      )
-                      .toList(growable: false),
+                trailing: DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: _autoLockOnBackground
+                        ? cs.surfaceContainerHighest
+                        : cs.surfaceContainerHighest.withValues(alpha: 0.45),
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: AppSpacing.md,
+                    ),
+                    child: DropdownButtonHideUnderline(
+                      child: DropdownButton<int>(
+                        key: const Key('auto-lock-timeout-dropdown'),
+                        value: _autoLockTimeoutSeconds,
+                        borderRadius: BorderRadius.circular(16),
+                        onChanged: _autoLockOnBackground
+                            ? (seconds) {
+                                if (seconds != null) {
+                                  unawaited(_selectAutoLockTimeout(seconds));
+                                }
+                              }
+                            : null,
+                        items: SettingsRepository.autoLockTimeoutOptionsSeconds
+                            .map(
+                              (seconds) => DropdownMenuItem<int>(
+                                value: seconds,
+                                child: Text(_autoLockTimeoutLabel(seconds)),
+                              ),
+                            )
+                            .toList(growable: false),
+                      ),
+                    ),
+                  ),
                 ),
               ),
               ListTile(
                 key: const Key('secret-entry-settings-tile'),
-                leading: const Icon(Icons.touch_app_outlined),
+                leading: SettingsIconBadge(
+                  icon: Icons.touch_app_outlined,
+                  backgroundColor: cs.tertiaryContainer,
+                  iconColor: cs.onTertiaryContainer,
+                ),
                 title: const Text('Secret entry'),
                 subtitle: Text(
                   _secretEntryConfig.oneHandedEnabled
@@ -415,7 +443,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 },
               ),
               ListTile(
-                leading: const Icon(Icons.password_rounded),
+                leading: SettingsIconBadge(
+                  icon: Icons.password_rounded,
+                  backgroundColor: cs.tertiaryContainer,
+                  iconColor: cs.onTertiaryContainer,
+                ),
                 title: const Text('Change app PIN'),
                 subtitle: const Text(
                   'Enter your current PIN, then choose a new one.',
@@ -432,6 +464,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
             children: [
               _SettingsSwitch(
                 icon: Icons.visibility_outlined,
+                badgeBackgroundColor: cs.secondaryContainer,
+                badgeIconColor: cs.onSecondaryContainer,
                 title: 'Show last seen',
                 subtitle: _showLastSeen
                     ? 'Contacts can see when you were last online.'
@@ -446,6 +480,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
               if (widget.screenshotProtection.isSupportedPlatform)
                 _SettingsSwitch(
                   icon: Icons.no_photography_outlined,
+                  badgeBackgroundColor: cs.secondaryContainer,
+                  badgeIconColor: cs.onSecondaryContainer,
                   title: 'Screenshot protection',
                   subtitle: _screenshotProtectionEnabled
                       ? 'Screenshots and screen recordings are blocked.'
@@ -467,7 +503,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
             children: [
               ListTile(
                 key: const Key('notification-settings-navigation-tile'),
-                leading: const Icon(Icons.notifications_active_outlined),
+                leading: SettingsIconBadge(
+                  icon: Icons.notifications_active_outlined,
+                  backgroundColor: cs.primaryContainer,
+                  iconColor: cs.onPrimaryContainer,
+                ),
                 title: const Text('Notification settings'),
                 subtitle: const Text(
                   'Configure chat, ring, and background location notifications.',
@@ -485,10 +525,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 onTap: () => unawaited(context.push('/settings/backup')),
               ),
               ListTile(
-                leading: Icon(
-                  _backgroundAllowed == false
+                leading: SettingsIconBadge(
+                  icon: _backgroundAllowed == false
                       ? Icons.battery_alert_outlined
                       : Icons.battery_charging_full_outlined,
+                  backgroundColor: _backgroundAllowed == false
+                      ? cs.errorContainer
+                      : cs.primaryContainer,
+                  iconColor: _backgroundAllowed == false
+                      ? cs.onErrorContainer
+                      : cs.onPrimaryContainer,
                 ),
                 title: const Text('Run in background'),
                 subtitle: Text(switch (_backgroundAllowed) {
@@ -569,6 +615,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 builder: (context, isAvailable, _) => isAvailable
                     ? _SettingsSwitch(
                         icon: Icons.hdr_on_rounded,
+                        badgeBackgroundColor: cs.secondaryContainer,
+                        badgeIconColor: cs.onSecondaryContainer,
                         title: 'HDR photo preview',
                         subtitle: _hdrPreviewEnabled
                             ? 'Use HDR rendering for supported photos.'
@@ -585,7 +633,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
             children: [
               ListTile(
                 key: const Key('settings-version-tile'),
-                leading: const Icon(Icons.info_outline_rounded),
+                leading: SettingsIconBadge(
+                  icon: Icons.info_outline_rounded,
+                  backgroundColor: cs.surfaceContainerHighest,
+                  iconColor: cs.onSurfaceVariant,
+                ),
                 title: const Text('Version'),
                 subtitle: Text(_version ?? '…'),
               ),
@@ -605,11 +657,16 @@ class _BackupEntryTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
     final backup = manager;
     if (backup == null) {
       return ListTile(
         key: const Key('settings-backup-tile'),
-        leading: const Icon(Icons.backup_outlined),
+        leading: SettingsIconBadge(
+          icon: Icons.backup_outlined,
+          backgroundColor: cs.primaryContainer,
+          iconColor: cs.onPrimaryContainer,
+        ),
         title: const Text('Backup & restore'),
         subtitle: const Text(
           'Chats, vault photos, Google Drive, and vault recovery.',
@@ -623,11 +680,24 @@ class _BackupEntryTile extends StatelessWidget {
       builder: (context, _) => ListTile(
         key: const Key('settings-backup-tile'),
         leading: backup.isBusy
-            ? const SizedBox.square(
-                dimension: 20,
-                child: CircularProgressIndicator(strokeWidth: 2),
+            ? Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: cs.primaryContainer,
+                  shape: BoxShape.circle,
+                ),
+                alignment: Alignment.center,
+                child: const SizedBox.square(
+                  dimension: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
               )
-            : const Icon(Icons.backup_outlined),
+            : SettingsIconBadge(
+                icon: Icons.backup_outlined,
+                backgroundColor: cs.primaryContainer,
+                iconColor: cs.onPrimaryContainer,
+              ),
         title: const Text('Backup & restore'),
         subtitle: Text(backup.settingsSummary()),
         trailing: const Icon(Icons.chevron_right_rounded),
@@ -715,6 +785,8 @@ class _SettingsSwitch extends StatelessWidget {
     required this.subtitle,
     required this.value,
     required this.onChanged,
+    this.badgeBackgroundColor,
+    this.badgeIconColor,
   });
 
   final IconData icon;
@@ -722,11 +794,17 @@ class _SettingsSwitch extends StatelessWidget {
   final String subtitle;
   final bool value;
   final ValueChanged<bool>? onChanged;
+  final Color? badgeBackgroundColor;
+  final Color? badgeIconColor;
 
   @override
   Widget build(BuildContext context) {
     return SwitchListTile(
-      secondary: Icon(icon),
+      secondary: SettingsIconBadge(
+        icon: icon,
+        backgroundColor: badgeBackgroundColor,
+        iconColor: badgeIconColor,
+      ),
       title: Text(title),
       subtitle: Text(subtitle),
       value: value,

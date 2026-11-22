@@ -372,6 +372,7 @@ class _FakeRestoreBridge implements OnboardingRestoreBridge {
     bool restoreVault = true,
     bool restoreChat = true,
     bool restoreVaultPhotos = true,
+    bool restoreSettings = true,
     void Function(ChatRestoreProgress)? onChatProgress,
   }) async {
     if (requireOldPin && oldPin != expectedOldPin) {

@@ -86,6 +86,8 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
   _PickMode _mode = _PickMode.pin;
   TravelProfile _travel = TravelProfile.drive;
   _End _active = _End.origin;
+  MapType _mapType = MapType.normal;
+  bool _routePanelCollapsed = false;
   GeoPoint? _pin;
   GeoPoint? _origin;
   GeoPoint? _destination;
@@ -293,11 +295,29 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
 
   Set<Marker> get _markers => {
     if (_mode == _PickMode.pin && _pin != null)
-      Marker(markerId: const MarkerId('pin'), position: _latLng(_pin!)),
+      Marker(
+        markerId: const MarkerId('pin'),
+        position: _latLng(_pin!),
+        draggable: true,
+        onDragEnd: (latLng) => setState(() {
+          _error = null;
+          _pin = GeoPoint(latLng.latitude, latLng.longitude);
+        }),
+      ),
     if (_mode == _PickMode.route && _origin != null)
       Marker(
         markerId: const MarkerId('origin'),
         position: _latLng(_origin!),
+        draggable: true,
+        onDragEnd: (latLng) {
+          final point = GeoPoint(latLng.latitude, latLng.longitude);
+          setState(() {
+            _error = null;
+            _origin = point;
+            _originController.text = _format(point);
+          });
+          _scheduleRoute();
+        },
         infoWindow: const InfoWindow(title: 'Start'),
         icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen),
       ),
@@ -305,6 +325,16 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
       Marker(
         markerId: const MarkerId('destination'),
         position: _latLng(_destination!),
+        draggable: true,
+        onDragEnd: (latLng) {
+          final point = GeoPoint(latLng.latitude, latLng.longitude);
+          setState(() {
+            _error = null;
+            _destination = point;
+            _destinationController.text = _format(point);
+          });
+          _scheduleRoute();
+        },
         infoWindow: const InfoWindow(title: 'Destination'),
       ),
   };
@@ -395,6 +425,38 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
     await _map?.animateCamera(CameraUpdate.newLatLngZoom(_latLng(point), 16));
   }
 
+  void _swapEnds() {
+    setState(() {
+      final tempPoint = _origin;
+      _origin = _destination;
+      _destination = tempPoint;
+
+      final tempText = _originController.text;
+      _originController.text = _destinationController.text;
+      _destinationController.text = tempText;
+
+      _active = _active == _End.origin ? _End.destination : _End.origin;
+      _error = null;
+    });
+    _scheduleRoute();
+  }
+
+  void _cycleMapType() {
+    setState(() {
+      _mapType = switch (_mapType) {
+        MapType.normal => MapType.satellite,
+        MapType.satellite => MapType.terrain,
+        _ => MapType.normal,
+      };
+    });
+  }
+
+  (IconData, String) _mapTypeMeta(MapType type) => switch (type) {
+    MapType.satellite => (Icons.satellite_alt_rounded, 'Map type: Satellite'),
+    MapType.terrain => (Icons.terrain_rounded, 'Map type: Terrain'),
+    _ => (Icons.layers_outlined, 'Map type: Normal'),
+  };
+
   Widget _buildSearch(ColorScheme cs) {
     if (_mode == _PickMode.pin) {
       return PlaceSearchField(
@@ -405,58 +467,161 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
         onSelected: _selectHit,
       );
     }
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        PlaceSearchField(
-          key: const Key('picker-search-origin'),
-          controller: _originController,
-          label: 'Start',
-          hint: 'Search a start place',
-          icon: Icons.trip_origin,
-          iconColor: Colors.green,
-          highlighted: _active == _End.origin,
-          search: _search,
-          onFocused: () => setState(() => _active = _End.origin),
-          onSelected: (hit) => _selectHit(hit, end: _End.origin),
-          onLocateMe: () async {
-            final here = _current;
-            if (here == null) {
-              await _locateMe(moveCamera: true);
-            }
-            final point = _current;
-            if (point == null) return;
-            _active = _End.origin;
-            _place(point, text: 'My location');
-          },
-        ),
-        const SizedBox(height: 8),
-        PlaceSearchField(
-          key: const Key('picker-search-destination'),
-          controller: _destinationController,
-          label: 'Destination',
-          hint: 'Search a destination',
-          icon: Icons.place,
-          iconColor: Colors.red,
-          highlighted: _active == _End.destination,
-          search: _search,
-          onFocused: () => setState(() => _active = _End.destination),
-          onSelected: (hit) => _selectHit(hit, end: _End.destination),
-        ),
-        const SizedBox(height: 8),
-        Material(
-          color: cs.surface,
-          borderRadius: BorderRadius.circular(20),
-          child: TransportModeSelector(
-            selected: _travel,
-            onChanged: (mode) {
-              setState(() => _travel = mode);
-              _scheduleRoute();
-            },
+    final textTheme = Theme.of(context).textTheme;
+    if (_routePanelCollapsed) {
+      final originLabel = _originController.text.trim().isEmpty
+          ? 'Set start'
+          : _originController.text.trim();
+      final destLabel = _destinationController.text.trim().isEmpty
+          ? 'Set destination'
+          : _destinationController.text.trim();
+      return Material(
+        color: cs.surfaceContainerHigh,
+        elevation: 2,
+        borderRadius: BorderRadius.circular(20),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: () => setState(() => _routePanelCollapsed = false),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(12, 8, 6, 8),
+            child: Row(
+              children: [
+                Icon(
+                  TransportModeSelector.iconFor(_travel),
+                  size: 18,
+                  color: cs.primary,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    '$originLabel → $destLabel',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: textTheme.labelLarge,
+                  ),
+                ),
+                IconButton(
+                  tooltip: 'Swap start and destination',
+                  visualDensity: VisualDensity.compact,
+                  onPressed: (_origin != null || _destination != null)
+                      ? _swapEnds
+                      : null,
+                  icon: const Icon(Icons.swap_vert_rounded, size: 20),
+                ),
+                IconButton(
+                  tooltip: 'Expand route panel',
+                  visualDensity: VisualDensity.compact,
+                  onPressed: () => setState(() => _routePanelCollapsed = false),
+                  icon: const Icon(Icons.expand_more_rounded),
+                ),
+              ],
+            ),
           ),
         ),
-      ],
+      );
+    }
+    return Material(
+      color: cs.surfaceContainerHigh,
+      elevation: 2,
+      borderRadius: BorderRadius.circular(20),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              children: [
+                Text(
+                  'Tap map:',
+                  style: textTheme.labelSmall?.copyWith(
+                    color: cs.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(width: 6),
+                ChoiceChip(
+                  label: const Text('Start'),
+                  selected: _active == _End.origin,
+                  visualDensity: VisualDensity.compact,
+                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  onSelected: (_) => setState(() => _active = _End.origin),
+                ),
+                const SizedBox(width: 6),
+                ChoiceChip(
+                  label: const Text('Destination'),
+                  selected: _active == _End.destination,
+                  visualDensity: VisualDensity.compact,
+                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  onSelected: (_) => setState(() => _active = _End.destination),
+                ),
+                const Spacer(),
+                IconButton(
+                  tooltip: 'Swap start and destination',
+                  visualDensity: VisualDensity.compact,
+                  onPressed: (_origin != null || _destination != null)
+                      ? _swapEnds
+                      : null,
+                  icon: const Icon(Icons.swap_vert_rounded, size: 20),
+                ),
+                IconButton(
+                  tooltip: 'Collapse route panel',
+                  visualDensity: VisualDensity.compact,
+                  onPressed: () => setState(() => _routePanelCollapsed = true),
+                  icon: const Icon(Icons.expand_less_rounded),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            PlaceSearchField(
+              key: const Key('picker-search-origin'),
+              controller: _originController,
+              label: 'Start',
+              hint: 'Search a start place',
+              icon: Icons.trip_origin,
+              iconColor: Colors.green,
+              highlighted: _active == _End.origin,
+              search: _search,
+              onFocused: () => setState(() => _active = _End.origin),
+              onSelected: (hit) => _selectHit(hit, end: _End.origin),
+              onLocateMe: () async {
+                final here = _current;
+                if (here == null) {
+                  await _locateMe(moveCamera: true);
+                }
+                final point = _current;
+                if (point == null) return;
+                _active = _End.origin;
+                _place(point, text: 'My location');
+              },
+            ),
+            const SizedBox(height: 8),
+            PlaceSearchField(
+              key: const Key('picker-search-destination'),
+              controller: _destinationController,
+              label: 'Destination',
+              hint: 'Search a destination',
+              icon: Icons.place,
+              iconColor: Colors.red,
+              highlighted: _active == _End.destination,
+              search: _search,
+              onFocused: () => setState(() => _active = _End.destination),
+              onSelected: (hit) => _selectHit(hit, end: _End.destination),
+            ),
+            const SizedBox(height: 8),
+            Material(
+              color: cs.surface,
+              borderRadius: BorderRadius.circular(20),
+              child: TransportModeSelector(
+                selected: _travel,
+                onChanged: (mode) {
+                  setState(() => _travel = mode);
+                  _scheduleRoute();
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -510,6 +675,7 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
                         },
                         onTap: (latLng) =>
                             _place(GeoPoint(latLng.latitude, latLng.longitude)),
+                        mapType: _mapType,
                         markers: _markers,
                         polylines: _polylines,
                         circles: _circles,
@@ -555,22 +721,61 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
                       if (widget.showRadius)
                         Positioned(
                           left: 12,
-                          right: 72,
+                          right: 76,
                           bottom: 12,
-                          child: Card(
+                          child: Material(
+                            color: cs.surfaceContainerHigh,
+                            elevation: 2,
+                            borderRadius: BorderRadius.circular(20),
                             child: Padding(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 12,
+                              padding: const EdgeInsets.fromLTRB(
+                                16,
+                                12,
+                                16,
+                                6,
                               ),
                               child: Column(
                                 mainAxisSize: MainAxisSize.min,
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  Text(
-                                    'Alert within ${_radius.round()} m',
-                                    style: Theme.of(
-                                      context,
-                                    ).textTheme.labelLarge,
+                                  Row(
+                                    children: [
+                                      Icon(
+                                        Icons.radar_rounded,
+                                        size: 18,
+                                        color: cs.primary,
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Text(
+                                        'Arrival radius',
+                                        style: Theme.of(
+                                          context,
+                                        ).textTheme.labelLarge,
+                                      ),
+                                      const Spacer(),
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 10,
+                                          vertical: 3,
+                                        ),
+                                        decoration: BoxDecoration(
+                                          color: cs.primaryContainer,
+                                          borderRadius: BorderRadius.circular(
+                                            999,
+                                          ),
+                                        ),
+                                        child: Text(
+                                          '${_radius.round()} m',
+                                          style: Theme.of(context)
+                                              .textTheme
+                                              .labelMedium
+                                              ?.copyWith(
+                                                color: cs.onPrimaryContainer,
+                                                fontWeight: FontWeight.w700,
+                                              ),
+                                        ),
+                                      ),
+                                    ],
                                   ),
                                   Slider(
                                     min: 100,
@@ -589,83 +794,112 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
                       Positioned(
                         right: 12,
                         bottom: 12,
-                        child: FloatingActionButton.small(
-                          heroTag: 'picker-locate',
-                          tooltip: 'Use my location',
-                          onPressed: _locateMe,
-                          child: const Icon(Icons.my_location_rounded),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            FloatingActionButton.small(
+                              heroTag: 'picker-map-type',
+                              tooltip: _mapTypeMeta(_mapType).$2,
+                              backgroundColor: cs.surfaceContainerHigh,
+                              foregroundColor: cs.onSurface,
+                              onPressed: _cycleMapType,
+                              child: Icon(_mapTypeMeta(_mapType).$1),
+                            ),
+                            const SizedBox(height: 8),
+                            FloatingActionButton.small(
+                              heroTag: 'picker-locate',
+                              tooltip: 'Use my location',
+                              onPressed: _locateMe,
+                              child: const Icon(Icons.my_location_rounded),
+                            ),
+                          ],
                         ),
                       ),
                     ],
                   ),
                 ),
-                SafeArea(
-                  top: false,
-                  child: Padding(
-                    padding: const EdgeInsets.all(12),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        Text(
-                          _error ?? _hint,
-                          style: TextStyle(
-                            color: _error == null
-                                ? cs.onSurfaceVariant
-                                : cs.error,
+                Material(
+                  color: cs.surfaceContainerLow,
+                  elevation: 2,
+                  borderRadius: const BorderRadius.vertical(
+                    top: Radius.circular(24),
+                  ),
+                  child: SafeArea(
+                    top: false,
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Text(
+                            _error ?? _hint,
+                            style: Theme.of(context).textTheme.bodyMedium
+                                ?.copyWith(
+                                  color: _error == null
+                                      ? cs.onSurfaceVariant
+                                      : cs.error,
+                                  fontWeight: _error == null
+                                      ? FontWeight.w500
+                                      : FontWeight.w600,
+                                ),
                           ),
-                        ),
-                        const SizedBox(height: 8),
-                        if (_mode == _PickMode.route && _route != null)
-                          Padding(
-                            padding: const EdgeInsets.only(bottom: 8),
-                            child: Align(
-                              alignment: Alignment.centerLeft,
-                              child: RouteSummaryChip(
-                                mode: _travel,
-                                distanceMeters: _route!.distanceMeters ?? 0,
-                                durationSeconds: _route!.durationSeconds,
+                          const SizedBox(height: 10),
+                          if (_mode == _PickMode.route && _route != null)
+                            Padding(
+                              padding: const EdgeInsets.only(bottom: 10),
+                              child: Align(
+                                alignment: Alignment.centerLeft,
+                                child: RouteSummaryChip(
+                                  mode: _travel,
+                                  distanceMeters: _route!.distanceMeters ?? 0,
+                                  durationSeconds: _route!.durationSeconds,
+                                ),
                               ),
                             ),
-                          ),
-                        if (_mode == _PickMode.route &&
-                            _error != null &&
-                            !_loadingRoute)
-                          Align(
-                            alignment: Alignment.centerLeft,
-                            child: TextButton.icon(
-                              onPressed: _buildRoute,
-                              icon: const Icon(Icons.refresh),
-                              label: const Text('Retry route'),
+                          if (_mode == _PickMode.route &&
+                              _error != null &&
+                              !_loadingRoute)
+                            Align(
+                              alignment: Alignment.centerLeft,
+                              child: TextButton.icon(
+                                onPressed: _buildRoute,
+                                icon: const Icon(Icons.refresh),
+                                label: const Text('Retry route'),
+                              ),
+                            ),
+                          TextField(
+                            controller: _labelController,
+                            textCapitalization: TextCapitalization.sentences,
+                            onChanged: (_) => setState(() {}),
+                            decoration: InputDecoration(
+                              labelText: widget.requireLabel
+                                  ? 'Place name'
+                                  : 'Label (optional)',
+                              filled: true,
+                              fillColor: cs.surfaceContainerHigh,
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(14),
+                              ),
+                              isDense: true,
                             ),
                           ),
-                        TextField(
-                          controller: _labelController,
-                          textCapitalization: TextCapitalization.sentences,
-                          onChanged: (_) => setState(() {}),
-                          decoration: InputDecoration(
-                            labelText: widget.requireLabel
-                                ? 'Place name'
-                                : 'Label (optional)',
-                            border: const OutlineInputBorder(),
-                            isDense: true,
+                          const SizedBox(height: 12),
+                          FilledButton.icon(
+                            onPressed: _canConfirm ? _confirm : null,
+                            icon: _loadingRoute
+                                ? const SizedBox(
+                                    width: 16,
+                                    height: 16,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
+                                  )
+                                : const Icon(Icons.send_rounded),
+                            label: Text(widget.confirmLabel),
                           ),
-                        ),
-                        const SizedBox(height: 8),
-                        FilledButton.icon(
-                          onPressed: _canConfirm ? _confirm : null,
-                          icon: _loadingRoute
-                              ? const SizedBox(
-                                  width: 16,
-                                  height: 16,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                  ),
-                                )
-                              : const Icon(Icons.send_rounded),
-                          label: Text(widget.confirmLabel),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
                   ),
                 ),

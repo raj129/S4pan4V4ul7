@@ -55,9 +55,11 @@ class InMemorySettingsRepository implements SettingsRepository {
 
   bool _backupChatsEnabled = true;
   bool _backupVaultPhotosEnabled = true;
+  bool _backupSettingsEnabled = true;
   bool _backupCloudEnabled = false;
   bool _backupWifiOnly = true;
   DateTime? _lastVaultPhotoBackupAt;
+  DateTime? _lastSettingsBackupAt;
   String? _lastVaultPhotoBackupVaultId;
   bool _vaultPhotoBackupCloudPending = false;
 
@@ -75,6 +77,22 @@ class InMemorySettingsRepository implements SettingsRepository {
   @override
   Future<void> setBackupVaultPhotosEnabled(bool enabled) async {
     _backupVaultPhotosEnabled = enabled;
+  }
+
+  @override
+  Future<bool> isBackupSettingsEnabled() async => _backupSettingsEnabled;
+
+  @override
+  Future<void> setBackupSettingsEnabled(bool enabled) async {
+    _backupSettingsEnabled = enabled;
+  }
+
+  @override
+  Future<DateTime?> getLastSettingsBackupAt() async => _lastSettingsBackupAt;
+
+  @override
+  Future<void> setLastSettingsBackupAt(DateTime? at) async {
+    _lastSettingsBackupAt = at;
   }
 
   @override

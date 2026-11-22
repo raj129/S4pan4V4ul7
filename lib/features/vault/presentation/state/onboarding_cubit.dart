@@ -178,6 +178,7 @@ class OnboardingCubit extends Cubit<OnboardingState> {
     bool restoreVault = true,
     bool restoreChat = true,
     bool restoreVaultPhotos = true,
+    bool restoreSettings = true,
   }) async {
     final newPin = _firstPin;
     final discovery = _discovery;
@@ -224,6 +225,7 @@ class OnboardingCubit extends Cubit<OnboardingState> {
       restoreVault: restoreVault,
       restoreChat: restoreChat,
       restoreVaultPhotos: restoreVaultPhotos,
+      restoreSettings: restoreSettings,
       onChatProgress: (progress) {
         if (!isClosed) {
           emit(

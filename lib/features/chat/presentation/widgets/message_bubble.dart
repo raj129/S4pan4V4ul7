@@ -1228,6 +1228,17 @@ class _ThemedEmojiPickerState extends State<ThemedEmojiPicker> {
         columns: widget.columns,
         emojiSizeMax: 28,
         backgroundColor: bg,
+        noRecents: Text(
+          'No Recents',
+          style: theme.textTheme.titleMedium?.copyWith(
+            color: cs.onSurfaceVariant,
+          ),
+          textAlign: TextAlign.center,
+        ),
+      ),
+      skinToneConfig: SkinToneConfig(
+        dialogBackgroundColor: cs.surfaceContainerHighest,
+        indicatorColor: cs.primary,
       ),
       categoryViewConfig: CategoryViewConfig(
         recentTabBehavior: RecentTabBehavior.RECENT,
@@ -1248,7 +1259,9 @@ class _ThemedEmojiPickerState extends State<ThemedEmojiPicker> {
       searchViewConfig: SearchViewConfig(
         backgroundColor: bg,
         buttonIconColor: cs.onSurfaceVariant,
-        inputTextStyle: theme.textTheme.bodyLarge,
+        inputTextStyle: theme.textTheme.bodyLarge?.copyWith(
+          color: cs.onSurface,
+        ),
         hintText: 'Search emoji',
         hintTextStyle: theme.textTheme.bodyLarge?.copyWith(
           color: cs.onSurfaceVariant,

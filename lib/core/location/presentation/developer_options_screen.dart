@@ -9,6 +9,7 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 import '../../../features/chat/application/services/place_search_service.dart';
 import '../../../features/chat/domain/entities/geo_share.dart' show GeoPoint;
 import '../../../features/vault/domain/repositories/settings_repository.dart';
+import '../../presentation/theme/app_spacing.dart';
 import '../../widgets/app_surfaces.dart';
 import '../app_location.dart';
 import '../geo_fix.dart';
@@ -1051,13 +1052,20 @@ class _DeveloperOptionsScreenState extends State<DeveloperOptionsScreen>
   // ---------------------------------------------------------- system-wide
 
   Widget _systemWideCard(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
     final availability = _systemAvailability;
     final unsupported = availability == SystemMockAvailability.unsupported;
+    final devModeOff =
+        availability == SystemMockAvailability.developerModeDisabled;
     final notSelected = availability == SystemMockAvailability.notSelected;
     return SettingsCard(
       children: [
         SwitchListTile(
-          secondary: const Icon(Icons.public),
+          secondary: SettingsIconBadge(
+            icon: Icons.public_rounded,
+            backgroundColor: cs.primaryContainer,
+            iconColor: cs.onPrimaryContainer,
+          ),
           title: const Text('Mock for all apps'),
           subtitle: Text(
             unsupported
@@ -1068,23 +1076,54 @@ class _DeveloperOptionsScreenState extends State<DeveloperOptionsScreen>
           value: _prefs.systemWide,
           onChanged: unsupported ? null : _setSystemWide,
         ),
-        if (notSelected)
-          ListTile(
-            leading: const Icon(Icons.settings_applications_outlined),
-            title: const Text('Select this app as the mock location app'),
-            subtitle: const Text(
-              'Android Settings → System → Developer options → Select mock '
-              'location app → Calculator. Then come back here.',
+        if (devModeOff)
+          Padding(
+            padding: const EdgeInsets.all(AppSpacing.md),
+            child: InfoBanner(
+              tone: InfoBannerTone.warning,
+              icon: Icons.developer_mode_outlined,
+              title: 'Developer mode is not enabled',
+              message:
+                  '1. Open Android Settings → About phone\n'
+                  '2. Tap "Build number" 7 times to enable Developer options\n'
+                  '3. Open System → Developer options → "Select mock location app"\n'
+                  '4. Choose Calculator, then return here',
+              action: TextButton(
+                onPressed: () async {
+                  await _mock.systemBridge.openPhoneSettings();
+                },
+                child: const Text('Open Settings'),
+              ),
             ),
-            trailing: const Icon(Icons.open_in_new),
-            onTap: () async {
-              await _mock.systemBridge.openDeveloperSettings();
-            },
+          ),
+        if (notSelected)
+          Padding(
+            padding: const EdgeInsets.all(AppSpacing.md),
+            child: InfoBanner(
+              tone: InfoBannerTone.info,
+              icon: Icons.settings_applications_outlined,
+              title: 'Select mock location app',
+              message:
+                  'Developer mode is enabled, but this app is not selected.\n'
+                  '1. Tap "Open Developer options" below\n'
+                  '2. Scroll to Location → "Select mock location app"\n'
+                  '3. Choose Calculator, then return here',
+              action: TextButton(
+                onPressed: () async {
+                  await _mock.systemBridge.openDeveloperSettings();
+                },
+                child: const Text('Open'),
+              ),
+            ),
           ),
         if (_mock.systemWideRunning)
-          const ListTile(
-            leading: Icon(Icons.check_circle_outline),
-            title: Text('Other apps are receiving the mock position'),
+          ListTile(
+            leading: SettingsIconBadge(
+              icon: Icons.check_circle_outline_rounded,
+              backgroundColor: cs.tertiaryContainer,
+              iconColor: cs.onTertiaryContainer,
+            ),
+            title: const Text('Other apps are receiving the mock position'),
           ),
       ],
     );

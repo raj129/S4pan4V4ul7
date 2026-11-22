@@ -293,7 +293,11 @@ class _BackupScreenState extends State<BackupScreen> {
                           : (v) => unawaited(_manager.setChatsEnabled(v)),
                     ),
                     SwitchListTile(
-                      secondary: const Icon(Icons.photo_library_outlined),
+                      secondary: SettingsIconBadge(
+                        icon: Icons.photo_library_outlined,
+                        backgroundColor: theme.colorScheme.secondaryContainer,
+                        iconColor: theme.colorScheme.onSecondaryContainer,
+                      ),
                       title: const Text('Vault photos'),
                       subtitle: const Text(
                         'Encrypted photos and thumbnails. Trashed photos are '
@@ -303,6 +307,21 @@ class _BackupScreenState extends State<BackupScreen> {
                       onChanged: busy
                           ? null
                           : (v) => unawaited(_manager.setPhotosEnabled(v)),
+                    ),
+                    SwitchListTile(
+                      secondary: SettingsIconBadge(
+                        icon: Icons.tune_rounded,
+                        backgroundColor: theme.colorScheme.tertiaryContainer,
+                        iconColor: theme.colorScheme.onTertiaryContainer,
+                      ),
+                      title: const Text('App settings'),
+                      subtitle: const Text(
+                        'Theme, security, privacy, and notification preferences.',
+                      ),
+                      value: _manager.settingsEnabled,
+                      onChanged: busy
+                          ? null
+                          : (v) => unawaited(_manager.setSettingsEnabled(v)),
                     ),
                   ],
                 ),

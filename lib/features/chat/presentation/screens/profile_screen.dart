@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
-import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../../application/media/chat_media_loader.dart';
@@ -14,12 +13,13 @@ import '../../domain/entities/profile_avatar.dart';
 import 'package:photo_vault/core/widgets/main_scaffold_scope.dart';
 import 'package:photo_vault/core/presentation/theme/app_spacing.dart';
 import 'chat_media_manager_screen.dart';
-import '../widgets/message_bubble.dart' show ThemedEmojiPicker;
+import '../widgets/message_bubble.dart' show showReactionPicker;
 import '../widgets/user_avatar.dart';
 
-/// Edit the name and picture other people see in chat.
+/// View and edit the name and picture other people see in chat.
 ///
-/// Changes are staged in an explicit edit mode until Save is pressed.
+/// Name editing opens a dialog (matching [showDataSmsNumberDialog]), while
+/// tapping the avatar opens a simple picker sheet and saves immediately.
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({
     super.key,
@@ -39,68 +39,18 @@ class ProfileScreen extends StatefulWidget {
 }
 
 class _ProfileScreenState extends State<ProfileScreen> {
-  late final TextEditingController _name;
-  late String _initialName;
-  late ProfileAvatar _initialAvatar;
-  late ProfileAvatar _avatar;
-
-  /// A newly picked photo, shown from memory until it is uploaded on Save.
-  Uint8List? _pickedPhoto;
-  bool _editing = false;
-  bool _saving = false;
-  bool _suppressNameListener = false;
+  late String _savedName;
+  late ProfileAvatar _savedAvatar;
+  Uint8List? _pendingPhoto;
+  bool _savingAvatar = false;
 
   ProfileService get _service => widget.service;
 
   @override
   void initState() {
     super.initState();
-    _initialName = _service.profile?.displayName ?? widget.me.displayName;
-    _initialAvatar = _service.profile?.avatar ?? widget.me.avatar;
-    _avatar = _initialAvatar;
-    _name = TextEditingController(text: _initialName)
-      ..addListener(_onNameChanged);
-  }
-
-  @override
-  void dispose() {
-    _name.dispose();
-    super.dispose();
-  }
-
-  bool get _dirty =>
-      _pickedPhoto != null ||
-      _avatar != _initialAvatar ||
-      _name.text.trim() != _initialName;
-
-  bool get _valid => _name.text.trim().isNotEmpty;
-
-  void _onNameChanged() {
-    if (mounted && !_suppressNameListener) setState(() {});
-  }
-
-  void _setName(String value) {
-    _suppressNameListener = true;
-    _name.text = value;
-    _suppressNameListener = false;
-  }
-
-  void _startEditing() {
-    _setName(_initialName);
-    setState(() {
-      _avatar = _initialAvatar;
-      _pickedPhoto = null;
-      _editing = true;
-    });
-  }
-
-  void _cancelEditing() {
-    _setName(_initialName);
-    setState(() {
-      _avatar = _initialAvatar;
-      _pickedPhoto = null;
-      _editing = false;
-    });
+    _savedName = _service.profile?.displayName ?? widget.me.displayName;
+    _savedAvatar = _service.profile?.avatar ?? widget.me.avatar;
   }
 
   Future<void> _openMediaManager() async {
@@ -116,21 +66,20 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Future<void> _pickAvatar() async {
+    if (_savingAvatar) return;
     final choice = await showModalBottomSheet<Object>(
       context: context,
-      isScrollControlled: true,
       showDragHandle: true,
       builder: (_) => const _AvatarPickerSheet(),
     );
     if (choice == null || !mounted) return;
+
+    ProfileAvatar nextAvatar = _savedAvatar;
+    Uint8List? photoBytes;
     if (choice is ProfileAvatar) {
-      setState(() {
-        _avatar = choice;
-        _pickedPhoto = null;
-      });
+      nextAvatar = choice;
     } else if (choice is ImageSource) {
       try {
-        // Downsized at the source so a 12 MP photo is never held in memory.
         final file = await ExternalActivityGuard.run(
           () => ImagePicker().pickImage(
             source: choice,
@@ -139,13 +88,49 @@ class _ProfileScreenState extends State<ProfileScreen> {
             imageQuality: 85,
           ),
         );
-        if (file == null) return;
-        final bytes = await file.readAsBytes();
-        if (!mounted) return;
-        setState(() => _pickedPhoto = bytes);
+        if (file == null || !mounted) return;
+        photoBytes = await file.readAsBytes();
       } catch (_) {
         _snack('Could not open that image.');
+        return;
       }
+    } else {
+      return;
+    }
+
+    setState(() {
+      _savingAvatar = true;
+      if (photoBytes != null) {
+        _pendingPhoto = photoBytes;
+      } else {
+        _savedAvatar = nextAvatar;
+        _pendingPhoto = null;
+      }
+    });
+
+    try {
+      await _service.saveProfile(
+        me: widget.me,
+        displayName: _savedName,
+        avatar: nextAvatar,
+        photoBytes: photoBytes,
+      );
+      if (!mounted) return;
+      final saved = _service.profile;
+      setState(() {
+        _savedAvatar = saved?.avatar ?? nextAvatar;
+        _pendingPhoto = null;
+        _savingAvatar = false;
+      });
+      _snack('Profile picture updated.');
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _savedAvatar = _service.profile?.avatar ?? widget.me.avatar;
+        _pendingPhoto = null;
+        _savingAvatar = false;
+      });
+      _snack('Could not update picture: $error');
     }
   }
 
@@ -156,283 +141,283 @@ class _ProfileScreenState extends State<ProfileScreen> {
       ..showSnackBar(SnackBar(content: Text(message)));
   }
 
-  Future<void> _save() async {
-    if (!_editing || _saving || !_dirty || !_valid) return;
-    FocusScope.of(context).unfocus();
-    setState(() => _saving = true);
-    try {
-      await _service.saveProfile(
-        me: widget.me,
-        displayName: _name.text.trim(),
-        avatar: _avatar,
-        photoBytes: _pickedPhoto,
-      );
-    } catch (error) {
-      if (!mounted) return;
-      setState(() => _saving = false);
-      _snack('Could not save your profile: $error');
-      return;
-    }
-    if (!mounted) return;
-    final saved = _service.profile;
-    final name = saved?.displayName ?? _name.text.trim();
-    final avatar = saved?.avatar ?? _avatar;
-    _setName(name);
-    setState(() {
-      _initialName = name;
-      _initialAvatar = avatar;
-      _avatar = avatar;
-      _pickedPhoto = null;
-      _editing = false;
-      _saving = false;
-    });
-    _snack('Profile saved.');
-  }
-
-  Future<void> _handleBack() async {
-    if (_saving || !_editing || !_dirty) return;
-    final discard = await _confirmDiscard();
-    if (discard != true || !mounted) return;
-    _cancelEditing();
-    await WidgetsBinding.instance.endOfFrame;
-    if (mounted) {
-      final router = GoRouter.of(context);
-      if (router.canPop()) {
-        router.pop();
-      } else {
-        router.go('/chat');
-      }
-    }
-  }
-
-  Future<bool> _confirmDiscard() async {
-    final discard = await showDialog<bool>(
+  Future<void> _editNameDialog() async {
+    if (_savingAvatar) return;
+    final saved = await showDialog<String>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Discard changes?'),
-        content: const Text('Your profile changes have not been saved.'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Keep editing'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Discard'),
-          ),
-        ],
+      builder: (_) => _EditNameDialog(
+        currentName: _savedName,
+        onSave: (nextName) async {
+          await _service.saveProfile(
+            me: widget.me,
+            displayName: nextName,
+            avatar: _savedAvatar,
+          );
+          return _service.profile?.displayName ?? nextName;
+        },
       ),
     );
-    return discard ?? false;
+    if (saved == null || !mounted) return;
+    setState(() => _savedName = saved);
+    _snack('Name saved.');
   }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
-    final shownName = _name.text.trim().isEmpty
-        ? _initialName
-        : _name.text.trim();
     final canManageMedia =
         widget.mediaLoader != null && widget.mediaManagerService != null;
-    return PopScope(
-      canPop: !_saving && (!_editing || !_dirty),
-      onPopInvokedWithResult: (didPop, _) {
-        if (!didPop) unawaited(_handleBack());
-      },
-      child: Scaffold(
-        appBar: AppBar(
-          title: Text(_editing ? 'Edit profile' : 'Profile'),
-          actions: const [QuickLockActionButton()],
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Profile'),
+        actions: const [QuickLockActionButton()],
+      ),
+      body: ListView(
+        padding: const EdgeInsets.fromLTRB(
+          AppSpacing.lg,
+          AppSpacing.xl,
+          AppSpacing.lg,
+          AppSpacing.xxl,
         ),
-        bottomNavigationBar: _editing
-            ? SafeArea(
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(
-                    AppSpacing.lg,
-                    AppSpacing.sm,
-                    AppSpacing.lg,
-                    AppSpacing.md,
-                  ),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: TextButton(
-                          style: TextButton.styleFrom(
-                            backgroundColor: colors.surfaceContainerHighest,
-                            foregroundColor: colors.onSurface,
-                          ),
-                          onPressed: _saving ? null : _cancelEditing,
-                          child: const Text('Cancel'),
-                        ),
-                      ),
-                      const SizedBox(width: AppSpacing.sm),
-                      Expanded(
-                        child: FilledButton(
-                          onPressed: _saving || !_dirty || !_valid
-                              ? null
-                              : _save,
-                          child: _saving
-                              ? const SizedBox.square(
-                                  dimension: 18,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                  ),
-                                )
-                              : const Text('Save'),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              )
-            : null,
-        body: ListView(
-          padding: const EdgeInsets.fromLTRB(
-            AppSpacing.lg,
-            AppSpacing.xl,
-            AppSpacing.lg,
-            AppSpacing.xxl,
+        children: [
+          Center(child: _buildAvatar(theme, _savedName)),
+          const SizedBox(height: AppSpacing.md),
+          Text(
+            _savedName,
+            style: theme.textTheme.headlineSmall?.copyWith(
+              fontWeight: FontWeight.w700,
+            ),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            textAlign: TextAlign.center,
           ),
-          children: [
-            Center(child: _buildAvatar(theme, shownName)),
-            if (_editing) ...[
-              const SizedBox(height: AppSpacing.sm),
-              Center(
-                child: TextButton.icon(
-                  onPressed: _saving ? null : _pickAvatar,
-                  icon: const Icon(Icons.photo_camera_outlined, size: 18),
-                  label: const Text('Change picture'),
-                ),
-              ),
-            ],
-            const SizedBox(height: AppSpacing.md),
-            Text(
-              shownName,
-              style: theme.textTheme.headlineSmall?.copyWith(
-                fontWeight: FontWeight.w700,
-              ),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              textAlign: TextAlign.center,
+          const SizedBox(height: AppSpacing.xxs),
+          Text(
+            widget.me.email,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            textAlign: TextAlign.center,
+            style: theme.textTheme.bodyMedium?.copyWith(
+              color: colors.onSurfaceVariant,
             ),
-            const SizedBox(height: AppSpacing.xxs),
-            Text(
-              widget.me.email,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              textAlign: TextAlign.center,
-              style: theme.textTheme.bodyMedium?.copyWith(
-                color: colors.onSurfaceVariant,
+          ),
+          const SizedBox(height: AppSpacing.lg),
+          Card(
+            elevation: 0,
+            color: colors.surfaceContainerLow,
+            margin: EdgeInsets.zero,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+              side: BorderSide(
+                color: colors.outlineVariant.withValues(alpha: 0.4),
               ),
             ),
-            if (!_editing) ...[
-              const SizedBox(height: AppSpacing.lg),
-              Center(
-                child: FilledButton.tonalIcon(
-                  onPressed: _startEditing,
-                  icon: const Icon(Icons.edit_outlined, size: 18),
-                  label: const Text('Edit profile'),
-                ),
-              ),
-            ],
-            const SizedBox(height: AppSpacing.xl),
-            if (_editing) ...[
-              Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(AppSpacing.lg),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Display name',
-                        style: theme.textTheme.labelLarge?.copyWith(
-                          color: colors.onSurfaceVariant,
-                        ),
-                      ),
-                      const SizedBox(height: AppSpacing.sm),
-                      TextField(
-                        controller: _name,
-                        enabled: !_saving,
-                        maxLength: ProfileService.maxNameLength,
-                        textCapitalization: TextCapitalization.words,
-                        textInputAction: TextInputAction.done,
-                        onSubmitted: (_) => _save(),
-                        decoration: InputDecoration(
-                          hintText: 'Your name',
-                          prefixIcon: const Icon(Icons.person_outline_rounded),
-                          fillColor: colors.surfaceContainerHighest.withValues(
-                            alpha: 0.6,
-                          ),
-                          focusedBorder: OutlineInputBorder(
-                            borderRadius: AppRadius.all(AppRadius.md),
-                            borderSide: BorderSide.none,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              const SizedBox(height: AppSpacing.md),
-            ],
-            if (canManageMedia)
-              Card(
-                child: ListTile(
-                  contentPadding: const EdgeInsets.symmetric(
-                    horizontal: AppSpacing.lg,
-                    vertical: AppSpacing.xs,
-                  ),
+            child: Column(
+              children: [
+                ListTile(
                   leading: CircleAvatar(
                     radius: 20,
-                    backgroundColor: colors.primaryContainer,
+                    backgroundColor: colors.tertiaryContainer,
                     child: Icon(
-                      Icons.perm_media_outlined,
-                      color: colors.onPrimaryContainer,
+                      Icons.person_outline_rounded,
+                      color: colors.onTertiaryContainer,
                       size: 20,
                     ),
                   ),
-                  title: const Text('Manage chat media'),
-                  subtitle: const Text(
-                    'Sort attachments and clear locally cached media.',
-                  ),
-                  trailing: const Icon(Icons.chevron_right_rounded),
-                  onTap: _openMediaManager,
+                  title: Text(_savedName, style: theme.textTheme.titleSmall),
+                  subtitle: const Text('Display name'),
+                  trailing: const Icon(Icons.edit_outlined, size: 20),
+                  onTap: _editNameDialog,
                 ),
-              ),
-          ],
-        ),
+                if (canManageMedia) ...[
+                  Divider(
+                    height: 1,
+                    indent: 56,
+                    endIndent: 16,
+                    color: colors.outlineVariant.withValues(alpha: 0.3),
+                  ),
+                  ListTile(
+                    leading: CircleAvatar(
+                      radius: 20,
+                      backgroundColor: colors.primaryContainer,
+                      child: Icon(
+                        Icons.perm_media_outlined,
+                        color: colors.onPrimaryContainer,
+                        size: 20,
+                      ),
+                    ),
+                    title: const Text('Manage chat media'),
+                    subtitle: const Text(
+                      'Sort attachments and clear locally cached media.',
+                    ),
+                    trailing: const Icon(Icons.chevron_right_rounded),
+                    onTap: _openMediaManager,
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
 
   Widget _buildAvatar(ThemeData theme, String shownName) {
-    final avatar = _pickedPhoto != null
-        ? CircleAvatar(radius: 56, backgroundImage: MemoryImage(_pickedPhoto!))
-        : UserAvatar(avatar: _avatar, name: shownName, radius: 56);
+    final avatar = _pendingPhoto != null
+        ? CircleAvatar(radius: 56, backgroundImage: MemoryImage(_pendingPhoto!))
+        : UserAvatar(avatar: _savedAvatar, name: shownName, radius: 56);
 
-    if (!_editing) return avatar;
     return InkWell(
       customBorder: const CircleBorder(),
-      onTap: _saving ? null : _pickAvatar,
+      onTap: _savingAvatar ? null : _pickAvatar,
       child: Stack(
         children: [
           avatar,
-          Positioned(
-            right: 0,
-            bottom: 0,
-            child: Material(
-              color: theme.colorScheme.primary,
-              shape: const CircleBorder(),
-              child: SizedBox.square(
-                dimension: 34,
-                child: Icon(
-                  Icons.camera_alt_rounded,
-                  size: 18,
-                  color: theme.colorScheme.onPrimary,
+          if (_savingAvatar)
+            Positioned.fill(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.45),
+                  shape: BoxShape.circle,
+                ),
+                child: const Center(
+                  child: CircularProgressIndicator(strokeWidth: 2.5),
+                ),
+              ),
+            )
+          else
+            Positioned(
+              right: 0,
+              bottom: 0,
+              child: Material(
+                color: theme.colorScheme.primary,
+                shape: const CircleBorder(),
+                child: SizedBox.square(
+                  dimension: 34,
+                  child: Icon(
+                    Icons.camera_alt_rounded,
+                    size: 18,
+                    color: theme.colorScheme.onPrimary,
+                  ),
                 ),
               ),
             ),
+        ],
+      ),
+    );
+  }
+}
+
+class _EditNameDialog extends StatefulWidget {
+  const _EditNameDialog({required this.currentName, required this.onSave});
+
+  final String currentName;
+  final Future<String> Function(String nextName) onSave;
+
+  @override
+  State<_EditNameDialog> createState() => _EditNameDialogState();
+}
+
+class _EditNameDialogState extends State<_EditNameDialog> {
+  late final _controller = TextEditingController(text: widget.currentName);
+  String? _error;
+  bool _saving = false;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    if (_saving) return;
+    final trimmed = _controller.text.trim();
+    if (trimmed.isEmpty) {
+      setState(() => _error = 'Enter a display name.');
+      return;
+    }
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      final saved = await widget.onSave(trimmed);
+      if (mounted) Navigator.of(context).pop(saved);
+    } catch (error) {
+      if (mounted) {
+        setState(() {
+          _error = 'Could not save your name: $error';
+          _saving = false;
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    return PopScope(
+      canPop: !_saving,
+      child: AlertDialog(
+        icon: const Icon(Icons.person_outline_rounded),
+        title: const Text('Display name'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                'Choose the name other people see in chat.',
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: cs.onSurfaceVariant,
+                ),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: _controller,
+                enabled: !_saving,
+                autofocus: true,
+                maxLength: ProfileService.maxNameLength,
+                textCapitalization: TextCapitalization.words,
+                textInputAction: TextInputAction.done,
+                onChanged: (_) {
+                  if (_error != null) setState(() => _error = null);
+                },
+                onSubmitted: (_) => _save(),
+                decoration: InputDecoration(
+                  labelText: 'Display name',
+                  hintText: 'Your name',
+                  errorText: _error,
+                  suffixIcon: ListenableBuilder(
+                    listenable: _controller,
+                    builder: (_, _) => _controller.text.isEmpty || _saving
+                        ? const SizedBox.shrink()
+                        : IconButton(
+                            tooltip: 'Clear',
+                            icon: const Icon(Icons.close_rounded),
+                            onPressed: _controller.clear,
+                          ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: _saving ? null : () => Navigator.of(context).pop(),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: _saving ? null : _save,
+            child: _saving
+                ? const SizedBox.square(
+                    dimension: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Text('Save'),
           ),
         ],
       ),
@@ -440,8 +425,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 }
 
-/// Pops a [ProfileAvatar] (default / emoji / initials) or an [ImageSource]
-/// (photo to pick).
+/// Simple single-sheet avatar picker: Photo (Camera/Gallery), Emoji, or
+/// Initials/Color presets.
 class _AvatarPickerSheet extends StatelessWidget {
   const _AvatarPickerSheet();
 
@@ -449,136 +434,96 @@ class _AvatarPickerSheet extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
-    final height = MediaQuery.sizeOf(context).height * 0.68;
-    return SizedBox(
-      height: height,
-      child: DefaultTabController(
-        length: 3,
+    return SafeArea(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(
+          AppSpacing.lg,
+          0,
+          AppSpacing.lg,
+          AppSpacing.xl,
+        ),
         child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(
-                AppSpacing.lg,
-                0,
-                AppSpacing.lg,
-                AppSpacing.md,
-              ),
+            Center(
               child: Text(
-                'Choose avatar',
+                'Profile picture',
                 style: theme.textTheme.titleMedium?.copyWith(
                   fontWeight: FontWeight.w700,
                 ),
               ),
             ),
-            Container(
-              margin: const EdgeInsets.symmetric(horizontal: AppSpacing.xl),
-              padding: const EdgeInsets.all(4),
-              decoration: BoxDecoration(
-                color: cs.surfaceContainerHighest.withValues(alpha: 0.6),
-                borderRadius: BorderRadius.circular(999),
-              ),
-              child: TabBar(
-                dividerColor: Colors.transparent,
-                splashBorderRadius: BorderRadius.circular(999),
-                indicator: BoxDecoration(
-                  borderRadius: BorderRadius.circular(999),
-                  color: cs.primaryContainer,
+            const SizedBox(height: AppSpacing.lg),
+            Row(
+              children: [
+                Expanded(
+                  child: _QuickAvatarAction(
+                    icon: Icons.photo_camera_rounded,
+                    label: 'Camera',
+                    color: cs.primary,
+                    onTap: () => Navigator.pop(context, ImageSource.camera),
+                  ),
                 ),
-                indicatorSize: TabBarIndicatorSize.tab,
-                labelColor: cs.onPrimaryContainer,
-                unselectedLabelColor: cs.onSurfaceVariant,
-                labelStyle: theme.textTheme.labelLarge?.copyWith(
-                  fontWeight: FontWeight.w700,
+                const SizedBox(width: AppSpacing.sm),
+                Expanded(
+                  child: _QuickAvatarAction(
+                    icon: Icons.photo_library_rounded,
+                    label: 'Gallery',
+                    color: cs.secondary,
+                    onTap: () => Navigator.pop(context, ImageSource.gallery),
+                  ),
                 ),
-                unselectedLabelStyle: theme.textTheme.labelLarge?.copyWith(
-                  fontWeight: FontWeight.w500,
+                const SizedBox(width: AppSpacing.sm),
+                Expanded(
+                  child: _QuickAvatarAction(
+                    icon: Icons.emoji_emotions_outlined,
+                    label: 'Emoji',
+                    color: cs.tertiary,
+                    onTap: () async {
+                      final emoji = await showReactionPicker(context);
+                      if (emoji != null && context.mounted) {
+                        Navigator.pop(context, ProfileAvatar.emoji(emoji));
+                      }
+                    },
+                  ),
                 ),
-                tabs: const [
-                  Tab(height: 38, text: 'Default'),
-                  Tab(height: 38, text: 'Emoji'),
-                  Tab(height: 38, text: 'Photo'),
-                ],
+              ],
+            ),
+            const SizedBox(height: AppSpacing.xl),
+            Text(
+              'Colors & initials',
+              style: theme.textTheme.labelLarge?.copyWith(
+                color: cs.onSurfaceVariant,
               ),
             ),
             const SizedBox(height: AppSpacing.md),
-            Expanded(
-              child: TabBarView(
-                children: [
-                  GridView.count(
-                    crossAxisCount: 4,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: AppSpacing.xl,
-                      vertical: AppSpacing.md,
-                    ),
-                    mainAxisSpacing: AppSpacing.lg,
-                    crossAxisSpacing: AppSpacing.lg,
-                    children: [
-                      Center(
-                        child: InkResponse(
-                          radius: 34,
-                          onTap: () => Navigator.pop(
-                            context,
-                            const ProfileAvatar.initials(),
-                          ),
-                          child: const UserAvatar(
-                            avatar: ProfileAvatar.initials(),
-                            name: 'Aa',
-                            radius: 30,
-                          ),
-                        ),
-                      ),
-                      for (var i = 0; i < avatarPresetColors.length; i++)
-                        Center(
-                          child: InkResponse(
-                            radius: 34,
-                            onTap: () =>
-                                Navigator.pop(context, ProfileAvatar.preset(i)),
-                            child: UserAvatar(
-                              avatar: ProfileAvatar.preset(i),
-                              name: '',
-                              radius: 30,
-                            ),
-                          ),
-                        ),
-                    ],
+            Wrap(
+              spacing: AppSpacing.md,
+              runSpacing: AppSpacing.md,
+              children: [
+                InkResponse(
+                  radius: 28,
+                  onTap: () =>
+                      Navigator.pop(context, const ProfileAvatar.initials()),
+                  child: const UserAvatar(
+                    avatar: ProfileAvatar.initials(),
+                    name: 'Aa',
+                    radius: 24,
                   ),
-                  LayoutBuilder(
-                    builder: (context, constraints) => ThemedEmojiPicker(
-                      height: constraints.maxHeight,
-                      searchHeight: constraints.maxHeight,
-                      showBackspace: false,
-                      onEmojiSelected: (_, emoji) => Navigator.pop(
-                        context,
-                        ProfileAvatar.emoji(emoji.emoji),
-                      ),
+                ),
+                for (var i = 0; i < avatarPresetColors.length; i++)
+                  InkResponse(
+                    radius: 28,
+                    onTap: () =>
+                        Navigator.pop(context, ProfileAvatar.preset(i)),
+                    child: UserAvatar(
+                      avatar: ProfileAvatar.preset(i),
+                      name: '',
+                      radius: 24,
                     ),
                   ),
-                  ListView(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: AppSpacing.xl,
-                      vertical: AppSpacing.md,
-                    ),
-                    children: [
-                      _PhotoSourceCard(
-                        icon: Icons.photo_library_rounded,
-                        color: cs.primary,
-                        title: 'Choose from gallery',
-                        subtitle: 'Select an existing image from your device',
-                        onTap: () =>
-                            Navigator.pop(context, ImageSource.gallery),
-                      ),
-                      const SizedBox(height: AppSpacing.md),
-                      _PhotoSourceCard(
-                        icon: Icons.photo_camera_rounded,
-                        color: cs.secondary,
-                        title: 'Take a photo',
-                        subtitle: 'Use your camera to take a new picture',
-                        onTap: () => Navigator.pop(context, ImageSource.camera),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
+              ],
             ),
           ],
         ),
@@ -587,69 +532,47 @@ class _AvatarPickerSheet extends StatelessWidget {
   }
 }
 
-class _PhotoSourceCard extends StatelessWidget {
-  const _PhotoSourceCard({
+class _QuickAvatarAction extends StatelessWidget {
+  const _QuickAvatarAction({
     required this.icon,
+    required this.label,
     required this.color,
-    required this.title,
-    required this.subtitle,
     required this.onTap,
   });
 
   final IconData icon;
+  final String label;
   final Color color;
-  final String title;
-  final String subtitle;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return Card(
-      elevation: 0,
+    return Material(
       color: theme.colorScheme.surfaceContainerLow,
+      borderRadius: BorderRadius.circular(18),
       clipBehavior: Clip.antiAlias,
       child: InkWell(
         onTap: onTap,
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
-          child: Row(
+          padding: const EdgeInsets.symmetric(vertical: AppSpacing.md),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
             children: [
               Container(
-                width: 52,
-                height: 52,
+                width: 44,
+                height: 44,
                 decoration: BoxDecoration(
                   color: color.withValues(alpha: 0.14),
                   shape: BoxShape.circle,
                 ),
-                child: Icon(icon, color: color, size: 26),
+                child: Icon(icon, color: color, size: 22),
               ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      title,
-                      style: theme.textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    const SizedBox(height: 3),
-                    Text(
-                      subtitle,
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: theme.colorScheme.onSurfaceVariant,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              Icon(
-                Icons.arrow_forward_ios_rounded,
-                size: 16,
-                color: theme.colorScheme.onSurfaceVariant.withValues(
-                  alpha: 0.7,
+              const SizedBox(height: AppSpacing.xs),
+              Text(
+                label,
+                style: theme.textTheme.labelMedium?.copyWith(
+                  fontWeight: FontWeight.w600,
                 ),
               ),
             ],

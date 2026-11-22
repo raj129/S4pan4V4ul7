@@ -99,6 +99,34 @@ class PersistentSettingsRepository implements SettingsRepository {
       _kv.write(StorageKeys.backupVaultPhotosEnabled, enabled.toString());
 
   @override
+  Future<bool> isBackupSettingsEnabled() =>
+      _readDefaultTrue(StorageKeys.backupSettingsEnabled);
+
+  @override
+  Future<void> setBackupSettingsEnabled(bool enabled) =>
+      _kv.write(StorageKeys.backupSettingsEnabled, enabled.toString());
+
+  @override
+  Future<DateTime?> getLastSettingsBackupAt() async {
+    final ms = int.tryParse(
+      await _kv.read(StorageKeys.lastSettingsBackupAt) ?? '',
+    );
+    return ms == null ? null : DateTime.fromMillisecondsSinceEpoch(ms);
+  }
+
+  @override
+  Future<void> setLastSettingsBackupAt(DateTime? at) async {
+    if (at == null) {
+      await _kv.delete(StorageKeys.lastSettingsBackupAt);
+      return;
+    }
+    await _kv.write(
+      StorageKeys.lastSettingsBackupAt,
+      at.millisecondsSinceEpoch.toString(),
+    );
+  }
+
+  @override
   Future<bool> isBackupCloudEnabled() async {
     final raw = await _kv.read(StorageKeys.backupCloudEnabled);
     return raw == 'true';

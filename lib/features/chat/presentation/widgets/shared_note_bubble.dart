@@ -4,6 +4,7 @@ import '../../domain/entities/app_note.dart';
 import '../../domain/entities/chat_message.dart';
 import '../../domain/repositories/notes_repository.dart';
 import '../screens/note_editor_screen.dart';
+import 'rich_note_controller.dart';
 import 'package:photo_vault/core/presentation/theme/app_spacing.dart';
 
 /// Interactive chat bubble displaying a shared note or checklist.
@@ -339,14 +340,25 @@ class _SharedNoteBubbleState extends State<SharedNoteBubble> {
                 ),
             ] else ...[
               const SizedBox(height: AppSpacing.xs),
-              Text(
-                note.content.isNotEmpty ? note.content : 'Tap to write note…',
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
+              if (note.content.isNotEmpty)
+                RichNoteTextEditingController.buildReadOnlyRichText(
+                  context,
+                  text: note.content,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                  maxLines: 3,
+                  overflow: TextOverflow.ellipsis,
+                )
+              else
+                Text(
+                  'Tap to write note…',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                  maxLines: 3,
+                  overflow: TextOverflow.ellipsis,
                 ),
-                maxLines: 3,
-                overflow: TextOverflow.ellipsis,
-              ),
             ],
           ],
         ),

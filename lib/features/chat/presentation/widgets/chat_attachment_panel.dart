@@ -15,7 +15,8 @@ class ChatAttachmentOption {
   final Color color;
 }
 
-/// Returns the default ordered attachment options for a chat thread.
+/// Returns the default ordered attachment options for a chat thread,
+/// grouped by frequency (Media & Capture -> Vault & Notes -> Location).
 List<ChatAttachmentOption> defaultChatAttachmentOptions({
   required bool includeAndroidLocationOptions,
 }) {
@@ -33,12 +34,6 @@ List<ChatAttachmentOption> defaultChatAttachmentOptions({
       color: Color(0xFFE91E63),
     ),
     const ChatAttachmentOption(
-      choice: 'vault',
-      icon: Icons.lock_rounded,
-      label: 'From Vault',
-      color: Color(0xFFFF9800),
-    ),
-    const ChatAttachmentOption(
       choice: 'video',
       icon: Icons.videocam_rounded,
       label: 'Video',
@@ -53,7 +48,7 @@ List<ChatAttachmentOption> defaultChatAttachmentOptions({
     const ChatAttachmentOption(
       choice: 'document',
       icon: Icons.insert_drive_file_rounded,
-      label: 'Files, GIFs & HDR media',
+      label: 'Files',
       color: Color(0xFF009688),
     ),
     const ChatAttachmentOption(
@@ -61,6 +56,12 @@ List<ChatAttachmentOption> defaultChatAttachmentOptions({
       icon: Icons.mic_rounded,
       label: 'Audio',
       color: Color(0xFFFF5722),
+    ),
+    const ChatAttachmentOption(
+      choice: 'vault',
+      icon: Icons.lock_rounded,
+      label: 'From Vault',
+      color: Color(0xFFFF9800),
     ),
     const ChatAttachmentOption(
       choice: 'saved',
@@ -107,6 +108,22 @@ class ChatAttachmentPanel extends StatelessWidget {
 
   final List<ChatAttachmentOption> options;
   final ValueChanged<String> onSelect;
+
+  /// Computes the natural height of [ChatAttachmentPanel] for [optionCount]
+  /// items at [maxWidth], so sibling panels (like the emoji picker) can match
+  /// its exact height.
+  static double preferredHeight({
+    required int optionCount,
+    required double maxWidth,
+  }) {
+    final columns = maxWidth >= 600
+        ? (optionCount + 1) ~/ 2
+        : (optionCount + 2) ~/ 3;
+    final safeColumns = columns < 1 ? 1 : columns;
+    final rows = (optionCount + safeColumns - 1) ~/ safeColumns;
+    final gridHeight = (rows * 112 + (rows - 1) * 8).toDouble();
+    return gridHeight + 12 + 16;
+  }
 
   @override
   Widget build(BuildContext context) {

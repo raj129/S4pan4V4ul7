@@ -2,12 +2,8 @@ import 'package:flutter/material.dart';
 
 import '../presentation/theme/app_colors.dart';
 import '../presentation/theme/app_spacing.dart';
-import '../presentation/theme/app_typography.dart';
 
-/// Small uppercase label introducing a group of rows.
-///
-/// Centralises the private `_SectionHeader` copies that previously lived in
-/// individual screens.
+/// Small label introducing a group of rows in Android 17 / Material 3 style.
 class SectionHeader extends StatelessWidget {
   const SectionHeader(this.label, {super.key, this.padding, this.trailing});
 
@@ -22,17 +18,21 @@ class SectionHeader extends StatelessWidget {
       padding:
           padding ??
           const EdgeInsets.fromLTRB(
-            AppSpacing.lg,
             AppSpacing.xl,
-            AppSpacing.lg,
+            AppSpacing.xl,
+            AppSpacing.xl,
             AppSpacing.sm,
           ),
       child: Row(
         children: [
           Expanded(
             child: Text(
-              label.toUpperCase(),
-              style: AppTypography.overline(theme.colorScheme.primary),
+              label,
+              style: theme.textTheme.labelLarge?.copyWith(
+                color: theme.colorScheme.primary,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 0.2,
+              ),
             ),
           ),
           ?trailing,
@@ -42,10 +42,44 @@ class SectionHeader extends StatelessWidget {
   }
 }
 
-/// Rounded container that groups related rows into one visual block.
-///
-/// Rows inside are separated by inset dividers rather than each row carrying
-/// its own border, which keeps settings-style lists calm.
+/// Tonal circular icon badge used on Android 17 / Material 3 Expressive
+/// settings rows.
+class SettingsIconBadge extends StatelessWidget {
+  const SettingsIconBadge({
+    super.key,
+    required this.icon,
+    this.backgroundColor,
+    this.iconColor,
+    this.size = 40,
+  });
+
+  final IconData icon;
+  final Color? backgroundColor;
+  final Color? iconColor;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        color: backgroundColor ?? cs.primaryContainer,
+        shape: BoxShape.circle,
+      ),
+      alignment: Alignment.center,
+      child: Icon(
+        icon,
+        size: size * 0.52,
+        color: iconColor ?? cs.onPrimaryContainer,
+      ),
+    );
+  }
+}
+
+/// Rounded container that groups related rows into one visual block
+/// (Android 17 / Material 3 Expressive style).
 class SettingsCard extends StatelessWidget {
   const SettingsCard({
     super.key,
@@ -62,15 +96,20 @@ class SettingsCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final visibleChildren = children
+        .where((c) => c is! SizedBox || (c.width != 0 && c.height != 0))
+        .toList(growable: false);
     final items = <Widget>[];
-    for (var i = 0; i < children.length; i++) {
-      items.add(children[i]);
-      if (dividers && i != children.length - 1) {
+    for (var i = 0; i < visibleChildren.length; i++) {
+      items.add(visibleChildren[i]);
+      if (dividers && i != visibleChildren.length - 1) {
         items.add(
-          const Divider(
+          Divider(
             height: 1,
             indent: AppSpacing.lg,
             endIndent: AppSpacing.lg,
+            color: cs.outlineVariant.withValues(alpha: 0.35),
           ),
         );
       }
@@ -78,7 +117,10 @@ class SettingsCard extends StatelessWidget {
 
     return Padding(
       padding: margin ?? const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
-      child: Card(
+      child: Material(
+        color: cs.surfaceContainerLow,
+        borderRadius: BorderRadius.circular(24),
+        clipBehavior: Clip.antiAlias,
         child: Column(mainAxisSize: MainAxisSize.min, children: items),
       ),
     );

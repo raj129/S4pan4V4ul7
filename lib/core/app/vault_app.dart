@@ -238,6 +238,9 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
     _deps.vaultSession.lock();
     _session.lock();
     if (!mounted) return;
+    _router.routerDelegate.navigatorKey.currentState?.popUntil(
+      (route) => route.isFirst,
+    );
     _router.go('/');
   }
 

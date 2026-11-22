@@ -6,6 +6,7 @@ import 'package:uuid/uuid.dart';
 import '../../domain/entities/app_note.dart';
 import '../../domain/entities/note_merge.dart';
 import '../../domain/repositories/notes_repository.dart';
+import '../widgets/rich_note_controller.dart';
 import 'package:photo_vault/core/presentation/theme/app_spacing.dart';
 
 /// Interactive note & checklist editor with Google Keep-style checked
@@ -31,7 +32,8 @@ class NoteEditorScreen extends StatefulWidget {
 class _NoteEditorScreenState extends State<NoteEditorScreen>
     with WidgetsBindingObserver {
   late TextEditingController _titleCtrl;
-  late TextEditingController _contentCtrl;
+  late RichNoteTextEditingController _contentCtrl;
+  late TextEditingValue _previousContentValue;
   final FocusNode _titleFocusNode = FocusNode();
   final FocusNode _contentFocusNode = FocusNode();
   late AppNote _currentNote;
@@ -68,7 +70,10 @@ class _NoteEditorScreenState extends State<NoteEditorScreen>
           .toList(),
     );
     _titleCtrl = TextEditingController(text: _currentNote.title);
-    _contentCtrl = TextEditingController(text: _currentNote.content);
+    _contentCtrl = RichNoteTextEditingController.fromMarkdown(
+      _currentNote.content,
+    );
+    _previousContentValue = _contentCtrl.value;
 
     _titleFocusNode.addListener(_onTitleFocusOrSelectionChanged);
     _titleCtrl.addListener(_onTitleFocusOrSelectionChanged);
@@ -147,7 +152,10 @@ class _NoteEditorScreenState extends State<NoteEditorScreen>
     setState(() {
       _currentNote = merged.copyWith(items: nextItems);
       _setControllerTextPreservingSelection(_titleCtrl, merged.title);
-      _setControllerTextPreservingSelection(_contentCtrl, merged.content);
+      if (merged.content != _contentCtrl.toMarkdown()) {
+        _contentCtrl.setFromMarkdown(merged.content);
+        _previousContentValue = _contentCtrl.value;
+      }
     });
   }
 
@@ -314,7 +322,7 @@ class _NoteEditorScreenState extends State<NoteEditorScreen>
 
   AppNote _buildNoteSnapshot() => _currentNote.copyWith(
     title: _titleCtrl.text.trim(),
-    content: _contentCtrl.text,
+    content: _contentCtrl.toMarkdown(),
     items: _currentNote.items
         .where((item) => item.text.trim().isNotEmpty)
         .toList(),
@@ -565,37 +573,6 @@ class _NoteEditorScreenState extends State<NoteEditorScreen>
     _triggerSave(immediate: true);
   }
 
-  void _toggleType([NoteType? targetType]) {
-    final nextType =
-        targetType ??
-        (_currentNote.type == NoteType.checklist
-            ? NoteType.textNote
-            : NoteType.checklist);
-    if (nextType == _currentNote.type) return;
-
-    List<ChecklistItem> nextItems = _currentNote.items;
-    if (nextType == NoteType.checklist && nextItems.isEmpty) {
-      final lines = _contentCtrl.text.split('\n');
-      nextItems = lines
-          .where((l) => l.trim().isNotEmpty)
-          .map((l) => ChecklistItem(id: _uuid.v4(), text: l.trim()))
-          .toList();
-    } else if (nextType == NoteType.textNote) {
-      final textFromItems = nextItems
-          .where((item) => item.text.trim().isNotEmpty)
-          .map((item) => item.text)
-          .join('\n');
-      if (textFromItems.isNotEmpty) {
-        _contentCtrl.text = textFromItems;
-      }
-    }
-
-    setState(() {
-      _currentNote = _currentNote.copyWith(type: nextType, items: nextItems);
-    });
-    _triggerSave(immediate: true);
-  }
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -611,17 +588,6 @@ class _NoteEditorScreenState extends State<NoteEditorScreen>
           style: theme.textTheme.titleMedium,
         ),
         actions: [
-          IconButton(
-            tooltip: _currentNote.isChecklist
-                ? 'Switch to text note'
-                : 'Switch to checklist',
-            icon: Icon(
-              _currentNote.isChecklist
-                  ? Icons.notes_rounded
-                  : Icons.check_box_outlined,
-            ),
-            onPressed: _toggleType,
-          ),
           if (_isSaving)
             const Padding(
               padding: EdgeInsets.symmetric(horizontal: 16),
@@ -689,7 +655,7 @@ class _NoteEditorScreenState extends State<NoteEditorScreen>
                     AppSpacing.lg,
                     AppSpacing.sm,
                     AppSpacing.lg,
-                    AppSpacing.xs,
+                    AppSpacing.sm,
                   ),
                   child: Container(
                     decoration: titleEditedRemotely
@@ -734,42 +700,6 @@ class _NoteEditorScreenState extends State<NoteEditorScreen>
                           _EditingBadge(theme: theme, label: 'Editing'),
                       ],
                     ),
-                  ),
-                ),
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(
-                    AppSpacing.lg,
-                    AppSpacing.xs,
-                    AppSpacing.lg,
-                    AppSpacing.sm,
-                  ),
-                  child: Row(
-                    children: [
-                      SegmentedButton<NoteType>(
-                        segments: const [
-                          ButtonSegment<NoteType>(
-                            value: NoteType.textNote,
-                            icon: Icon(Icons.notes_rounded, size: 18),
-                            label: Text('Note'),
-                          ),
-                          ButtonSegment<NoteType>(
-                            value: NoteType.checklist,
-                            icon: Icon(Icons.check_box_outlined, size: 18),
-                            label: Text('Checklist'),
-                          ),
-                        ],
-                        selected: {_currentNote.type},
-                        onSelectionChanged: (selection) {
-                          if (selection.isNotEmpty) {
-                            _toggleType(selection.first);
-                          }
-                        },
-                        showSelectedIcon: false,
-                        style: SegmentedButton.styleFrom(
-                          visualDensity: VisualDensity.compact,
-                        ),
-                      ),
-                    ],
                   ),
                 ),
                 Divider(
@@ -907,7 +837,12 @@ class _NoteEditorScreenState extends State<NoteEditorScreen>
           ),
         Expanded(
           child: Padding(
-            padding: const EdgeInsets.all(AppSpacing.lg),
+            padding: const EdgeInsets.fromLTRB(
+              AppSpacing.lg,
+              AppSpacing.md,
+              AppSpacing.lg,
+              AppSpacing.sm,
+            ),
             child: TextField(
               controller: _contentCtrl,
               focusNode: _contentFocusNode,
@@ -928,12 +863,146 @@ class _NoteEditorScreenState extends State<NoteEditorScreen>
                 filled: false,
                 contentPadding: EdgeInsets.zero,
               ),
-              onChanged: (_) => _triggerSave(),
+              onChanged: (_) {
+                _contentCtrl.handleListAutoArrange(
+                  _previousContentValue,
+                  _contentCtrl.value,
+                );
+                _previousContentValue = _contentCtrl.value;
+                _triggerSave();
+              },
             ),
           ),
         ),
+        _buildDetectedLinksStrip(theme),
+        _buildFormattingToolbar(theme),
       ],
     );
+  }
+
+  Widget _buildDetectedLinksStrip(ThemeData theme) {
+    return ValueListenableBuilder<TextEditingValue>(
+      valueListenable: _contentCtrl,
+      builder: (context, _, _) {
+        final urls = _contentCtrl.extractActiveUrls();
+        if (urls.isEmpty) return const SizedBox.shrink();
+        final cs = theme.colorScheme;
+        return SizedBox(
+          height: 40,
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
+            itemCount: urls.length,
+            separatorBuilder: (_, _) => const SizedBox(width: AppSpacing.xs),
+            itemBuilder: (context, index) {
+              final url = urls[index];
+              return ActionChip(
+                avatar: Icon(Icons.open_in_new_rounded, size: 15, color: cs.primary),
+                label: Text(
+                  url.replaceFirst(RegExp(r'^https?://'), ''),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                onPressed: () =>
+                    unawaited(RichNoteTextEditingController.openNoteUrl(url)),
+              );
+            },
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildFormattingToolbar(ThemeData theme) {
+    final cs = theme.colorScheme;
+    return ListenableBuilder(
+      listenable: _contentCtrl,
+      builder: (context, _) => Container(
+        padding: const EdgeInsets.symmetric(
+          horizontal: AppSpacing.sm,
+          vertical: AppSpacing.xs,
+        ),
+        decoration: BoxDecoration(
+          color: cs.surfaceContainerLow,
+          border: Border(
+            top: BorderSide(color: cs.outlineVariant.withValues(alpha: 0.35)),
+          ),
+        ),
+        child: SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Row(
+            children: [
+              IconButton(
+                tooltip: 'Bold',
+                isSelected: _contentCtrl.isBoldActive,
+                icon: const Icon(Icons.format_bold_rounded),
+                onPressed: () => _applyFormatting(() {
+                  _contentCtrl.toggleStyle(bold: true);
+                }),
+              ),
+              IconButton(
+                tooltip: 'Italic',
+                isSelected: _contentCtrl.isItalicActive,
+                icon: const Icon(Icons.format_italic_rounded),
+                onPressed: () => _applyFormatting(() {
+                  _contentCtrl.toggleStyle(italic: true);
+                }),
+              ),
+              IconButton(
+                tooltip: 'Strikethrough',
+                isSelected: _contentCtrl.isStrikethroughActive,
+                icon: const Icon(Icons.format_strikethrough_rounded),
+                onPressed: () => _applyFormatting(() {
+                  _contentCtrl.toggleStyle(strikethrough: true);
+                }),
+              ),
+              const SizedBox(width: 4),
+              IconButton(
+                tooltip: 'Insert link',
+                icon: const Icon(Icons.link_rounded),
+                onPressed: _promptInsertLink,
+              ),
+              const SizedBox(width: 4),
+              IconButton(
+                tooltip: 'Bullet list',
+                icon: const Icon(Icons.format_list_bulleted_rounded),
+                onPressed: () => _applyFormatting(_contentCtrl.toggleBulletList),
+              ),
+              IconButton(
+                tooltip: 'Numbered list',
+                icon: const Icon(Icons.format_list_numbered_rounded),
+                onPressed: () =>
+                    _applyFormatting(_contentCtrl.toggleNumberedList),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _applyFormatting(VoidCallback action) {
+    action();
+    _previousContentValue = _contentCtrl.value;
+    _triggerSave();
+    if (!_contentFocusNode.hasFocus) {
+      _contentFocusNode.requestFocus();
+    }
+  }
+
+  Future<void> _promptInsertLink() async {
+    final sel = _contentCtrl.selection;
+    final initialLabel = (sel.isValid && sel.start != sel.end)
+        ? _contentCtrl.text.substring(sel.start, sel.end)
+        : '';
+    final result = await showDialog<(String url, String label)>(
+      context: context,
+      builder: (_) => _InsertLinkDialog(initialLabel: initialLabel),
+    );
+    if (result == null || !mounted) return;
+    _applyFormatting(() {
+      _contentCtrl.insertLink(url: result.$1, label: result.$2);
+    });
   }
 
   Widget _buildChecklistBody(
@@ -981,19 +1050,30 @@ class _NoteEditorScreenState extends State<NoteEditorScreen>
         // Active uncompleted items
         reorderableSliver(uncompleted, false),
         SliverToBoxAdapter(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(
-              AppSpacing.md,
-              AppSpacing.sm,
-              AppSpacing.md,
-              AppSpacing.xs,
-            ),
-            child: Align(
-              alignment: Alignment.centerLeft,
-              child: FilledButton.tonalIcon(
-                onPressed: _addChecklistItem,
-                icon: const Icon(Icons.add_rounded, size: 18),
-                label: const Text('Add item'),
+          child: InkWell(
+            onTap: _addChecklistItem,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(
+                AppSpacing.xl,
+                AppSpacing.sm,
+                AppSpacing.lg,
+                AppSpacing.sm,
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.add_rounded,
+                    size: 20,
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                  const SizedBox(width: AppSpacing.md),
+                  Text(
+                    'Add item',
+                    style: theme.textTheme.bodyLarge?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
               ),
             ),
           ),
@@ -1167,32 +1247,33 @@ class _ChecklistItemRowState extends State<_ChecklistItemRow> {
     final isDone = widget.item.isDone;
 
     return Container(
-      margin: const EdgeInsets.symmetric(
-        horizontal: AppSpacing.md,
-        vertical: 4,
-      ),
-      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xs, vertical: 2),
-      decoration: BoxDecoration(
-        color: widget.isRemotelyEdited
-            ? theme.colorScheme.primaryContainer.withValues(alpha: 0.32)
-            : (isDone
-                  ? theme.colorScheme.surfaceContainerLowest
-                  : theme.colorScheme.surfaceContainerLow),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(
-          color: widget.isRemotelyEdited
-              ? theme.colorScheme.primary.withValues(alpha: 0.6)
-              : theme.colorScheme.outlineVariant.withValues(alpha: 0.35),
-        ),
-      ),
+      color: widget.isRemotelyEdited
+          ? theme.colorScheme.primaryContainer.withValues(alpha: 0.24)
+          : Colors.transparent,
+      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xs),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
+          ReorderableDragStartListener(
+            key: ValueKey('drag-handle-${widget.item.id}'),
+            index: widget.index,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 10),
+              child: Icon(
+                Icons.drag_indicator_rounded,
+                size: 18,
+                color: theme.colorScheme.onSurfaceVariant.withValues(
+                  alpha: 0.55,
+                ),
+              ),
+            ),
+          ),
           Checkbox(
             value: isDone,
             shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(5),
+              borderRadius: BorderRadius.circular(4),
             ),
+            visualDensity: VisualDensity.compact,
             onChanged: (_) => widget.onToggle(),
           ),
           Expanded(
@@ -1216,7 +1297,7 @@ class _ChecklistItemRowState extends State<_ChecklistItemRow> {
                   decoration: isDone ? TextDecoration.lineThrough : null,
                   color: isDone
                       ? theme.colorScheme.onSurfaceVariant.withValues(
-                          alpha: 0.65,
+                          alpha: 0.6,
                         )
                       : theme.colorScheme.onSurface,
                 ),
@@ -1226,6 +1307,7 @@ class _ChecklistItemRowState extends State<_ChecklistItemRow> {
                   enabledBorder: InputBorder.none,
                   focusedBorder: InputBorder.none,
                   filled: false,
+                  isDense: true,
                   contentPadding: EdgeInsets.symmetric(vertical: 10),
                 ),
                 onChanged: widget.onChanged,
@@ -1237,37 +1319,100 @@ class _ChecklistItemRowState extends State<_ChecklistItemRow> {
               padding: const EdgeInsets.only(right: 4),
               child: _EditingBadge(theme: theme, label: 'Editing'),
             ),
-          ReorderableDragStartListener(
-            key: ValueKey('drag-handle-${widget.item.id}'),
-            index: widget.index,
-            child: Container(
-              width: 40,
-              height: 40,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                color: theme.colorScheme.surfaceContainerHighest.withValues(
-                  alpha: 0.55,
-                ),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Icon(
-                Icons.drag_indicator_rounded,
-                size: 20,
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-            ),
-          ),
           IconButton(
             icon: Icon(
               Icons.close_rounded,
               size: 18,
-              color: theme.colorScheme.onSurfaceVariant,
+              color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.7),
             ),
             tooltip: 'Remove item',
+            visualDensity: VisualDensity.compact,
             onPressed: widget.onDelete,
           ),
         ],
       ),
+    );
+  }
+}
+
+class _InsertLinkDialog extends StatefulWidget {
+  const _InsertLinkDialog({required this.initialLabel});
+
+  final String initialLabel;
+
+  @override
+  State<_InsertLinkDialog> createState() => _InsertLinkDialogState();
+}
+
+class _InsertLinkDialogState extends State<_InsertLinkDialog> {
+  late final TextEditingController _urlCtrl = TextEditingController();
+  late final TextEditingController _labelCtrl = TextEditingController(
+    text: widget.initialLabel,
+  );
+  String? _error;
+
+  @override
+  void dispose() {
+    _urlCtrl.dispose();
+    _labelCtrl.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final url = _urlCtrl.text.trim();
+    if (url.isEmpty) {
+      setState(() => _error = 'Enter a URL.');
+      return;
+    }
+    Navigator.of(context).pop((url, _labelCtrl.text.trim()));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      icon: const Icon(Icons.link_rounded),
+      title: const Text('Insert link'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: _urlCtrl,
+              autofocus: true,
+              keyboardType: TextInputType.url,
+              textInputAction: TextInputAction.next,
+              onChanged: (_) {
+                if (_error != null) setState(() => _error = null);
+              },
+              decoration: InputDecoration(
+                labelText: 'URL',
+                hintText: 'https://example.com',
+                errorText: _error,
+              ),
+            ),
+            const SizedBox(height: AppSpacing.md),
+            TextField(
+              controller: _labelCtrl,
+              textInputAction: TextInputAction.done,
+              onSubmitted: (_) => _submit(),
+              decoration: const InputDecoration(
+                labelText: 'Display text (optional)',
+                hintText: 'Link title',
+              ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: _submit,
+          child: const Text('Insert'),
+        ),
+      ],
     );
   }
 }

@@ -3583,8 +3583,16 @@ class _ThreadScreenState extends State<ThreadScreen>
 
   Widget _buildBottomPanelHost(BuildContext context) {
     final cubit = context.read<ActiveThreadCubit>();
+    final attachmentOptions = defaultChatAttachmentOptions(
+      includeAndroidLocationOptions: Platform.isAndroid,
+    );
+    final attachmentHeight = ChatAttachmentPanel.preferredHeight(
+      optionCount: attachmentOptions.length,
+      maxWidth: MediaQuery.sizeOf(context).width,
+    );
     return ComposerPanelHost(
       controller: _panelController,
+      attachmentHeight: attachmentHeight,
       emojiBuilder: (context, height) => ChatMediaPickerPanel(
         stickerPack: _stickerPackFor(cubit.myUid),
         onDragDelta: (deltaY) {

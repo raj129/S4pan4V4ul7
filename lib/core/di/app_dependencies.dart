@@ -43,6 +43,7 @@ import '../../features/chat/di/chat_dependencies.dart';
 import '../../features/backup/application/backup_coordinator.dart';
 import '../../features/backup/application/backup_manager.dart';
 import '../../features/backup/application/backup_network.dart';
+import '../../features/backup/application/settings_backup_service.dart';
 import '../../features/backup/application/backup_scheduler.dart';
 import '../../features/backup/application/photo_hash_cache.dart';
 import '../../features/backup/application/vault_backup_key_service.dart';
@@ -230,12 +231,26 @@ class AppDependencies {
     coordinator: BackupCoordinator.shared,
   );
 
+  /// Versioned backup/restore for portable app settings & saved places.
+  late final SettingsBackupService settingsBackupService = SettingsBackupService(
+    settingsRepository: settingsRepository,
+    stores: [
+      LocalBackupBlobStore(),
+      DriveBackupBlobStore(authRepository: authRepository),
+    ],
+    placesStore: _canTouchChat
+        ? FlutterSecureStringKv(const FlutterSecureStorage())
+        : null,
+    networkAllowed: () => backupNetworkAllowed(settingsRepository),
+  );
+
   /// App-scoped backup & restore state + background catch-up coordinator.
   late final BackupManager backupManager = BackupManager(
     settingsRepository: settingsRepository,
     chatBackup: () =>
         _canTouchChat ? chatDependencies.backupService : null,
     vaultPhotoBackup: () => vaultPhotoBackup,
+    settingsBackup: () => settingsBackupService,
     authRepository: authRepository,
     scheduleCatchUp: schedulePendingBackupCatchUp,
   );
@@ -248,6 +263,7 @@ class AppDependencies {
         vaultRepository: vaultRepository,
         settingsRepository: settingsRepository,
         backupManager: backupManager,
+        settingsBackupService: settingsBackupService,
         chatDependencies: () => _canTouchChat ? chatDependencies : null,
         authRepository: authRepository,
       );

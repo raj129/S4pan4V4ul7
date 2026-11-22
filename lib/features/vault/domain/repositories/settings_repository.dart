@@ -41,6 +41,14 @@ abstract class SettingsRepository {
 
   Future<void> setBackupVaultPhotosEnabled(bool enabled) async {}
 
+  Future<bool> isBackupSettingsEnabled() async => true;
+
+  Future<void> setBackupSettingsEnabled(bool enabled) async {}
+
+  Future<DateTime?> getLastSettingsBackupAt() async => null;
+
+  Future<void> setLastSettingsBackupAt(DateTime? at) async {}
+
   Future<bool> isBackupCloudEnabled() async => false;
 
   Future<void> setBackupCloudEnabled(bool enabled) async {}

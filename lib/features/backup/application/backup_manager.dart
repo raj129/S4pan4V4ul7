@@ -5,6 +5,7 @@ import 'package:photo_vault/core/app/external_activity_guard.dart';
 import 'package:photo_vault/core/domain/repositories/auth_repository.dart';
 import 'package:photo_vault/features/backup/application/backup_error_formatter.dart';
 import 'package:photo_vault/features/backup/application/backup_progress.dart';
+import 'package:photo_vault/features/backup/application/settings_backup_service.dart';
 import 'package:photo_vault/features/backup/application/vault_photo_backup_service.dart';
 import 'package:photo_vault/features/chat/application/services/chat_backup_service.dart';
 import 'package:photo_vault/features/vault/domain/entities/user_mode.dart';
@@ -33,6 +34,7 @@ class BackupManager extends ChangeNotifier {
     required SettingsRepository settingsRepository,
     required ChatBackupService? Function() chatBackup,
     required VaultPhotoBackupService Function() vaultPhotoBackup,
+    SettingsBackupService? Function()? settingsBackup,
     AuthRepository? authRepository,
     Future<void> Function()? onSettingsChanged,
     Future<void> Function({required bool wifiOnly})? scheduleCatchUp,
@@ -40,6 +42,7 @@ class BackupManager extends ChangeNotifier {
   }) : _settingsRepository = settingsRepository,
        _chatBackup = chatBackup,
        _vaultPhotoBackup = vaultPhotoBackup,
+       _settingsBackup = settingsBackup,
        _authRepository = authRepository,
        onSettingsChanged = onSettingsChanged,
        _scheduleCatchUp = scheduleCatchUp,
@@ -50,6 +53,7 @@ class BackupManager extends ChangeNotifier {
   final SettingsRepository _settingsRepository;
   final ChatBackupService? Function() _chatBackup;
   final VaultPhotoBackupService Function() _vaultPhotoBackup;
+  final SettingsBackupService? Function()? _settingsBackup;
   final AuthRepository? _authRepository;
   Future<void> Function()? onSettingsChanged;
   final Future<void> Function({required bool wifiOnly})? _scheduleCatchUp;
@@ -61,11 +65,13 @@ class BackupManager extends ChangeNotifier {
 
   bool _chatsEnabled = true;
   bool _photosEnabled = true;
+  bool _settingsEnabled = true;
   bool _cloudEnabled = true;
   bool _wifiOnly = true;
   bool _externalMirrorEnabled = true;
   DateTime? _lastChatBackupAt;
   DateTime? _lastPhotoBackupAt;
+  DateTime? _lastSettingsBackupAt;
   bool _chatCloudPending = false;
   bool _photoCloudPending = false;
   UserMode? _userMode;
@@ -78,17 +84,20 @@ class BackupManager extends ChangeNotifier {
 
   bool get chatsEnabled => _chatsEnabled;
   bool get photosEnabled => _photosEnabled;
+  bool get settingsEnabled => _settingsEnabled;
   bool get cloudEnabled => _cloudEnabled;
   bool get wifiOnly => _wifiOnly;
   bool get externalMirrorEnabled => _externalMirrorEnabled;
   DateTime? get lastChatBackupAt => _lastChatBackupAt;
   DateTime? get lastPhotoBackupAt => _lastPhotoBackupAt;
+  DateTime? get lastSettingsBackupAt => _lastSettingsBackupAt;
   bool get chatCloudPending => _chatCloudPending;
   bool get photoCloudPending => _photoCloudPending;
   UserMode? get userMode => _userMode;
   BackupNotice? get lastNotice => _lastNotice;
 
-  bool get isAnyBackupEnabled => _chatsEnabled || _photosEnabled;
+  bool get isAnyBackupEnabled =>
+      _chatsEnabled || _photosEnabled || _settingsEnabled;
 
   bool get hasPendingCloudUpload =>
       _cloudEnabled &&
@@ -172,9 +181,11 @@ class BackupManager extends ChangeNotifier {
     await _settingsRepository.migrateLegacyPhotoSyncSetting();
     final chatsOn = await _settingsRepository.isBackupChatsEnabled();
     final photosOn = await _settingsRepository.isBackupVaultPhotosEnabled();
+    final settingsOn = await _settingsRepository.isBackupSettingsEnabled();
     final cloudOn = await _settingsRepository.isBackupCloudEnabled();
     final mirrorOn = await _settingsRepository.isExternalStorageMirrorEnabled();
     final lastPhotos = await _settingsRepository.getLastVaultPhotoBackupAt();
+    final lastSettings = await _settingsRepository.getLastSettingsBackupAt();
     final photoPending = await _settingsRepository
         .isVaultPhotoBackupCloudPending();
     final mode = await _settingsRepository.getUserMode();
@@ -191,11 +202,13 @@ class BackupManager extends ChangeNotifier {
     final wifiOnly = await _settingsRepository.isBackupWifiOnly();
     _chatsEnabled = chatsOn;
     _photosEnabled = photosOn;
+    _settingsEnabled = settingsOn;
     _cloudEnabled = cloudOn;
     _wifiOnly = wifiOnly;
     _externalMirrorEnabled = mirrorOn;
     _lastChatBackupAt = lastChats;
     _lastPhotoBackupAt = lastPhotos;
+    _lastSettingsBackupAt = lastSettings;
     _chatCloudPending = chatPending;
     _photoCloudPending = photoPending;
     _userMode = mode;
@@ -244,6 +257,12 @@ class BackupManager extends ChangeNotifier {
     await _settingsRepository.setBackupVaultPhotosEnabled(value);
     await _settingsRepository.setPhotoSyncEnabled(value);
     await onSettingsChanged?.call();
+  }
+
+  Future<void> setSettingsEnabled(bool value) async {
+    _settingsEnabled = value;
+    _notifySafely();
+    await _settingsRepository.setBackupSettingsEnabled(value);
   }
 
   /// Enables or disables Google Drive backups.
@@ -325,9 +344,9 @@ class BackupManager extends ChangeNotifier {
       );
     }
     if (!_loaded) await load();
-    if (!_chatsEnabled && !_photosEnabled) {
+    if (!_chatsEnabled && !_photosEnabled && !_settingsEnabled) {
       const notice = BackupNotice(
-        message: 'Turn on chats or vault photos to back up.',
+        message: 'Turn on chats, vault photos, or settings to back up.',
         tone: BackupNoticeTone.warning,
       );
       _lastNotice = notice;
@@ -410,6 +429,30 @@ class BackupManager extends ChangeNotifier {
           );
         } catch (e) {
           failures.add('vault photos: ${BackupErrorFormatter.brief(e)}');
+        }
+      }
+      if (_settingsEnabled) {
+        final settingsService = _settingsBackup?.call();
+        if (settingsService != null) {
+          try {
+            final result = await settingsService.backup(interactive: true);
+            _lastSettingsBackupAt = result.backupAt;
+            if (result.savedTo.isNotEmpty) {
+              parts.add('settings to ${result.savedTo.join(', ')}');
+            } else {
+              failures.add('settings: no backup destination saved');
+            }
+            notes.addAll(
+              result.skipped.entries
+                  .where((e) => e.value != 'Cloud backup is off')
+                  .map(
+                    (e) =>
+                        '${e.key}: ${BackupErrorFormatter.brief(e.value)}',
+                  ),
+            );
+          } catch (e) {
+            failures.add('settings: ${BackupErrorFormatter.brief(e)}');
+          }
         }
       }
 
@@ -567,6 +610,26 @@ class BackupManager extends ChangeNotifier {
         _progressReporter.end();
       }
 
+      try {
+        final settingsService = _settingsBackup?.call();
+        if (settingsService != null) {
+          final res = await settingsService.restore(
+            interactive: true,
+            includeCloud: _cloudEnabled,
+          );
+          if (res.foundBackup) {
+            foundBackup = true;
+            if (res.appliedCount > 0) {
+              parts.add('settings from ${res.source ?? 'backup'}');
+              await onSettingsChanged?.call();
+              await load();
+            }
+          }
+        }
+      } catch (e) {
+        failures.add('settings: ${BackupErrorFormatter.brief(e)}');
+      }
+
       if (_photosEnabled) {
         // Run vault photo restore in the background so the UI is never blocked.
         unawaited(
@@ -632,9 +695,11 @@ class BackupManager extends ChangeNotifier {
     try {
       await _chatBackup()?.deleteBackup(device: device, cloud: cloud);
       await _vaultPhotoBackup().deleteBackup(device: device, cloud: cloud);
+      await _settingsBackup?.call()?.deleteBackup(device: device, cloud: cloud);
       if (device) {
         await _settingsRepository.setLastVaultPhotoBackupAt(null);
         await _settingsRepository.setLastVaultPhotoBackupVaultId(null);
+        await _settingsRepository.setLastSettingsBackupAt(null);
       }
       if (cloud) {
         await _settingsRepository.setVaultPhotoBackupCloudPending(false);

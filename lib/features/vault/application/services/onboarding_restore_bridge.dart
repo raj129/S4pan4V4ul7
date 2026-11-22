@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:photo_vault/core/domain/repositories/auth_repository.dart';
 import 'package:photo_vault/features/backup/application/backup_manager.dart';
+import 'package:photo_vault/features/backup/application/settings_backup_service.dart';
 import 'package:photo_vault/features/chat/application/services/chat_backup_service.dart';
 import 'package:photo_vault/features/chat/application/services/chat_identity_service.dart';
 import 'package:photo_vault/features/chat/di/chat_dependencies.dart';
@@ -22,6 +23,8 @@ class OnboardingBackupDiscovery {
     this.cloudVaultIds = const [],
     this.localChatCandidate,
     this.cloudChatCandidate,
+    this.hasLocalSettings = false,
+    this.hasCloudSettings = false,
   });
 
   final String? localVaultId;
@@ -30,11 +33,14 @@ class OnboardingBackupDiscovery {
   final List<String> cloudVaultIds;
   final ChatBackupCandidate? localChatCandidate;
   final ChatBackupCandidate? cloudChatCandidate;
+  final bool hasLocalSettings;
+  final bool hasCloudSettings;
 
   bool get hasLocalVault => localVaultId != null || localVaultIds.isNotEmpty;
   bool get hasCloudVault => cloudVaultId != null || cloudVaultIds.isNotEmpty;
   bool get hasLocalChat => localChatCandidate != null;
   bool get hasCloudChat => cloudChatCandidate != null;
+  bool get hasAnySettings => hasLocalSettings || hasCloudSettings;
 
   List<String> vaultIdsFor(OnboardingRestoreSource source) {
     if (source == OnboardingRestoreSource.googleDrive) {
@@ -49,8 +55,8 @@ class OnboardingBackupDiscovery {
     return cloudVaultId != null ? [cloudVaultId!] : const [];
   }
 
-  bool get hasLocalBackup => hasLocalVault || hasLocalChat;
-  bool get hasCloudBackup => hasCloudVault || hasCloudChat;
+  bool get hasLocalBackup => hasLocalVault || hasLocalChat || hasLocalSettings;
+  bool get hasCloudBackup => hasCloudVault || hasCloudChat || hasCloudSettings;
   bool get hasAnyBackup => hasLocalBackup || hasCloudBackup;
 }
 
@@ -94,6 +100,7 @@ abstract class OnboardingRestoreBridge {
     bool restoreVault = true,
     bool restoreChat = true,
     bool restoreVaultPhotos = true,
+    bool restoreSettings = true,
     void Function(ChatRestoreProgress)? onChatProgress,
   });
 
@@ -107,6 +114,7 @@ class DefaultOnboardingRestoreBridge implements OnboardingRestoreBridge {
     required VaultRepository vaultRepository,
     required SettingsRepository settingsRepository,
     required BackupManager backupManager,
+    SettingsBackupService? settingsBackupService,
     required ChatDependencies? Function() chatDependencies,
     AuthRepository? authRepository,
   }) : _restoreVaultUseCase = restoreVaultUseCase,
@@ -114,6 +122,7 @@ class DefaultOnboardingRestoreBridge implements OnboardingRestoreBridge {
        _vaultRepository = vaultRepository,
        _settingsRepository = settingsRepository,
        _backupManager = backupManager,
+       _settingsBackupService = settingsBackupService,
        _chatDependencies = chatDependencies,
        _authRepository = authRepository;
 
@@ -122,6 +131,7 @@ class DefaultOnboardingRestoreBridge implements OnboardingRestoreBridge {
   final VaultRepository _vaultRepository;
   final SettingsRepository _settingsRepository;
   final BackupManager _backupManager;
+  final SettingsBackupService? _settingsBackupService;
   final ChatDependencies? Function() _chatDependencies;
   final AuthRepository? _authRepository;
 
@@ -164,6 +174,20 @@ class DefaultOnboardingRestoreBridge implements OnboardingRestoreBridge {
       }
     }
 
+    var hasLocalSettings = false;
+    var hasCloudSettings = false;
+    final settingsBackup = _settingsBackupService;
+    if (settingsBackup != null) {
+      try {
+        final probed = await settingsBackup.hasBackups(
+          interactive: false,
+          includeCloud: includeCloud,
+        );
+        hasLocalSettings = probed.hasLocal;
+        hasCloudSettings = probed.hasCloud;
+      } catch (_) {}
+    }
+
     return OnboardingBackupDiscovery(
       localVaultId: vaultIds.local.isNotEmpty ? vaultIds.local.first : null,
       cloudVaultId: vaultIds.cloud.isNotEmpty ? vaultIds.cloud.first : null,
@@ -171,6 +195,8 @@ class DefaultOnboardingRestoreBridge implements OnboardingRestoreBridge {
       cloudVaultIds: vaultIds.cloud,
       localChatCandidate: localChat,
       cloudChatCandidate: cloudChat,
+      hasLocalSettings: hasLocalSettings,
+      hasCloudSettings: hasCloudSettings,
     );
   }
 
@@ -185,6 +211,7 @@ class DefaultOnboardingRestoreBridge implements OnboardingRestoreBridge {
     bool restoreVault = true,
     bool restoreChat = true,
     bool restoreVaultPhotos = true,
+    bool restoreSettings = true,
     void Function(ChatRestoreProgress)? onChatProgress,
   }) async {
     final pinToUnwrap = oldPin ?? newPin;
@@ -293,6 +320,22 @@ class DefaultOnboardingRestoreBridge implements OnboardingRestoreBridge {
 
     // Step 3: If no vault backup was restored, create a fresh vault.
     vaultId ??= await _createVaultUseCase.execute(pin: newPin, mode: mode);
+
+    // Step 3b: Restore portable app settings if available and requested.
+    if (restoreSettings &&
+        _settingsBackupService != null &&
+        discovery.hasAnySettings) {
+      try {
+        final res = await _settingsBackupService.restore(
+          interactive: isCloud,
+          includeCloud: mode == UserMode.googleEnabled,
+          preferCloud: isCloud,
+        );
+        if (res.foundBackup && res.appliedCount > 0) {
+          await _backupManager.onSettingsChanged?.call();
+        }
+      } catch (_) {}
+    }
 
     // Step 4: Start vault photo restore in the background (non-blocking).
     final startPhotos =

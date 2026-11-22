@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
+import '../../../core/app/external_activity_guard.dart';
+import '../../../core/presentation/theme/app_spacing.dart';
+import '../../../core/widgets/app_surfaces.dart';
 import '../data/phone_contact_source.dart';
 import '../domain/call_log_entry.dart';
 import '../domain/call_log_repository.dart';
@@ -40,7 +43,9 @@ class _AddCallEntryScreenState extends State<AddCallEntryScreen> {
   }
 
   Future<void> _loadContacts() async {
-    final granted = await widget.contactSource.requestPermission();
+    final granted = await ExternalActivityGuard.run(
+      () => widget.contactSource.requestPermission(),
+    );
     if (!mounted) return;
     if (!granted) {
       setState(() => _contactsDenied = true);
@@ -197,79 +202,94 @@ class _AddCallEntryScreenState extends State<AddCallEntryScreen> {
   }
 
   Widget _buildForm(BuildContext context) {
-    final theme = Theme.of(context);
+    final cs = Theme.of(context).colorScheme;
     final dateText = DateFormat('EEE, d MMM y').format(_when);
     final timeText = DateFormat('h:mm a').format(_when);
     return ListView(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.only(
+        top: AppSpacing.md,
+        bottom: AppSpacing.xxl,
+      ),
       children: [
-        ListTile(
-          contentPadding: EdgeInsets.zero,
-          leading: const Icon(Icons.person_outline),
-          title: Text(_contact!.name.isEmpty ? _number! : _contact!.name),
-          subtitle: Text(_number!),
-          trailing: TextButton(
-            onPressed: () => setState(() {
-              _contact = null;
-              _number = null;
-            }),
-            child: const Text('Change'),
-          ),
-        ),
-        const Divider(),
-        const SizedBox(height: 8),
-        Text('Call type', style: theme.textTheme.titleSmall),
-        const SizedBox(height: 8),
-        SegmentedButton<CallLogType>(
-          segments: const [
-            ButtonSegment(
-              value: CallLogType.incoming,
-              label: Text('Incoming'),
-              icon: Icon(Icons.call_received),
-            ),
-            ButtonSegment(
-              value: CallLogType.outgoing,
-              label: Text('Outgoing'),
-              icon: Icon(Icons.call_made),
-            ),
-            ButtonSegment(
-              value: CallLogType.missed,
-              label: Text('Missed'),
-              icon: Icon(Icons.call_missed),
+        SettingsCard(
+          children: [
+            ListTile(
+              leading: SettingsIconBadge(
+                icon: Icons.person_outline_rounded,
+                backgroundColor: cs.primaryContainer,
+                iconColor: cs.onPrimaryContainer,
+              ),
+              title: Text(_contact!.name.isEmpty ? _number! : _contact!.name),
+              subtitle: Text(_number!),
+              trailing: TextButton(
+                onPressed: () => setState(() {
+                  _contact = null;
+                  _number = null;
+                }),
+                child: const Text('Change'),
+              ),
             ),
           ],
-          selected: {_type},
-          onSelectionChanged: (selection) =>
-              setState(() => _type = selection.first),
         ),
-        const SizedBox(height: 24),
-        Text('Date and time', style: theme.textTheme.titleSmall),
-        const SizedBox(height: 8),
-        OutlinedButton.icon(
-          onPressed: _pickTime,
-          icon: const Icon(Icons.schedule),
-          label: Text('$dateText, $timeText'),
+        const SectionHeader('Call type'),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
+          child: SegmentedButton<CallLogType>(
+            segments: const [
+              ButtonSegment(
+                value: CallLogType.incoming,
+                label: Text('Incoming'),
+                icon: Icon(Icons.call_received_rounded),
+              ),
+              ButtonSegment(
+                value: CallLogType.outgoing,
+                label: Text('Outgoing'),
+                icon: Icon(Icons.call_made_rounded),
+              ),
+              ButtonSegment(
+                value: CallLogType.missed,
+                label: Text('Missed'),
+                icon: Icon(Icons.call_missed_rounded),
+              ),
+            ],
+            selected: {_type},
+            onSelectionChanged: (selection) =>
+                setState(() => _type = selection.first),
+          ),
+        ),
+        const SectionHeader('Date and time'),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
+          child: FilledButton.tonalIcon(
+            onPressed: _pickTime,
+            icon: const Icon(Icons.schedule_rounded),
+            label: Text('$dateText, $timeText'),
+          ),
         ),
         if (_type != CallLogType.missed) ...[
-          const SizedBox(height: 24),
-          Text('Duration', style: theme.textTheme.titleSmall),
-          const SizedBox(height: 8),
-          CallDurationField(
-            initialSeconds: _durationSeconds,
-            onChanged: (seconds) => _durationSeconds = seconds,
+          const SectionHeader('Duration'),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
+            child: CallDurationField(
+              initialSeconds: _durationSeconds,
+              onChanged: (seconds) => _durationSeconds = seconds,
+            ),
           ),
         ],
-        const SizedBox(height: 32),
-        FilledButton.icon(
-          onPressed: _saving ? null : _save,
-          icon: _saving
-              ? const SizedBox(
-                  width: 16,
-                  height: 16,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                )
+        const SizedBox(height: AppSpacing.xl),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
+          child: FilledButton.icon(
+            onPressed: _saving ? null : _save,
+            icon: _saving
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
               : const Icon(Icons.save_outlined),
           label: const Text('Save to call log'),
+        ),
         ),
       ],
     );

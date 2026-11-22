@@ -154,6 +154,8 @@ void main() {
       screenshotProtection: protection,
     );
 
+    await tester.scrollUntilVisible(find.text('Screenshot protection'), 200);
+    await tester.pumpAndSettle();
     expect(find.text('Screenshot protection'), findsOneWidget);
     expect(await settings.isScreenshotProtectionEnabled(), isTrue);
     await tester.tap(find.text('Screenshot protection'));

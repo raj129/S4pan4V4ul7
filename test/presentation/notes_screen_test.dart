@@ -598,7 +598,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    final addItemButton = find.widgetWithText(FilledButton, 'Add item');
+    final addItemButton = find.widgetWithText(InkWell, 'Add item');
     expect(addItemButton, findsOneWidget);
     await tester.tap(addItemButton);
     await tester.pump();

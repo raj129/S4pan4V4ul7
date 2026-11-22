@@ -35,10 +35,14 @@ class StorageKeys {
   static const String backupChatsEnabled = 'settings.backup_chats_enabled';
   static const String backupVaultPhotosEnabled =
       'settings.backup_vault_photos_enabled';
+  static const String backupSettingsEnabled =
+      'settings.backup_settings_enabled';
   static const String backupCloudEnabled = 'settings.backup_cloud_enabled';
   static const String backupWifiOnly = 'settings.backup_wifi_only';
   static const String lastVaultPhotoBackupAt =
       'settings.last_vault_photo_backup_at';
+  static const String lastSettingsBackupAt =
+      'settings.last_settings_backup_at';
   static const String lastVaultPhotoBackupVaultId =
       'settings.last_vault_photo_backup_vault_id';
   static const String vaultPhotoBackupCloudPending =

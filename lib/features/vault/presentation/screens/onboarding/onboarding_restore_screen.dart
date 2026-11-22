@@ -34,6 +34,7 @@ class _OnboardingRestoreScreenState extends State<OnboardingRestoreScreen> {
   bool _restoreVault = true;
   bool _restoreChat = true;
   bool _restoreVaultPhotos = true;
+  bool _restoreSettings = true;
   final _oldPinController = TextEditingController();
   bool _showManualOldPin = false;
 
@@ -225,6 +226,17 @@ class _OnboardingRestoreScreenState extends State<OnboardingRestoreScreen> {
                               : null,
                         ),
                       ],
+                      if (discovery.hasAnySettings)
+                        SwitchListTile(
+                          secondary: const Icon(Icons.tune_rounded),
+                          title: const Text('Restore app settings'),
+                          subtitle: const Text(
+                            'Theme, security, privacy, and notification preferences.',
+                          ),
+                          value: _restoreSettings,
+                          onChanged: (v) =>
+                              setState(() => _restoreSettings = v),
+                        ),
                     ],
                   ),
                 ),
@@ -258,7 +270,11 @@ class _OnboardingRestoreScreenState extends State<OnboardingRestoreScreen> {
                 const SizedBox(height: AppSpacing.md),
                 FilledButton.icon(
                   onPressed: () {
-                    if (!willRestoreVault && !willRestoreChat) {
+                    final willRestoreSettings =
+                        discovery.hasAnySettings && _restoreSettings;
+                    if (!willRestoreVault &&
+                        !willRestoreChat &&
+                        !willRestoreSettings) {
                       context
                           .read<OnboardingCubit>()
                           .skipRestoreAndCreateVault();
@@ -276,11 +292,14 @@ class _OnboardingRestoreScreenState extends State<OnboardingRestoreScreen> {
                       restoreVault: willRestoreVault,
                       restoreChat: willRestoreChat,
                       restoreVaultPhotos: willRestoreVault && _restoreVaultPhotos,
+                      restoreSettings: willRestoreSettings,
                     );
                   },
                   icon: const Icon(Icons.restore_rounded),
                   label: Text(
-                    !willRestoreVault && !willRestoreChat
+                    !willRestoreVault &&
+                            !willRestoreChat &&
+                            !(discovery.hasAnySettings && _restoreSettings)
                         ? 'Continue without restoring'
                         : showOldPinField
                         ? 'Unlock & restore'

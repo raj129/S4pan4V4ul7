@@ -56,42 +56,77 @@ class GeoShareBubble extends StatelessWidget {
       if (share.durationSeconds != null) formatDuration(share.durationSeconds!),
     ].join(' · ');
 
+    final (containerBg, containerFg) = switch (share.kind) {
+      GeoShareKind.pin => (cs.primaryContainer, cs.onPrimaryContainer),
+      GeoShareKind.route => (cs.secondaryContainer, cs.onSecondaryContainer),
+      GeoShareKind.arrival => (cs.tertiaryContainer, cs.onTertiaryContainer),
+    };
+    final kindLabel = switch (share.kind) {
+      GeoShareKind.pin => 'Location pin',
+      GeoShareKind.route => 'Route',
+      GeoShareKind.arrival => 'Arrival',
+    };
+
     return Material(
       color: Colors.transparent,
+      borderRadius: const BorderRadius.all(AppRadius.bubble),
+      clipBehavior: Clip.antiAlias,
       child: InkWell(
-        borderRadius: BorderRadius.circular(12),
         onTap: () => Navigator.of(context).push(
           MaterialPageRoute<void>(
             builder: (_) => GeoShareMapScreen(share: share),
           ),
         ),
         child: ConstrainedBox(
-          constraints: const BoxConstraints(minWidth: 220),
+          constraints: const BoxConstraints(minWidth: 230),
           child: Padding(
-            padding: const EdgeInsets.all(AppSpacing.xs),
+            padding: const EdgeInsets.all(AppSpacing.md),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
                 Row(
                   children: [
-                    CircleAvatar(
-                      backgroundColor: cs.primaryContainer,
-                      foregroundColor: cs.onPrimaryContainer,
-                      child: Icon(icon),
+                    Container(
+                      width: 44,
+                      height: 44,
+                      decoration: BoxDecoration(
+                        color: containerBg,
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                      alignment: Alignment.center,
+                      child: Icon(icon, color: containerFg, size: 22),
                     ),
-                    const SizedBox(width: AppSpacing.sm),
+                    const SizedBox(width: AppSpacing.md),
                     Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
+                            kindLabel.toUpperCase(),
+                            style: Theme.of(context).textTheme.labelSmall
+                                ?.copyWith(
+                                  color: cs.primary,
+                                  fontWeight: FontWeight.w700,
+                                  letterSpacing: 0.6,
+                                ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
                             title,
                             maxLines: 2,
                             overflow: TextOverflow.ellipsis,
-                            style: Theme.of(context).textTheme.titleSmall,
+                            style: Theme.of(context).textTheme.titleSmall
+                                ?.copyWith(fontWeight: FontWeight.w700),
                           ),
-                          if (details.isNotEmpty) Text(details),
+                          if (details.isNotEmpty) ...[
+                            const SizedBox(height: 2),
+                            Text(
+                              details,
+                              style: Theme.of(context).textTheme.bodySmall
+                                  ?.copyWith(color: cs.onSurfaceVariant),
+                            ),
+                          ],
                           if (share.kind == GeoShareKind.arrival)
                             Text(
                               'Sent ${_arrivalSentTimeFormat.format(message.sentAt.toLocal())}',
@@ -103,26 +138,38 @@ class GeoShareBubble extends StatelessWidget {
                     ),
                   ],
                 ),
-                const SizedBox(height: AppSpacing.xs),
+                const SizedBox(height: AppSpacing.sm),
                 Row(
-                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    TextButton.icon(
-                      onPressed: () => Navigator.of(context).push(
-                        MaterialPageRoute<void>(
-                          builder: (_) => GeoShareMapScreen(share: share),
+                    Expanded(
+                      child: FilledButton.tonalIcon(
+                        style: FilledButton.styleFrom(
+                          minimumSize: const Size(0, 38),
+                          padding: const EdgeInsets.symmetric(horizontal: 12),
                         ),
+                        onPressed: () => Navigator.of(context).push(
+                          MaterialPageRoute<void>(
+                            builder: (_) => GeoShareMapScreen(share: share),
+                          ),
+                        ),
+                        icon: const Icon(Icons.map_outlined, size: 17),
+                        label: const Text('Map'),
                       ),
-                      icon: const Icon(Icons.map_outlined, size: 18),
-                      label: const Text('Map'),
                     ),
-                    TextButton.icon(
-                      onPressed: () => launchUrl(
-                        GeoShareMapScreen.directionsUri(share),
-                        mode: LaunchMode.externalApplication,
+                    const SizedBox(width: AppSpacing.xs),
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        style: OutlinedButton.styleFrom(
+                          minimumSize: const Size(0, 38),
+                          padding: const EdgeInsets.symmetric(horizontal: 12),
+                        ),
+                        onPressed: () => launchUrl(
+                          GeoShareMapScreen.directionsUri(share),
+                          mode: LaunchMode.externalApplication,
+                        ),
+                        icon: const Icon(Icons.directions_rounded, size: 17),
+                        label: const Text('Directions'),
                       ),
-                      icon: const Icon(Icons.directions_rounded, size: 18),
-                      label: const Text('Directions'),
                     ),
                   ],
                 ),
