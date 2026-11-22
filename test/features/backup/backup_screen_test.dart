@@ -70,6 +70,7 @@ class _StubChatBackupService extends ChatBackupService {
   Future<ChatBackupSnapshot?> findLatestBackup({
     bool interactive = false,
     bool? cloudOnly,
+    bool ignoreCloudSetting = false,
     void Function(ChatRestoreProgress)? onProgress,
   }) async {
     final failure = findFailure;
@@ -152,8 +153,9 @@ class _FakeAuth implements AuthRepository {
   }
 
   @override
-  Future<http.Client?> getAuthenticatedClient({bool interactive = false}) async =>
-      null;
+  Future<http.Client?> getAuthenticatedClient({
+    bool interactive = false,
+  }) async => null;
 
   @override
   Future<void> signOut() async {
@@ -510,108 +512,112 @@ void main() {
     expect(find.text('Delete backup?'), findsNothing);
   });
 
-  testWidgets('enabling Google Drive warms up Drive OAuth and reverts on failure', (
-    tester,
-  ) async {
-    final auth = _FakeAuth(
-      signedIn: true,
-      warmUpFailure: const AuthException('Google Drive access was cancelled.'),
-    );
-    await pump(tester, authRepository: auth);
-
-    await tester.tap(switchTile('Google Drive'));
-    await tester.pumpAndSettle();
-
-    expect(auth.warmUpCalls, 1);
-    expect(await settings.isBackupCloudEnabled(), isFalse);
-    expect(
-      find.textContaining('Google Drive access was cancelled.'),
-      findsOneWidget,
-    );
-  });
-
-  testWidgets('backup continues in background via BackupManager across route pop and re-entry', (
-    tester,
-  ) async {
-    final completer = Completer<VaultPhotoBackupResult>();
-    final delayedPhotos = _DelayedPhotoBackupService(completer);
-    final sharedSettings = InMemorySettingsRepository();
-    await sharedSettings.setBackupChatsEnabled(false);
-    final manager = BackupManager(
-      settingsRepository: sharedSettings,
-      chatBackup: () => null,
-      vaultPhotoBackup: () => delayedPhotos,
-    );
-    addTearDown(manager.dispose);
-
-    tester.view.physicalSize = const Size(1080, 4000);
-    tester.view.devicePixelRatio = 2.75;
-    addTearDown(tester.view.reset);
-    final router = GoRouter(
-      initialLocation: '/',
-      routes: [
-        GoRoute(
-          path: '/',
-          builder: (context, state) => Scaffold(
-            body: Center(
-              child: TextButton(
-                onPressed: () => context.push('/settings/backup'),
-                child: const Text('Open backup'),
-              ),
-            ),
-          ),
-          routes: [
-            GoRoute(
-              path: 'settings/backup',
-              builder: (context, state) => BackupScreen(
-                settingsRepository: sharedSettings,
-                chatBackup: () => null,
-                vaultPhotoBackup: () => delayedPhotos,
-                unlockVaultUseCase: _FakeUnlock(),
-                pinValidator: PinValidator(),
-                backupManager: manager,
-                batteryOptimization: _FakeBattery(exempt: true),
-              ),
-            ),
-          ],
+  testWidgets(
+    'enabling Google Drive warms up Drive OAuth and reverts on failure',
+    (tester) async {
+      final auth = _FakeAuth(
+        signedIn: true,
+        warmUpFailure: const AuthException(
+          'Google Drive access was cancelled.',
         ),
-      ],
-    );
-    addTearDown(router.dispose);
+      );
+      await pump(tester, authRepository: auth);
 
-    await tester.pumpWidget(MaterialApp.router(routerConfig: router));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Open backup'));
-    await tester.pumpAndSettle();
+      await tester.tap(switchTile('Google Drive'));
+      await tester.pumpAndSettle();
 
-    await tester.tap(find.text('Back up now'));
-    await tester.pump();
-    expect(manager.isBusy, isTrue);
+      expect(auth.warmUpCalls, 1);
+      expect(await settings.isBackupCloudEnabled(), isFalse);
+      expect(
+        find.textContaining('Google Drive access was cancelled.'),
+        findsOneWidget,
+      );
+    },
+  );
 
-    // Pop BackupScreen while backup is still running in the background.
-    tester.state<NavigatorState>(find.byType(Navigator)).pop();
-    await tester.pumpAndSettle();
-    expect(manager.isBusy, isTrue);
+  testWidgets(
+    'backup continues in background via BackupManager across route pop and re-entry',
+    (tester) async {
+      final completer = Completer<VaultPhotoBackupResult>();
+      final delayedPhotos = _DelayedPhotoBackupService(completer);
+      final sharedSettings = InMemorySettingsRepository();
+      await sharedSettings.setBackupChatsEnabled(false);
+      final manager = BackupManager(
+        settingsRepository: sharedSettings,
+        chatBackup: () => null,
+        vaultPhotoBackup: () => delayedPhotos,
+      );
+      addTearDown(manager.dispose);
 
-    completer.complete(
-      const VaultPhotoBackupResult(
-        photoCount: 4,
-        missingCount: 0,
-        savedTo: ['This device'],
-        skipped: {},
-      ),
-    );
-    await tester.pumpAndSettle();
-    expect(manager.isBusy, isFalse);
+      tester.view.physicalSize = const Size(1080, 4000);
+      tester.view.devicePixelRatio = 2.75;
+      addTearDown(tester.view.reset);
+      final router = GoRouter(
+        initialLocation: '/',
+        routes: [
+          GoRoute(
+            path: '/',
+            builder: (context, state) => Scaffold(
+              body: Center(
+                child: TextButton(
+                  onPressed: () => context.push('/settings/backup'),
+                  child: const Text('Open backup'),
+                ),
+              ),
+            ),
+            routes: [
+              GoRoute(
+                path: 'settings/backup',
+                builder: (context, state) => BackupScreen(
+                  settingsRepository: sharedSettings,
+                  chatBackup: () => null,
+                  vaultPhotoBackup: () => delayedPhotos,
+                  unlockVaultUseCase: _FakeUnlock(),
+                  pinValidator: PinValidator(),
+                  backupManager: manager,
+                  batteryOptimization: _FakeBattery(exempt: true),
+                ),
+              ),
+            ],
+          ),
+        ],
+      );
+      addTearDown(router.dispose);
 
-    // Reopen BackupScreen: the completed result is shown cleanly.
-    await tester.tap(find.text('Open backup'));
-    await tester.pumpAndSettle();
-    expect(
-      find.textContaining('Backed up 4 vault photos to This device.'),
-      findsOneWidget,
-    );
-  });
+      await tester.pumpWidget(MaterialApp.router(routerConfig: router));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Open backup'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Back up now'));
+      await tester.pump();
+      expect(manager.isBusy, isTrue);
+
+      // Pop BackupScreen while backup is still running in the background.
+      tester.state<NavigatorState>(find.byType(Navigator)).pop();
+      await tester.pumpAndSettle();
+      expect(manager.isBusy, isTrue);
+
+      completer.complete(
+        const VaultPhotoBackupResult(
+          photoCount: 4,
+          missingCount: 0,
+          savedTo: ['This device'],
+          skipped: {},
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(manager.isBusy, isFalse);
+
+      // Reopen BackupScreen: the completed result is shown cleanly.
+      await tester.tap(find.text('Open backup'));
+      await tester.pumpAndSettle();
+      expect(
+        find.textContaining('Backed up 4 vault photos to This device.'),
+        findsOneWidget,
+      );
+    },
+  );
 
   testWidgets('shows battery restriction warning banner when not exempt', (
     tester,

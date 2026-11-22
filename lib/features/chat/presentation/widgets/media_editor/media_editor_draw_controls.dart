@@ -1,5 +1,3 @@
-import 'dart:math' as math;
-
 import 'package:flutter/material.dart';
 
 import 'media_editor_models.dart';
@@ -311,7 +309,9 @@ class _SignalDotSizeSliderState extends State<SignalDotSizeSlider> {
               color: widget.isHighlighter
                   ? widget.color.withValues(alpha: 0.45)
                   : widget.color,
-              shape: widget.isHighlighter ? BoxShape.rectangle : BoxShape.circle,
+              shape: widget.isHighlighter
+                  ? BoxShape.rectangle
+                  : BoxShape.circle,
               borderRadius: widget.isHighlighter
                   ? BorderRadius.circular(3)
                   : null,
@@ -417,11 +417,7 @@ class _BrushChip extends StatelessWidget {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(
-              icon,
-              size: 16,
-              color: selected ? Colors.black : Colors.white,
-            ),
+            Icon(icon, size: 16, color: selected ? Colors.black : Colors.white),
             const SizedBox(width: 5),
             Text(
               label,
