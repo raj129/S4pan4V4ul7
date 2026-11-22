@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:photo_vault/core/testing/repositories/in_memory_auth_repository.dart';
+import 'package:photo_vault/features/chat/application/services/chat_backup_service.dart';
 import 'package:photo_vault/features/vault/application/services/restore_flow_service.dart';
 import 'package:photo_vault/features/vault/application/usecases/restore_vault_usecase.dart';
 import 'package:photo_vault/features/vault/presentation/screens/restore/restore_flow_screen.dart';
@@ -32,6 +33,15 @@ class _FakeRestoreFlowService implements RestoreFlowService {
 
   @override
   Future<String?> activeVaultId() async => activeId;
+
+  @override
+  Future<int> restoreChat({
+    required bool includeChat,
+    void Function(ChatRestoreProgress)? onProgress,
+  }) async => 0;
+
+  @override
+  Future<void> skipChatRestore() async {}
 
   @override
   Future<List<String>> listVaultIds() async {
@@ -113,11 +123,14 @@ void main() {
       expect(service.usedOriginalPin, '1357');
       expect(service.usedNewPin, '2468');
       expect(service.photoRestoreCalls, 1);
-      expect(find.textContaining('2 vault photos restored'), findsOneWidget);
+      expect(
+        find.textContaining('vault photo restore is running in the background'),
+        findsOneWidget,
+      );
 
       await tester.drag(find.byType(ListView), const Offset(0, -180));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Open vault'));
+      await tester.tap(find.text('Continue to chat'));
       await tester.pumpAndSettle();
       expect(openedVaultId, 'original-vault-1234');
     },
@@ -155,7 +168,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(service.restoredVaultId, 'target-vault-222');
-    expect(find.text('Open vault'), findsOneWidget);
+    expect(find.text('Continue to chat'), findsOneWidget);
   });
 
   testWidgets('reports a wrong original PIN without restoring photos', (

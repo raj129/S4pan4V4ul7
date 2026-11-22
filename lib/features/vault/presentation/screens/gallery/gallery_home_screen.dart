@@ -82,13 +82,21 @@ class GalleryHomeScreen extends StatelessWidget {
           const QuickLockActionButton(),
         ],
       ),
-      body: _GalleryBody(
-        photoRepository: photoRepository,
-        importManager: importManager,
-        vaultSession: vaultSession,
-        exportPhotoUseCase: exportPhotoUseCase,
-        unlockVaultUseCase: unlockVaultUseCase,
-        pinValidator: pinValidator,
+      body: Column(
+        children: [
+          if (manager != null) _VaultRestoreProgressBanner(manager: manager),
+          Expanded(
+            child: _GalleryBody(
+              photoRepository: photoRepository,
+              importManager: importManager,
+              backupManager: manager,
+              vaultSession: vaultSession,
+              exportPhotoUseCase: exportPhotoUseCase,
+              unlockVaultUseCase: unlockVaultUseCase,
+              pinValidator: pinValidator,
+            ),
+          ),
+        ],
       ),
       floatingActionButton: FloatingActionButton.extended(
         heroTag: 'gallery_import_fab',
@@ -102,10 +110,86 @@ class GalleryHomeScreen extends StatelessWidget {
   }
 }
 
+class _VaultRestoreProgressBanner extends StatelessWidget {
+  const _VaultRestoreProgressBanner({required this.manager});
+
+  final BackupManager manager;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: manager,
+      builder: (context, _) {
+        final isRestoring =
+            manager.isBusy &&
+            manager.activeOperation == BackupOperation.restoring;
+        if (!isRestoring) return const SizedBox.shrink();
+
+        final progress = manager.progress;
+        final label = progress?.label ?? 'Restoring vault photos in background…';
+        final count = (progress?.total != null && progress!.total! > 0)
+            ? '${progress.done} / ${progress.total}'
+            : null;
+        final theme = Theme.of(context);
+        final cs = theme.colorScheme;
+
+        return Material(
+          color: cs.primaryContainer.withValues(alpha: 0.45),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(
+              horizontal: AppSpacing.lg,
+              vertical: AppSpacing.sm,
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  children: [
+                    Icon(
+                      Icons.cloud_download_outlined,
+                      size: 18,
+                      color: cs.primary,
+                    ),
+                    const SizedBox(width: AppSpacing.sm),
+                    Expanded(
+                      child: Text(
+                        label,
+                        style: theme.textTheme.labelLarge?.copyWith(
+                          color: cs.onSurface,
+                        ),
+                      ),
+                    ),
+                    if (count != null)
+                      Text(
+                        count,
+                        style: theme.textTheme.labelMedium?.copyWith(
+                          color: cs.onSurfaceVariant,
+                        ),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: AppSpacing.xs),
+                ClipRRect(
+                  borderRadius: AppRadius.all(AppRadius.pill),
+                  child: LinearProgressIndicator(
+                    value: progress?.fraction,
+                    minHeight: 4,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
 class _GalleryBody extends StatefulWidget {
   const _GalleryBody({
     required this.photoRepository,
     required this.importManager,
+    this.backupManager,
     this.vaultSession,
     this.exportPhotoUseCase,
     this.unlockVaultUseCase,
@@ -113,6 +197,7 @@ class _GalleryBody extends StatefulWidget {
   });
   final PhotoRepository photoRepository;
   final ImportManager importManager;
+  final BackupManager? backupManager;
   final VaultSession? vaultSession;
   final ExportPhotoUseCase? exportPhotoUseCase;
   final UnlockVaultUseCase? unlockVaultUseCase;
@@ -136,12 +221,15 @@ class _GalleryBodyState extends State<_GalleryBody> {
   bool _loadMoreFailed = false;
   int _loadGeneration = 0;
   int _lastSeenGalleryRevision = 0;
+  BackupOperation? _lastBackupOperation;
 
   @override
   void initState() {
     super.initState();
     _gridScrollController.addListener(_onGridScroll);
     widget.importManager.addListener(_onImportChanged);
+    widget.backupManager?.addListener(_onBackupChanged);
+    _lastBackupOperation = widget.backupManager?.activeOperation;
     widget.vaultSession?.addListener(_load);
     _load();
   }
@@ -152,8 +240,19 @@ class _GalleryBodyState extends State<_GalleryBody> {
       ..removeListener(_onGridScroll)
       ..dispose();
     widget.importManager.removeListener(_onImportChanged);
+    widget.backupManager?.removeListener(_onBackupChanged);
     widget.vaultSession?.removeListener(_load);
     super.dispose();
+  }
+
+  void _onBackupChanged() {
+    final current = widget.backupManager?.activeOperation;
+    final finishedRestore =
+        _lastBackupOperation == BackupOperation.restoring && current == null;
+    _lastBackupOperation = current;
+    if (finishedRestore && mounted) {
+      unawaited(_load());
+    }
   }
 
   void _onImportChanged() {

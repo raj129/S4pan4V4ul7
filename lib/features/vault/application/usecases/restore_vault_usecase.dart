@@ -65,6 +65,31 @@ class RestoreVaultUseCase {
   final VaultSession _vaultSession;
   final List<VmkBackupRepository> _backupRepositories;
 
+  Future<({List<String> local, List<String> cloud})> listVaultIdsBySource({
+    bool interactive = false,
+    bool includeCloud = true,
+  }) async {
+    final local = <String>{};
+    final cloud = <String>{};
+    for (final repository in _backupRepositories) {
+      if (repository.isCloud && !includeCloud) continue;
+      try {
+        final ids = (await repository.listVaultIds(
+          interactive: interactive,
+        )).where(_isVaultId);
+        if (repository.isCloud) {
+          cloud.addAll(ids);
+        } else {
+          local.addAll(ids);
+        }
+      } catch (_) {}
+    }
+    return (
+      local: local.toList()..sort(),
+      cloud: cloud.toList()..sort(),
+    );
+  }
+
   Future<List<String>> listVaultIds({bool interactive = true}) async {
     final ids = <String>{};
     final failures = <String>[];
@@ -93,6 +118,7 @@ class RestoreVaultUseCase {
     required String vaultId,
     required String originalPin,
     required String newPin,
+    bool? cloudOnly,
   }) async {
     if (!_isVaultId(vaultId)) {
       throw const VaultBackupFormatException();
@@ -105,6 +131,8 @@ class RestoreVaultUseCase {
     var pinMismatch = false;
     var invalidFormat = false;
     for (final repository in _backupRepositories) {
+      if (cloudOnly == true && !repository.isCloud) continue;
+      if (cloudOnly == false && repository.isCloud) continue;
       Map<String, String>? payload;
       try {
         payload = await repository.restoreVmk(vaultId, interactive: true);

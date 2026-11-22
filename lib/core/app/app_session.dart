@@ -13,7 +13,7 @@ import '../../features/vault/domain/entities/user_mode.dart';
 /// gives the router a single source of truth and makes the unlock/lock
 /// transition testable without a widget tree.
 class AppSessionState extends ChangeNotifier {
-  AppSessionState({UserMode initialMode = UserMode.localOnly})
+  AppSessionState({UserMode initialMode = UserMode.googleEnabled})
     : _mode = initialMode;
 
   UserMode _mode;

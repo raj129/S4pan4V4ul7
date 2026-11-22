@@ -6,6 +6,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import '../../features/vault/application/services/import_manager.dart';
 import '../integrations/chat_vault_bridge.dart';
 import '../../features/vault/application/services/restore_flow_service.dart';
+import '../../features/vault/application/services/onboarding_restore_bridge.dart';
 import '../../features/vault/application/services/pin_validator.dart';
 import '../session/vault_session.dart';
 import '../../features/vault/application/usecases/change_pin_usecase.dart';
@@ -239,6 +240,18 @@ class AppDependencies {
     scheduleCatchUp: schedulePendingBackupCatchUp,
   );
 
+  /// Bridges onboarding PIN creation to Vault & Chat backup discovery/restore.
+  late final OnboardingRestoreBridge onboardingRestoreBridge =
+      DefaultOnboardingRestoreBridge(
+        restoreVaultUseCase: restoreVaultUseCase,
+        createVaultUseCase: createVaultUseCase,
+        vaultRepository: vaultRepository,
+        settingsRepository: settingsRepository,
+        backupManager: backupManager,
+        chatDependencies: () => _canTouchChat ? chatDependencies : null,
+        authRepository: authRepository,
+      );
+
   /// Google vault recovery uses the same ID/key and optionally restores photos.
   late final RestoreFlowService restoreFlowService = BackupRestoreFlowService(
     restoreVaultUseCase: restoreVaultUseCase,
@@ -269,6 +282,24 @@ class AppDependencies {
       } catch (_) {
         // Vault VMK recovery still succeeds even if chat key sync is offline.
       }
+    },
+    restoreChat: ({onProgress}) async {
+      if (!_canTouchChat) return 0;
+      final backup = chatDependencies.backupService;
+      final snapshot = await backup.findLatestBackup(
+        interactive: true,
+        ignoreCloudSetting: true,
+        onProgress: onProgress,
+      );
+      if (snapshot == null) {
+        await backup.dismissRestoreOffer();
+        return 0;
+      }
+      return backup.restore(snapshot, onProgress: onProgress);
+    },
+    skipChatRestore: () async {
+      if (!_canTouchChat) return;
+      await chatDependencies.backupService.dismissRestoreOffer();
     },
     restorePhotos: () async {
       final result = await vaultPhotoBackup.restore(

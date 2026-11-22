@@ -69,6 +69,8 @@ class _StubChatBackupService extends ChatBackupService {
   @override
   Future<ChatBackupSnapshot?> findLatestBackup({
     bool interactive = false,
+    bool? cloudOnly,
+    void Function(ChatRestoreProgress)? onProgress,
   }) async {
     final failure = findFailure;
     if (failure != null) throw failure;
@@ -76,7 +78,10 @@ class _StubChatBackupService extends ChatBackupService {
   }
 
   @override
-  Future<int> restore(ChatBackupSnapshot snapshot) async => restoreCount;
+  Future<int> restore(
+    ChatBackupSnapshot snapshot, {
+    void Function(ChatRestoreProgress)? onProgress,
+  }) async => restoreCount;
 }
 
 class _StubPhotoBackupService extends VaultPhotoBackupService {

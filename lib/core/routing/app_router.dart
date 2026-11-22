@@ -29,6 +29,7 @@ import '../../features/vault/presentation/screens/gallery/gallery_photo_viewer_s
 import '../../features/vault/presentation/screens/import/import_screen.dart';
 import '../../features/vault/presentation/screens/lock/lock_screen.dart';
 import '../../features/vault/presentation/screens/onboarding/google_signin_screen.dart';
+import '../../features/vault/presentation/screens/onboarding/onboarding_restore_screen.dart';
 import '../../features/vault/presentation/screens/onboarding/pin_screens.dart';
 import '../../features/vault/presentation/screens/onboarding/vault_creation_screen.dart';
 import '../../features/vault/presentation/screens/onboarding/welcome_screen.dart';
@@ -246,6 +247,9 @@ Widget _buildOnboardingStep(BuildContext context, OnboardingState state) {
     OnboardingPinEntry(mode: final m) => CreatePinScreen(mode: m),
     OnboardingPinConfirm(mode: final m) => ConfirmPinScreen(mode: m),
     OnboardingPinInvalid(mode: final m) => CreatePinScreen(mode: m),
+    OnboardingCheckingBackups() => const OnboardingRestoreScreen(),
+    OnboardingRestoreAvailable() => const OnboardingRestoreScreen(),
+    OnboardingRestoringBackup() => const OnboardingRestoreScreen(),
     OnboardingCreatingVault(mode: final m) => VaultCreationScreen(mode: m),
     OnboardingVaultCreated() => const SizedBox.shrink(),
     OnboardingError() => const WelcomeScreen(),
@@ -708,6 +712,8 @@ GoRoute _restoreRoute(AppDependencies deps, AppSessionState session) {
     builder: (context, state) => RestoreFlowScreen(
       authRepository: deps.authRepository,
       restoreFlowService: deps.restoreFlowService,
+      onStartBackgroundPhotoRestore: () =>
+          deps.backupManager.startVaultPhotoRestoreInBackground(),
       onRestoreCompleted: (vaultId) async {
         if (await deps.vaultRepository.getActiveVaultId() != vaultId) {
           throw StateError('The restored vault is not active.');
@@ -719,7 +725,7 @@ GoRoute _restoreRoute(AppDependencies deps, AppSessionState session) {
         unawaited(deps.backupManager.load());
         session.unlock();
         if (!context.mounted) return;
-        context.go('/gallery', extra: UserMode.googleEnabled);
+        context.go('/chat');
       },
     ),
   );

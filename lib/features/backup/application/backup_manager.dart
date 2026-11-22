@@ -436,6 +436,78 @@ class BackupManager extends ChangeNotifier {
     }
   }
 
+  /// Starts vault photo restore in the background without blocking the caller.
+  ///
+  /// Progress is reported via [BackupProgressReporter] (`progress`) and the
+  /// final outcome is published to [lastNotice] for Settings / BackupScreen.
+  void startVaultPhotoRestoreInBackground({bool includeCloud = true}) {
+    if (isBusy) return;
+    _activeOperation = BackupOperation.restoring;
+    _lastNotice = const BackupNotice(
+      message: 'Restoring vault photos in the background…',
+      tone: BackupNoticeTone.info,
+    );
+    _notifySafely();
+    unawaited(_runBackgroundPhotoRestore(includeCloud: includeCloud));
+  }
+
+  Future<void> _runBackgroundPhotoRestore({
+    bool includeCloud = true,
+    List<String> priorParts = const [],
+    List<String> priorNotes = const [],
+    List<String> priorFailures = const [],
+    bool priorFoundBackup = false,
+  }) async {
+    final parts = List<String>.from(priorParts);
+    final notes = List<String>.from(priorNotes);
+    final failures = List<String>.from(priorFailures);
+    var foundBackup = priorFoundBackup;
+    try {
+      final photos = await _vaultPhotoBackup().restore(
+        interactive: false,
+        includeCloud: includeCloud,
+      );
+      foundBackup |= photos.foundBackup;
+      if (photos.restored > 0) {
+        parts.add(_countLabel(photos.restored, 'vault photo', 'vault photos'));
+      }
+      if (photos.alreadyPresent > 0) {
+        notes.add(
+          '${_countLabel(photos.alreadyPresent, 'vault photo', 'vault photos')} '
+          'were already on this device',
+        );
+      }
+      if (photos.unavailable > 0) {
+        notes.add(
+          '${_countLabel(photos.unavailable, 'vault photo', 'vault photos')} '
+          'could not be recovered',
+        );
+      }
+      notes.addAll(photos.failures.map(BackupErrorFormatter.brief));
+    } catch (e) {
+      failures.add('vault photos: ${BackupErrorFormatter.brief(e)}');
+    } finally {
+      _activeOperation = null;
+      final summary = parts.isNotEmpty
+          ? 'Restored ${parts.join(' and ')}.'
+          : foundBackup
+          ? 'Backup found, but no new items were restored.'
+          : failures.isNotEmpty
+          ? 'Could not restore from the available backups.'
+          : 'No backup found in the enabled locations.';
+      final failed = failures.isEmpty ? '' : ' Failed: ${failures.join('; ')}.';
+      final extra = notes.isEmpty ? '' : ' ${notes.join('. ')}.';
+      final tone = failures.isNotEmpty
+          ? (parts.isNotEmpty ? BackupNoticeTone.warning : BackupNoticeTone.error)
+          : (parts.isNotEmpty ? BackupNoticeTone.success : BackupNoticeTone.info);
+      _lastNotice = BackupNotice(
+        message: _clampSummary('$summary$failed$extra'),
+        tone: tone,
+      );
+      _notifySafely();
+    }
+  }
+
   Future<BackupNotice> restoreFromBackup() async {
     if (isBusy) {
       return const BackupNotice(
@@ -461,10 +533,24 @@ class BackupManager extends ChangeNotifier {
             failures.add('Chats are unavailable on this device');
           }
         } else {
-          final snapshot = await chat.findLatestBackup(interactive: true);
+          _progressReporter.begin('Checking for chat backups…');
+          final snapshot = await chat.findLatestBackup(
+            interactive: true,
+            onProgress: (p) => _progressReporter.begin(p.message, total: p.total),
+          );
           if (snapshot != null) {
             foundBackup = true;
-            final restored = await chat.restore(snapshot);
+            final restored = await chat.restore(
+              snapshot,
+              onProgress: (p) {
+                if (p.total != null && p.total! > 0) {
+                  _progressReporter.begin(p.message, total: p.total);
+                  _progressReporter.update(p.done);
+                } else {
+                  _progressReporter.begin(p.message);
+                }
+              },
+            );
             if (restored > 0) {
               parts.add(
                 '${_countLabel(restored, 'chat message', 'chat messages')} '
@@ -477,30 +563,31 @@ class BackupManager extends ChangeNotifier {
         }
       } catch (e) {
         failures.add('chats: ${BackupErrorFormatter.brief(e)}');
+      } finally {
+        _progressReporter.end();
       }
-      try {
-        final photos = await _vaultPhotoBackup().restore(interactive: true);
-        foundBackup |= photos.foundBackup;
-        if (photos.restored > 0) {
-          parts.add(
-            _countLabel(photos.restored, 'vault photo', 'vault photos'),
-          );
-        }
-        if (photos.alreadyPresent > 0) {
-          notes.add(
-            '${_countLabel(photos.alreadyPresent, 'vault photo', 'vault photos')} '
-            'were already on this device',
-          );
-        }
-        if (photos.unavailable > 0) {
-          notes.add(
-            '${_countLabel(photos.unavailable, 'vault photo', 'vault photos')} '
-            'could not be recovered',
-          );
-        }
-        notes.addAll(photos.failures.map(BackupErrorFormatter.brief));
-      } catch (e) {
-        failures.add('vault photos: ${BackupErrorFormatter.brief(e)}');
+
+      if (_photosEnabled) {
+        // Run vault photo restore in the background so the UI is never blocked.
+        unawaited(
+          _runBackgroundPhotoRestore(
+            includeCloud: _cloudEnabled,
+            priorParts: parts,
+            priorNotes: notes,
+            priorFailures: failures,
+            priorFoundBackup: foundBackup,
+          ),
+        );
+        final chatSummary = parts.isNotEmpty
+            ? 'Restored ${parts.join(' and ')}. '
+            : '';
+        final notice = BackupNotice(
+          message: '${chatSummary}Restoring vault photos in the background…',
+          tone: BackupNoticeTone.info,
+        );
+        _lastNotice = notice;
+        _notifySafely();
+        return notice;
       }
 
       final summary = parts.isNotEmpty
@@ -522,8 +609,10 @@ class BackupManager extends ChangeNotifier {
       _lastNotice = notice;
       return notice;
     } finally {
-      _activeOperation = null;
-      _notifySafely();
+      if (!_photosEnabled) {
+        _activeOperation = null;
+        _notifySafely();
+      }
     }
   }
 

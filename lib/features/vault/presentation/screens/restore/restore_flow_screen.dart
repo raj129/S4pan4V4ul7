@@ -1,5 +1,8 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
+import 'package:photo_vault/features/chat/application/services/chat_backup_service.dart';
 import 'package:photo_vault/features/vault/application/services/restore_flow_service.dart';
 import 'package:photo_vault/core/widgets/app_state_views.dart';
 import 'package:photo_vault/core/widgets/app_surfaces.dart';
@@ -12,11 +15,13 @@ class RestoreFlowScreen extends StatefulWidget {
     required this.authRepository,
     required this.restoreFlowService,
     required this.onRestoreCompleted,
+    this.onStartBackgroundPhotoRestore,
     super.key,
   });
   final AuthRepository authRepository;
   final RestoreFlowService restoreFlowService;
   final Future<void> Function(String vaultId) onRestoreCompleted;
+  final VoidCallback? onStartBackgroundPhotoRestore;
 
   @override
   State<RestoreFlowScreen> createState() => _RestoreFlowScreenState();
@@ -27,8 +32,10 @@ class _RestoreFlowScreenState extends State<RestoreFlowScreen> {
   bool _signedIn = false;
   bool _loadingVaults = false;
   bool _restoreCompleted = false;
+  bool _includeChat = true;
   bool _includePhotos = true;
   bool _submitting = false;
+  ChatRestoreProgress? _chatProgress;
   final _originalPinController = TextEditingController();
   final _newPinController = TextEditingController();
   final _confirmPinController = TextEditingController();
@@ -170,36 +177,45 @@ class _RestoreFlowScreenState extends State<RestoreFlowScreen> {
       final completion = <String>[
         'Vault key recovered. Keep the original backup PIN for future restores',
       ];
-      if (_includePhotos) {
+      if (_includeChat) {
         try {
-          final photos = await widget.restoreFlowService.restorePhotos(
-            includePhotos: true,
+          final restoredChat = await widget.restoreFlowService.restoreChat(
+            includeChat: true,
+            onProgress: (p) {
+              if (mounted) setState(() => _chatProgress = p);
+            },
           );
-          if (photos.restored > 0) {
-            completion.add('${photos.restored} vault photos restored');
-          } else if (!photos.foundBackup) {
-            completion.add('no vault-photo backup found');
-          }
-          if (photos.alreadyPresent > 0) {
-            completion.add('${photos.alreadyPresent} photos already present');
-          }
-          if (photos.unavailable > 0) {
-            completion.add('${photos.unavailable} photos unavailable');
-          }
-          if (photos.failures.isNotEmpty) {
-            completion.add(
-              '${photos.failures.length} backup copies could not be read',
-            );
+          if (restoredChat > 0) {
+            completion.add('$restoredChat chat messages restored');
+          } else {
+            completion.add('no chat messages needed restoring');
           }
         } catch (e) {
-          completion.add('photos could not be restored: ${_briefError(e)}');
+          completion.add('chats could not be restored: ${_briefError(e)}');
         }
+      } else {
+        await widget.restoreFlowService.skipChatRestore();
+        completion.add('chat restore skipped');
+      }
+      if (_includePhotos) {
+        if (widget.onStartBackgroundPhotoRestore != null) {
+          widget.onStartBackgroundPhotoRestore!();
+        } else {
+          unawaited(
+            widget.restoreFlowService.restorePhotos(includePhotos: true).then(
+              (_) {},
+              onError: (_) {},
+            ),
+          );
+        }
+        completion.add('vault photo restore is running in the background');
       } else {
         completion.add('photo restore skipped');
       }
       if (!mounted) return;
       setState(() {
         _restoreCompleted = true;
+        _chatProgress = null;
         _completionMessage = '${completion.join('. ')}.';
         _originalPin = '';
         _newPin = '';
@@ -361,8 +377,10 @@ class _RestoreFlowScreenState extends State<RestoreFlowScreen> {
                       _selectedVaultId != null &&
                       !_submitting &&
                       !_restoreCompleted,
+                  includeChat: _includeChat,
                   includePhotos: _includePhotos,
                   submitting: _submitting,
+                  chatProgress: _chatProgress,
                   errorMessage: _selectedVaultId == null ? null : _error,
                   originalPinController: _originalPinController,
                   newPinController: _newPinController,
@@ -370,6 +388,8 @@ class _RestoreFlowScreenState extends State<RestoreFlowScreen> {
                   onOriginalPinChanged: (v) => _originalPin = v,
                   onNewPinChanged: (v) => _newPin = v,
                   onConfirmPinChanged: (v) => _confirmPin = v,
+                  onIncludeChatChanged: (v) =>
+                      setState(() => _includeChat = v ?? true),
                   onIncludePhotosChanged: (v) =>
                       setState(() => _includePhotos = v ?? true),
                   onComplete: _completeRestore,
@@ -377,13 +397,13 @@ class _RestoreFlowScreenState extends State<RestoreFlowScreen> {
               ),
               _RestoreStepRow(
                 index: 4,
-                title: 'Open recovered vault',
+                title: 'Open recovered app',
                 subtitle: _completionMessage ?? 'Complete recovery first.',
                 state: _restoreCompleted
                     ? _StepState.active
                     : _StepState.pending,
                 isLast: true,
-                actionLabel: _restoreCompleted ? 'Open vault' : null,
+                actionLabel: _restoreCompleted ? 'Continue to chat' : null,
                 onAction: _restoreCompleted ? _openRestoredVault : null,
               ),
             ],
@@ -532,8 +552,10 @@ class _RestoreStepRow extends StatelessWidget {
 class _PinStepContent extends StatelessWidget {
   const _PinStepContent({
     required this.enabled,
+    required this.includeChat,
     required this.includePhotos,
     required this.submitting,
+    required this.chatProgress,
     required this.errorMessage,
     required this.originalPinController,
     required this.newPinController,
@@ -541,13 +563,16 @@ class _PinStepContent extends StatelessWidget {
     required this.onOriginalPinChanged,
     required this.onNewPinChanged,
     required this.onConfirmPinChanged,
+    required this.onIncludeChatChanged,
     required this.onIncludePhotosChanged,
     required this.onComplete,
   });
 
   final bool enabled;
+  final bool includeChat;
   final bool includePhotos;
   final bool submitting;
+  final ChatRestoreProgress? chatProgress;
   final String? errorMessage;
   final TextEditingController originalPinController;
   final TextEditingController newPinController;
@@ -555,6 +580,7 @@ class _PinStepContent extends StatelessWidget {
   final ValueChanged<String> onOriginalPinChanged;
   final ValueChanged<String> onNewPinChanged;
   final ValueChanged<String> onConfirmPinChanged;
+  final ValueChanged<bool?> onIncludeChatChanged;
   final ValueChanged<bool?> onIncludePhotosChanged;
   final VoidCallback onComplete;
 
@@ -606,13 +632,42 @@ class _PinStepContent extends StatelessWidget {
         const SizedBox(height: AppSpacing.sm),
         CheckboxListTile(
           contentPadding: EdgeInsets.zero,
+          dense: true,
+          visualDensity: VisualDensity.compact,
+          value: includeChat,
+          onChanged: enabled ? onIncludeChatChanged : null,
+          title: const Text('Restore chat backup'),
+          subtitle: Text(
+            includeChat
+                ? 'Restores chat messages now with live progress.'
+                : 'Skip chat restore and keep history hidden.',
+          ),
+        ),
+        CheckboxListTile(
+          contentPadding: EdgeInsets.zero,
+          dense: true,
+          visualDensity: VisualDensity.compact,
           value: includePhotos,
           onChanged: enabled ? onIncludePhotosChanged : null,
           title: const Text('Restore encrypted vault photos'),
           subtitle: const Text(
-            'Restore photos from the vault backup if available.',
+            'Runs in the background; progress visible in Photos.',
           ),
         ),
+        if (submitting && chatProgress != null) ...[
+          const SizedBox(height: AppSpacing.sm),
+          Text(
+            chatProgress!.message,
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: AppSpacing.xs),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(4),
+            child: LinearProgressIndicator(value: chatProgress!.fraction),
+          ),
+        ],
         if (errorMessage != null) ...[
           const SizedBox(height: AppSpacing.sm),
           InfoBanner(message: errorMessage!, tone: InfoBannerTone.error),

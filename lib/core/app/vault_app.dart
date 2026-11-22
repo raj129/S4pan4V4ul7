@@ -51,6 +51,7 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
     authRepository: _deps.authRepository,
     createVaultUseCase: _deps.createVaultUseCase,
     pinValidator: _deps.pinValidator,
+    restoreBridge: _deps.onboardingRestoreBridge,
   );
   late final GoRouter _router = buildAppRouter(
     deps: _deps,

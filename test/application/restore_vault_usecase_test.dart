@@ -14,6 +14,9 @@ import 'package:photo_vault/features/vault/domain/entities/vault_status.dart';
 import 'package:photo_vault/features/vault/domain/repositories/vmk_backup_repository.dart';
 
 class _MemoryVmkRepository implements VmkBackupRepository {
+  @override
+  bool get isCloud => false;
+
   final Map<String, Map<String, String>> backups = {};
   Object? listError;
   Object? restoreError;

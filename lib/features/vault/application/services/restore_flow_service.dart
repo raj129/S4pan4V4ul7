@@ -1,3 +1,5 @@
+import 'package:photo_vault/features/chat/application/services/chat_backup_service.dart';
+
 class RestorePhotosSummary {
   const RestorePhotosSummary({
     required this.foundBackup,
@@ -26,4 +28,11 @@ abstract class RestoreFlowService {
   });
 
   Future<RestorePhotosSummary> restorePhotos({required bool includePhotos});
+
+  Future<int> restoreChat({
+    required bool includeChat,
+    void Function(ChatRestoreProgress)? onProgress,
+  }) async => 0;
+
+  Future<void> skipChatRestore() async {}
 }

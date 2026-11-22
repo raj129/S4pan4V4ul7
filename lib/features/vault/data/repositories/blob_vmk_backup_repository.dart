@@ -19,6 +19,9 @@ abstract class BlobVmkBackupRepository implements VmkBackupRepository {
   final BackupByteStore _store;
   final String _fileName;
 
+  @override
+  bool get isCloud => false;
+
   static Map<String, dynamic> _decodeMap(Uint8List bytes) {
     final decoded = jsonDecode(utf8.decode(bytes));
     if (decoded is! Map) {

@@ -17,4 +17,7 @@ class GoogleDriveVmkRepository extends BlobVmkBackupRepository {
        );
 
   static const String _fileName = 'vmk_backup.json';
+
+  @override
+  bool get isCloud => true;
 }

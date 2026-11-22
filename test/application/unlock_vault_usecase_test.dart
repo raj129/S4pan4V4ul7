@@ -110,6 +110,9 @@ void main() {
 
 class _NoopVmkBackupRepository implements VmkBackupRepository {
   @override
+  bool get isCloud => false;
+
+  @override
   Future<void> backupVmk({
     required String vaultId,
     required Map<String, String> payload,

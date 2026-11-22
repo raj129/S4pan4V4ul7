@@ -1,3 +1,4 @@
+import 'package:photo_vault/features/chat/application/services/chat_backup_service.dart';
 import '../../application/services/restore_flow_service.dart';
 import '../../application/usecases/restore_vault_usecase.dart';
 import '../../domain/repositories/vault_repository.dart';
@@ -7,6 +8,9 @@ class BackupRestoreFlowService implements RestoreFlowService {
     required RestoreVaultUseCase restoreVaultUseCase,
     required VaultRepository vaultRepository,
     required Future<RestorePhotosSummary> Function() restorePhotos,
+    Future<int> Function({void Function(ChatRestoreProgress)? onProgress})?
+    restoreChat,
+    Future<void> Function()? skipChatRestore,
     Future<void> Function({
       required String vaultId,
       required String originalPin,
@@ -16,11 +20,16 @@ class BackupRestoreFlowService implements RestoreFlowService {
   }) : _restoreVaultUseCase = restoreVaultUseCase,
        _vaultRepository = vaultRepository,
        _restorePhotos = restorePhotos,
+       _restoreChat = restoreChat,
+       _skipChatRestore = skipChatRestore,
        _onVaultRestored = onVaultRestored;
 
   final RestoreVaultUseCase _restoreVaultUseCase;
   final VaultRepository _vaultRepository;
   final Future<RestorePhotosSummary> Function() _restorePhotos;
+  final Future<int> Function({void Function(ChatRestoreProgress)? onProgress})?
+  _restoreChat;
+  final Future<void> Function()? _skipChatRestore;
   final Future<void> Function({
     required String vaultId,
     required String originalPin,
@@ -66,5 +75,24 @@ class BackupRestoreFlowService implements RestoreFlowService {
       );
     }
     return _restorePhotos();
+  }
+
+  @override
+  Future<int> restoreChat({
+    required bool includeChat,
+    void Function(ChatRestoreProgress)? onProgress,
+  }) async {
+    if (!includeChat) {
+      await skipChatRestore();
+      return 0;
+    }
+    final restore = _restoreChat;
+    if (restore == null) return 0;
+    return restore(onProgress: onProgress);
+  }
+
+  @override
+  Future<void> skipChatRestore() async {
+    await _skipChatRestore?.call();
   }
 }

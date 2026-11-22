@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 
 import '../../di/chat_dependencies.dart';
+import '../../application/services/chat_backup_service.dart';
 import '../../application/services/chat_notification_service.dart';
 import 'package:photo_vault/core/integrations/chat_vault_bridge.dart';
 import 'package:photo_vault/features/vault/domain/entities/user_mode.dart';
@@ -56,6 +57,11 @@ class _ChatAppState extends State<ChatApp> with WidgetsBindingObserver {
   /// Bumped after a restore so the chat cubits are rebuilt from the cache.
   int _restoreGeneration = 0;
 
+  /// On-screen chat restore state (replaces the old modal popup).
+  ChatBackupSnapshot? _pendingRestoreSnapshot;
+  bool _restoringChat = false;
+  ChatRestoreProgress? _chatRestoreProgress;
+
   Future<void> _ensurePrepared() async {
     if (_sessionPrepared || _preparing) return;
     _preparing = true;
@@ -102,49 +108,7 @@ class _ChatAppState extends State<ChatApp> with WidgetsBindingObserver {
         return;
       }
       if (!mounted) return;
-      final restore = await showDialog<bool>(
-        context: context,
-        barrierDismissible: false,
-        builder: (dialogContext) => AlertDialog(
-          icon: const Icon(Icons.restore_rounded),
-          title: const Text('Restore chat backup?'),
-          content: Text(
-            'A backup from ${_formatBackupTime(snapshot.backupAt)} was found '
-            'on ${snapshot.source} with ${snapshot.messageCount} messages.\n\n'
-            'If you skip, earlier messages stay hidden and the next backup '
-            'replaces this one.',
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(false),
-              child: const Text('Skip'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.of(dialogContext).pop(true),
-              child: const Text('Restore'),
-            ),
-          ],
-        ),
-      );
-      if (restore == true) {
-        final restored = await backup.restore(snapshot);
-        if (!mounted) return;
-        setState(() => _restoreGeneration++);
-        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-          SnackBar(
-            content: Text(
-              restored == 0
-                  ? 'Chat backup found, but no messages needed restoring.'
-                  : 'Restored ${restored == 1 ? '1 chat message' : '$restored chat messages'} '
-                        'from ${snapshot.source}.',
-              maxLines: 3,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-        );
-      } else if (restore == false) {
-        await backup.dismissRestoreOffer();
-      }
+      setState(() => _pendingRestoreSnapshot = snapshot);
     } catch (error) {
       if (mounted) {
         ScaffoldMessenger.maybeOf(context)?.showSnackBar(
@@ -161,6 +125,70 @@ class _ChatAppState extends State<ChatApp> with WidgetsBindingObserver {
     } finally {
       _restoreOfferInFlight = false;
     }
+  }
+
+  Future<void> _startOnScreenRestore() async {
+    final snapshot = _pendingRestoreSnapshot;
+    if (snapshot == null || _restoringChat) return;
+    setState(() {
+      _restoringChat = true;
+      _chatRestoreProgress = ChatRestoreProgress(
+        stage: ChatRestoreStage.restoringMessages,
+        source: snapshot.source,
+        done: 0,
+        total: snapshot.messageCount,
+      );
+    });
+    try {
+      final restored = await _deps.backupService.restore(
+        snapshot,
+        onProgress: (p) {
+          if (mounted) setState(() => _chatRestoreProgress = p);
+        },
+      );
+      if (!mounted) return;
+      setState(() {
+        _pendingRestoreSnapshot = null;
+        _restoringChat = false;
+        _chatRestoreProgress = null;
+        _restoreGeneration++;
+      });
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        SnackBar(
+          content: Text(
+            restored == 0
+                ? 'Chat backup found, but no messages needed restoring.'
+                : 'Restored ${restored == 1 ? '1 chat message' : '$restored chat messages'} '
+                      'from ${snapshot.source}.',
+            maxLines: 3,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _restoringChat = false;
+        _chatRestoreProgress = null;
+      });
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        SnackBar(
+          content: Text(
+            'Chat backup could not be restored: '
+            '${_briefBackupError(error)}',
+            maxLines: 3,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+      );
+    }
+  }
+
+  Future<void> _skipOnScreenRestore() async {
+    if (_restoringChat) return;
+    await _deps.backupService.dismissRestoreOffer();
+    if (!mounted) return;
+    setState(() => _pendingRestoreSnapshot = null);
   }
 
   static String _briefBackupError(Object error) {
@@ -326,6 +354,18 @@ class _ChatAppState extends State<ChatApp> with WidgetsBindingObserver {
                 );
               }
 
+              final pendingSnapshot = _pendingRestoreSnapshot;
+              if (pendingSnapshot != null) {
+                return _OnScreenChatRestoreView(
+                  snapshot: pendingSnapshot,
+                  formattedTime: _formatBackupTime(pendingSnapshot.backupAt),
+                  restoring: _restoringChat,
+                  progress: _chatRestoreProgress,
+                  onRestore: _startOnScreenRestore,
+                  onSkip: _skipOnScreenRestore,
+                );
+              }
+
               return MultiRepositoryProvider(
                 key: ValueKey(_restoreGeneration),
                 providers: [
@@ -390,6 +430,104 @@ class _ChatAppState extends State<ChatApp> with WidgetsBindingObserver {
                 ),
               );
             },
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _OnScreenChatRestoreView extends StatelessWidget {
+  const _OnScreenChatRestoreView({
+    required this.snapshot,
+    required this.formattedTime,
+    required this.restoring,
+    required this.progress,
+    required this.onRestore,
+    required this.onSkip,
+  });
+
+  final ChatBackupSnapshot snapshot;
+  final String formattedTime;
+  final bool restoring;
+  final ChatRestoreProgress? progress;
+  final VoidCallback onRestore;
+  final VoidCallback onSkip;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    return Scaffold(
+      appBar: AppBar(title: const Text('Restore Chats')),
+      body: SafeArea(
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(24),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 420),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Center(
+                    child: Container(
+                      width: 88,
+                      height: 88,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: cs.primaryContainer,
+                      ),
+                      child: Icon(
+                        Icons.restore_rounded,
+                        size: 44,
+                        color: cs.onPrimaryContainer,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 24),
+                  Text(
+                    restoring ? 'Restoring chat history…' : 'Chat backup found',
+                    textAlign: TextAlign.center,
+                    style: theme.textTheme.headlineSmall,
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    restoring
+                        ? (progress?.message ?? 'Restoring messages…')
+                        : 'A backup from $formattedTime was found on '
+                              '${snapshot.source} with ${snapshot.messageCount} '
+                              'messages.\n\n'
+                              'If you skip, earlier messages stay hidden and '
+                              'the next backup replaces this one.',
+                    textAlign: TextAlign.center,
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: cs.onSurfaceVariant,
+                    ),
+                  ),
+                  const SizedBox(height: 24),
+                  if (restoring) ...[
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(999),
+                      child: LinearProgressIndicator(
+                        value: progress?.fraction,
+                        minHeight: 8,
+                      ),
+                    ),
+                  ] else ...[
+                    FilledButton.icon(
+                      onPressed: onRestore,
+                      icon: const Icon(Icons.restore_rounded),
+                      label: const Text('Restore chats'),
+                    ),
+                    const SizedBox(height: 12),
+                    TextButton(
+                      onPressed: onSkip,
+                      child: const Text('Skip'),
+                    ),
+                  ],
+                ],
+              ),
+            ),
           ),
         ),
       ),
