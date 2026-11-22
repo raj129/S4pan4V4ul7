@@ -106,4 +106,19 @@ void main() {
       unawaited(source.stream.close());
     },
   );
+
+  test(
+    'PlatformException on stream cancel is ignored',
+    () async {
+      final source = _Source();
+      source.stream.onCancel = () => Future<void>.error(
+        Exception('No active stream to cancel'),
+      );
+      final location = AppLocation(real: source);
+      addTearDown(location.mock.dispose);
+      final sub = location.updates().listen((_) {});
+      await pumpEventQueue();
+      await expectLater(sub.cancel(), completes);
+    },
+  );
 }

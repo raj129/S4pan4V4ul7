@@ -2467,7 +2467,7 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
     _searchDelegate.dispose();
     _openGeneration++;
     _openTimeoutTimer?.cancel();
-    unawaited(_connectivitySub?.cancel());
+    unawaited(_connectivitySub?.cancel().catchError((Object _) {}));
     await _uploadCoordinator.dispose();
     if (_currentThreadId != null) {
       await typingRepository.setTyping(

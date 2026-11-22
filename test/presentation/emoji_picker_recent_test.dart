@@ -76,6 +76,41 @@ void main() {
     expect(find.byType(EmojiPicker), findsOneWidget);
   });
 
+  testWidgets('layout height changes do not invalidate emoji categories', (
+    tester,
+  ) async {
+    Future<void> pumpPicker(double height) {
+      return tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: ThemedEmojiPicker(
+              height: height,
+              searchHeight: height * 0.7,
+              onEmojiSelected: (_, _) {},
+            ),
+          ),
+        ),
+      );
+    }
+
+    await pumpPicker(280);
+    await tester.pumpAndSettle();
+
+    final initialConfig = tester
+        .widget<EmojiPicker>(find.byType(EmojiPicker))
+        .config;
+
+    await pumpPicker(360);
+    await tester.pumpAndSettle();
+
+    final resizedConfig = tester
+        .widget<EmojiPicker>(find.byType(EmojiPicker))
+        .config;
+    expect(initialConfig.height, isNull);
+    expect(resizedConfig, initialConfig);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('emoji selected from search appears in recent emojis', (
     tester,
   ) async {

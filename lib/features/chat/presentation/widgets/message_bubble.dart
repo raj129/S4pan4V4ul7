@@ -1217,12 +1217,12 @@ class _ThemedEmojiPickerState extends State<ThemedEmojiPicker> {
     super.dispose();
   }
 
-  Config _config(BuildContext context, double height) {
+  Config _config(BuildContext context) {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
     final bg = cs.surfaceContainerHigh;
     return Config(
-      height: height,
+      height: null,
       checkPlatformCompatibility: true,
       emojiViewConfig: EmojiViewConfig(
         columns: widget.columns,
@@ -1309,7 +1309,7 @@ class _ThemedEmojiPickerState extends State<ThemedEmojiPicker> {
             key: widget.pickerKey,
             textEditingController: widget.textEditingController,
             onEmojiSelected: widget.onEmojiSelected,
-            config: _config(context, h),
+            config: _config(context),
           ),
         );
       },

@@ -80,7 +80,11 @@ class AppLocation implements LocationSource {
           .then((_) async {
             final previous = inner;
             inner = null;
-            await previous?.cancel().timeout(const Duration(seconds: 10));
+            try {
+              await previous?.cancel().timeout(const Duration(seconds: 10));
+            } catch (_) {
+              // Native EventChannel stream may already be inactive in background.
+            }
             if (cancelled || selected != generation) return;
 
             void emit(GeoFix fix) {
@@ -133,7 +137,11 @@ class AppLocation implements LocationSource {
         generation++;
         mock.removeListener(onModeChanged);
         await switching;
-        await inner?.cancel().timeout(const Duration(seconds: 10));
+        try {
+          await inner?.cancel().timeout(const Duration(seconds: 10));
+        } catch (_) {
+          // Native EventChannel stream may already be inactive in background.
+        }
         inner = null;
       },
     );
