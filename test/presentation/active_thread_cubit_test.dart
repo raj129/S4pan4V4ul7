@@ -1183,18 +1183,21 @@ void main() {
       },
     );
 
-    test('close ignores PlatformException when cancelling connectivity stream', () async {
-      await cubit.close();
-      final failingConnectivity = StreamController<List<ConnectivityResult>>(
-        onCancel: () => Future<void>.error(
-          Exception('No active stream to cancel'),
-        ),
-      );
-      cubit = build(connectivityStream: failingConnectivity.stream);
-      await open();
-      await expectLater(cubit.close(), completes);
-      await pumpEventQueue();
-    });
+    test(
+      'close ignores PlatformException when cancelling connectivity stream',
+      () async {
+        await cubit.close();
+        final failingConnectivity = StreamController<List<ConnectivityResult>>(
+          onCancel: () =>
+              Future<void>.error(Exception('No active stream to cancel')),
+        );
+        addTearDown(failingConnectivity.close);
+        cubit = build(connectivityStream: failingConnectivity.stream);
+        await open();
+        await expectLater(cubit.close(), completes);
+        await pumpEventQueue();
+      },
+    );
 
     test('reconnect drains messages for threads that are not open', () async {
       await cubit.close();
