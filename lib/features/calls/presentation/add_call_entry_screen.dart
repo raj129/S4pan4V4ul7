@@ -4,6 +4,7 @@ import 'package:intl/intl.dart';
 import '../../../core/app/external_activity_guard.dart';
 import '../../../core/presentation/theme/app_spacing.dart';
 import '../../../core/widgets/app_surfaces.dart';
+import '../../../core/widgets/main_scaffold_scope.dart';
 import '../data/phone_contact_source.dart';
 import '../domain/call_log_entry.dart';
 import '../domain/call_log_repository.dart';
@@ -34,6 +35,7 @@ class _AddCallEntryScreenState extends State<AddCallEntryScreen> {
   DateTime _when = DateTime.now();
   CallLogType _type = CallLogType.incoming;
   int _durationSeconds = 0;
+  bool _timeManuallyChanged = false;
   bool _saving = false;
 
   @override
@@ -105,18 +107,29 @@ class _AddCallEntryScreenState extends State<AddCallEntryScreen> {
   Future<void> _pickTime() async {
     final picked = await pickCallDateTime(context, _when);
     if (picked == null || !mounted) return;
-    setState(() => _when = picked);
+    setState(() {
+      _when = picked;
+      _timeManuallyChanged = true;
+    });
   }
+
+  DateTime _previewTimestamp(DateTime now) => resolveCallLogTimestamp(
+    selected: _when,
+    durationSeconds: _durationSeconds,
+    now: now,
+    manuallyChanged: _timeManuallyChanged,
+  );
 
   Future<void> _save() async {
     final number = _number;
     if (number == null || _saving) return;
     setState(() => _saving = true);
+    final timestamp = _previewTimestamp(DateTime.now());
     final ok = await widget.repository.add(
       number: number,
       name: _contact?.name,
       type: _type,
-      timestamp: _when,
+      timestamp: timestamp,
       durationSeconds: _type == CallLogType.missed ? 0 : _durationSeconds,
     );
     if (!mounted) return;
@@ -135,6 +148,7 @@ class _AddCallEntryScreenState extends State<AddCallEntryScreen> {
     return Scaffold(
       appBar: AppBar(
         title: Text(_contact == null ? 'Choose contact' : 'New call entry'),
+        actions: const [QuickLockActionButton()],
       ),
       body: _contact == null ? _buildContactPicker() : _buildForm(context),
     );
@@ -203,8 +217,9 @@ class _AddCallEntryScreenState extends State<AddCallEntryScreen> {
 
   Widget _buildForm(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final dateText = DateFormat('EEE, d MMM y').format(_when);
-    final timeText = DateFormat('h:mm a').format(_when);
+    final preview = _previewTimestamp(DateTime.now());
+    final dateText = DateFormat('EEE, d MMM y').format(preview);
+    final timeText = DateFormat('h:mm a').format(preview);
     return ListView(
       padding: const EdgeInsets.only(
         top: AppSpacing.md,
@@ -257,6 +272,17 @@ class _AddCallEntryScreenState extends State<AddCallEntryScreen> {
                 setState(() => _type = selection.first),
           ),
         ),
+        if (_type != CallLogType.missed) ...[
+          const SectionHeader('Duration'),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
+            child: CallDurationField(
+              initialSeconds: _durationSeconds,
+              onChanged: (seconds) =>
+                  setState(() => _durationSeconds = seconds),
+            ),
+          ),
+        ],
         const SectionHeader('Date and time'),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
@@ -266,16 +292,6 @@ class _AddCallEntryScreenState extends State<AddCallEntryScreen> {
             label: Text('$dateText, $timeText'),
           ),
         ),
-        if (_type != CallLogType.missed) ...[
-          const SectionHeader('Duration'),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
-            child: CallDurationField(
-              initialSeconds: _durationSeconds,
-              onChanged: (seconds) => _durationSeconds = seconds,
-            ),
-          ),
-        ],
         const SizedBox(height: AppSpacing.xl),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
@@ -287,9 +303,9 @@ class _AddCallEntryScreenState extends State<AddCallEntryScreen> {
                     height: 16,
                     child: CircularProgressIndicator(strokeWidth: 2),
                   )
-              : const Icon(Icons.save_outlined),
-          label: const Text('Save to call log'),
-        ),
+                : const Icon(Icons.save_outlined),
+            label: const Text('Save to call log'),
+          ),
         ),
       ],
     );

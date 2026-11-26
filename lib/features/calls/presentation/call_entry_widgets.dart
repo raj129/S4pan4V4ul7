@@ -1,5 +1,22 @@
 import 'package:flutter/material.dart';
 
+const callLogCurrentTimeTolerance = Duration(minutes: 1);
+
+DateTime resolveCallLogTimestamp({
+  required DateTime selected,
+  required int durationSeconds,
+  required DateTime now,
+  required bool manuallyChanged,
+  Duration tolerance = callLogCurrentTimeTolerance,
+}) {
+  if (manuallyChanged || durationSeconds <= 0) return selected;
+
+  final difference = selected.difference(now).abs();
+  if (difference > tolerance) return selected;
+
+  return now.subtract(Duration(seconds: durationSeconds));
+}
+
 /// Opens a date picker followed by a time picker. Returns null if cancelled.
 Future<DateTime?> pickCallDateTime(
   BuildContext context,

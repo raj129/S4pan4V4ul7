@@ -29,7 +29,8 @@ enum _LoadState { loading, ready, permissionDenied, unsupported, error }
 
 enum _CallFilter { all, missed, incoming, outgoing }
 
-class _CallLogScreenState extends State<CallLogScreen> {
+class _CallLogScreenState extends State<CallLogScreen>
+    with WidgetsBindingObserver {
   _LoadState _state = _LoadState.loading;
   _CallFilter _filter = _CallFilter.all;
   List<CallLogEntry> _entries = const [];
@@ -38,7 +39,21 @@ class _CallLogScreenState extends State<CallLogScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _load();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _load(requestAccess: false);
+    }
   }
 
   Future<void> _load({bool requestAccess = true}) async {
@@ -96,6 +111,45 @@ class _CallLogScreenState extends State<CallLogScreen> {
     if (added == true) {
       await _load(requestAccess: false);
     }
+  }
+
+  Future<void> _confirmDelete(CallLogEntry entry) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete call log entry?'),
+        content: Text(
+          entry.name?.trim().isNotEmpty == true
+              ? 'Remove ${entry.name} from the call log?'
+              : 'Remove ${entry.number} from the call log?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(context).colorScheme.error,
+              foregroundColor: Theme.of(context).colorScheme.onError,
+            ),
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    final deleted = await widget.repository.delete(id: entry.id);
+    if (!mounted) return;
+    if (deleted) {
+      await _load(requestAccess: false);
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Could not delete the call log entry.')),
+    );
   }
 
   @override
@@ -191,8 +245,7 @@ class _CallLogScreenState extends State<CallLogScreen> {
               child: filtered.isEmpty
                   ? _Message(
                       icon: Icons.call_outlined,
-                      text:
-                          'No ${_filterLabel(_filter).toLowerCase()} calls.',
+                      text: 'No ${_filterLabel(_filter).toLowerCase()} calls.',
                     )
                   : RefreshIndicator(
                       onRefresh: () => _load(requestAccess: false),
@@ -215,6 +268,7 @@ class _CallLogScreenState extends State<CallLogScreen> {
                                         ? _formatDuration(entry.durationSeconds)
                                         : null,
                                     onTap: () => _openEdit(entry),
+                                    onLongPress: () => _confirmDelete(entry),
                                   ),
                               ],
                             ),
@@ -254,9 +308,7 @@ class _CallLogScreenState extends State<CallLogScreen> {
           : dateFmt.format(day);
       (map[label] ??= []).add(entry);
     }
-    return [
-      for (final e in map.entries) (label: e.key, entries: e.value),
-    ];
+    return [for (final e in map.entries) (label: e.key, entries: e.value)];
   }
 
   static String _formatDuration(int seconds) {
@@ -272,12 +324,14 @@ class _PixelCallRow extends StatelessWidget {
     required this.timeText,
     required this.durationText,
     required this.onTap,
+    required this.onLongPress,
   });
 
   final CallLogEntry entry;
   final String timeText;
   final String? durationText;
   final VoidCallback onTap;
+  final VoidCallback onLongPress;
 
   @override
   Widget build(BuildContext context) {
@@ -309,6 +363,7 @@ class _PixelCallRow extends StatelessWidget {
 
     return ListTile(
       onTap: onTap,
+      onLongPress: onLongPress,
       contentPadding: const EdgeInsets.symmetric(
         horizontal: AppSpacing.lg,
         vertical: AppSpacing.xs,

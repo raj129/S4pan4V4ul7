@@ -38,4 +38,7 @@ abstract class CallLogRepository {
     required DateTime timestamp,
     required int durationSeconds,
   });
+
+  /// Deletes an entry from the system call log.
+  Future<bool> delete({required String id});
 }

@@ -128,6 +128,23 @@ class CallLogPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, ActivityAw
                 )
                 result.success(updated > 0)
             }
+            "delete" -> {
+                if (!granted(ctx, Manifest.permission.WRITE_CALL_LOG)) {
+                    result.error("permission_denied", "WRITE_CALL_LOG not granted.", null)
+                    return
+                }
+                val id = call.argument<String>("id")
+                if (id.isNullOrBlank()) {
+                    result.error("invalid_argument", "id is required.", null)
+                    return
+                }
+                val deleted = ctx.contentResolver.delete(
+                    CallLog.Calls.CONTENT_URI,
+                    "${CallLog.Calls._ID} = ?",
+                    arrayOf(id),
+                )
+                result.success(deleted > 0)
+            }
             else -> result.notImplemented()
         }
     }

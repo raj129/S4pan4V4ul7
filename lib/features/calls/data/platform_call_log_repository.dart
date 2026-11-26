@@ -95,6 +95,17 @@ class PlatformCallLogRepository implements CallLogRepository {
     }
   }
 
+  @override
+  Future<bool> delete({required String id}) async {
+    if (!isSupported) return false;
+    try {
+      final ok = await _channel.invokeMethod<bool>('delete', {'id': id});
+      return ok == true;
+    } on PlatformException {
+      return false;
+    }
+  }
+
   Future<Map<Object?, Object?>?> _invokeMap(String method) async {
     try {
       return await _channel.invokeMapMethod<Object?, Object?>(method);
