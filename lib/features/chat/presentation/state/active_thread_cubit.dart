@@ -9,6 +9,7 @@ import '../../application/services/data_sms_protocol.dart';
 import 'package:equatable/equatable.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:photo_vault/core/telemetry/error_reporter.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../domain/entities/chat_message.dart';
@@ -330,7 +331,11 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
     _uploadCoordinator.initialize();
     _smsSub = dataSms?.changes.listen(
       (message) => unawaited(_onSmsMessage(message)),
-      onError: (Object error) => _reportActionError(error.toString()),
+      onError: (Object error, StackTrace stack) => _reportActionError(
+        error.toString(),
+        error: error,
+        stackTrace: stack,
+      ),
     );
     WidgetsBinding.instance.addObserver(this);
     // Auto-drain the outbox the moment connectivity is restored, instead of
@@ -512,7 +517,7 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
   int _openGeneration = 0;
 
   static const _pageSize = 30;
-  static const _networkWriteTimeout = Duration(seconds: 15);
+  static const _networkWriteTimeout = Duration(seconds: 30);
 
   static const _uuid = Uuid();
   static final Set<String> _inFlightMessageIds = {};
@@ -755,6 +760,11 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
               _mergeIntoBuffer(visible);
               _emitMessages();
             }
+            for (final m in visible) {
+              if (m.senderId == myUid && m.status != MessageStatus.sending) {
+                unawaited(outbox.remove(m.messageId).catchError((_) {}));
+              }
+            }
             // Cache ciphertext, not the decrypted copies.
             unawaited(
               messageCache.save(_originalsOf(msgs, visible)).catchError((_) {}),
@@ -854,11 +864,15 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
       );
       _fireAndForget(() => setTyping(false));
       return true;
-    } catch (e) {
+    } catch (e, stackTrace) {
       // Encryption failed, so there is nothing worth queueing. Keep the
       // conversation on screen; re-opening the thread here used to blank the
       // list and lose the user's scroll position.
-      _reportActionError('Send failed: $e');
+      _reportActionError(
+        'Send failed: $e',
+        error: e,
+        stackTrace: stackTrace,
+      );
       return false;
     }
   }
@@ -1145,15 +1159,28 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
             : msg.withDecryptedText(decryptedPreview);
         _emitMessages();
       }
-    } catch (e) {
+    } catch (e, stackTrace) {
+      final alreadyDelivered =
+          _buffer[item.messageId]?.status != MessageStatus.sending &&
+          _buffer.containsKey(item.messageId);
+      if (alreadyDelivered) {
+        await outbox.remove(item.messageId).catchError((_) {});
+        _pending.remove(item.messageId);
+        return;
+      }
       Object? persistenceError;
       try {
         await outbox.markFailed(item.messageId, e.toString());
-      } catch (writeError, stackTrace) {
+      } catch (writeError, writeStack) {
         persistenceError = writeError;
         debugPrint(
           'Could not persist failed outbox attempt for ${item.messageId}: '
-          '$writeError\n$stackTrace',
+          '$writeError\n$writeStack',
+        );
+        reportNonFatalError(
+          writeError,
+          writeStack,
+          reason: 'Could not persist failed outbox attempt for ${item.messageId}',
         );
       }
       _showPending(
@@ -1161,10 +1188,15 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
         decryptedPreview,
       );
       if (item.threadId == _currentThreadId) {
+        final message = persistenceError != null
+            ? 'Not sent — the local retry status could not be saved.'
+            : (!_isOffline && e is TimeoutException)
+            ? 'Message is taking longer than usual — will keep retrying automatically.'
+            : 'Not sent — will retry when you are back online.';
         _reportActionError(
-          persistenceError == null
-              ? 'Not sent — will retry when you are back online.'
-              : 'Not sent — the local retry status could not be saved.',
+          message,
+          error: e,
+          stackTrace: stackTrace,
         );
       }
     } finally {
@@ -2126,34 +2158,63 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
       return;
     }
     try {
-      final older = await messageRepository.loadBefore(
-        threadId: threadId,
-        before: oldest,
-        limit: _pageSize,
-      );
-      final decrypted = await _decryptAll(older, threadId);
-      final visible = _visibleFromServer(decrypted);
-      _mergeIntoBuffer(visible);
-      await messageCache.save(_originalsOf(older, visible));
+      // Cache-first: serve locally cached pages immediately without waiting on
+      // a network round-trip so fast scrolling stays smooth.
       final cached = await messageCache.load(
         threadId: threadId,
         before: oldest,
         limit: _pageSize,
       );
+      if (cached.isNotEmpty) {
+        final decryptedCached = _afterClearWatermark(
+          await _decryptAll(cached, threadId),
+        );
+        if (threadId != _currentThreadId || isClosed) return;
+        _mergeIntoBuffer(decryptedCached);
+        _trimNewest();
+        _indexMessages(threadId, decryptedCached);
+        if (cached.length >= _pageSize || _isOffline) {
+          _reachedStart = _isOffline && cached.length < _pageSize;
+          _emitMessages(hasMore: !_reachedStart, loadingOlder: false);
+          return;
+        }
+      }
+
+      final cursor = _sortedBuffer().last.sentAt;
+      final older = await messageRepository.loadBefore(
+        threadId: threadId,
+        before: cursor,
+        limit: _pageSize,
+      );
+      if (threadId != _currentThreadId || isClosed) return;
+      final decrypted = await _decryptAll(older, threadId);
+      final visible = _visibleFromServer(decrypted);
+      _mergeIntoBuffer(visible);
+      await messageCache.save(_originalsOf(older, visible));
+      final tailCached = await messageCache.load(
+        threadId: threadId,
+        before: cursor,
+        limit: _pageSize,
+      );
       _mergeIntoBuffer(
-        _afterClearWatermark(await _decryptAll(cached, threadId)),
+        _afterClearWatermark(await _decryptAll(tailCached, threadId)),
       );
       _trimNewest();
       _indexMessages(threadId, visible);
       if (_serverHistoryHidden) {
-        await _loadOlderFromCache(threadId, oldest);
+        await _loadOlderFromCache(threadId, cursor);
         return;
       }
       // A short page means the query ran out of documents, not that the page
       // size happened to divide evenly.
-      _reachedStart = older.length < _pageSize && cached.length < _pageSize;
+      _reachedStart = older.length < _pageSize && tailCached.length < _pageSize;
       _emitMessages(hasMore: !_reachedStart, loadingOlder: false);
-    } catch (e) {
+    } catch (e, stackTrace) {
+      reportNonFatalError(
+        e,
+        stackTrace,
+        reason: 'Could not load older messages',
+      );
       // Offline: serve the older page from the cache instead of dead-ending
       // the scroll.
       try {
@@ -2281,7 +2342,18 @@ class ActiveThreadCubit extends Cubit<ActiveThreadState>
   }
 
   /// Report a failed action without discarding the conversation.
-  void _reportActionError(String message) {
+  void _reportActionError(
+    String message, {
+    Object? error,
+    StackTrace? stackTrace,
+  }) {
+    if (error != null) {
+      reportNonFatalError(
+        error,
+        stackTrace ?? StackTrace.current,
+        reason: message,
+      );
+    }
     if (isClosed) return;
     final current = state;
     if (current is ActiveThreadLoaded) {

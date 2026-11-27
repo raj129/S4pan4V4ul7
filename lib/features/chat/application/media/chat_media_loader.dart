@@ -127,6 +127,51 @@ class ChatMediaLoader extends ChangeNotifier {
       _scheduler.promote(running.task);
       return _own(running, token);
     }
+    return _enqueueLoad(
+      key: key,
+      threadId: threadId,
+      storagePath: storagePath,
+      senderId: senderId,
+      token: token,
+      lowPriority: false,
+    );
+  }
+
+  /// Warms the in-memory/disk cache for off-screen attachments in the
+  /// background at lower priority than visible tiles.
+  void prefetch({
+    required String threadId,
+    required String storagePath,
+    String? senderId,
+  }) {
+    if (_disposed) return;
+    if (localMedia != null && senderId == _accountId) {
+      _sentPaths.add(storagePath);
+    }
+    if (cached(storagePath) != null) return;
+    final key = '$_accountId:$threadId:$storagePath:$senderId';
+    final running = _inFlight[key];
+    if (running != null && running.generation == _generation) return;
+    unawaited(
+      _enqueueLoad(
+        key: key,
+        threadId: threadId,
+        storagePath: storagePath,
+        senderId: senderId,
+        token: null,
+        lowPriority: true,
+      ).catchError((Object _) => Uint8List(0)),
+    );
+  }
+
+  Future<Uint8List> _enqueueLoad({
+    required String key,
+    required String threadId,
+    required String storagePath,
+    required String? senderId,
+    required ChatMediaLoadToken? token,
+    required bool lowPriority,
+  }) {
     final ticket = _ticket(storagePath);
     late final _MediaAcquisition acquisition;
     late final Future<Uint8List> future;
@@ -173,7 +218,7 @@ class ChatMediaLoader extends ChangeNotifier {
               },
             )
           : download;
-    });
+    }, lowPriority: lowPriority);
     future = task.future.whenComplete(() {
       ticket.active = false;
       if (identical(_inFlight[key], acquisition)) _inFlight.remove(key);
@@ -653,9 +698,13 @@ class _MediaScheduler {
   final List<_MediaTask> _queue = [];
   int _running = 0;
   int _order = 0;
+  int _lowOrder = 0;
 
-  _MediaTask submit(Future<Uint8List> Function() run) {
-    final task = _MediaTask(run, ++_order);
+  _MediaTask submit(
+    Future<Uint8List> Function() run, {
+    bool lowPriority = false,
+  }) {
+    final task = _MediaTask(run, lowPriority ? --_lowOrder : ++_order);
     _queue.add(task);
     _pump();
     return task;

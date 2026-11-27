@@ -5,6 +5,7 @@ import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter/widgets.dart';
 import 'package:image/image.dart' as img;
+import 'package:photo_vault/core/telemetry/error_reporter.dart';
 import 'package:photo_vault/features/chat/application/crypto/chat_crypto_service.dart';
 import 'package:photo_vault/features/chat/application/media/image_compressor.dart';
 import 'package:photo_vault/features/chat/application/media/android_chat_uploads.dart';
@@ -609,6 +610,35 @@ void main() {
       final before = messages.loadBeforeCalls;
       await cubit.loadOlderMessages();
       expect(messages.loadBeforeCalls, before);
+    });
+
+    test('loadOlderMessages serves full cached page without network', () async {
+      await cubit.close();
+      final cache = MemoryMessageCache();
+      await cache.save([for (var i = 1; i <= 70; i++) _msg('m$i', i)]);
+      cubit = build(messageCache: cache);
+      await open();
+
+      final before = messages.loadBeforeCalls;
+      await cubit.loadOlderMessages();
+      expect(messages.loadBeforeCalls, before);
+      expect((cubit.state as ActiveThreadLoaded).messages, hasLength(60));
+    });
+
+    test('action errors forward caught exceptions to non-fatal reporter', () async {
+      final recorded = <(Object, String?)>[];
+      testNonFatalErrorSink = (error, stack, {reason}) {
+        recorded.add((error, reason));
+      };
+      addTearDown(() => testNonFatalErrorSink = null);
+
+      await open();
+      messages.failNextSend = StateError('network dropped');
+      await cubit.sendText('hello');
+
+      expect(recorded, isNotEmpty);
+      expect(recorded.last.$1, isA<StateError>());
+      expect(recorded.last.$2, contains('Not sent'));
     });
   });
 

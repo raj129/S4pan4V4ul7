@@ -205,7 +205,7 @@ object ChatUploadRuntime {
         }
         // Reconcile a successful remote finalize whose local checkpoint was lost.
         if (job.optString(if (thumb) "thumbSession" else "mediaSession").isEmpty() &&
-            (job.optBoolean(startedKey) || job.optInt("attempts") > 0)) try {
+            job.optBoolean(startedKey)) try {
             val meta = Tasks.await(ref.metadata, 30, TimeUnit.SECONDS)
             if (meta.getCustomMetadata("sha256") == digest && meta.sizeBytes == file.length()) {
                 checkpoint(store, id, uid, revision, field, path)

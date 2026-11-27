@@ -353,5 +353,14 @@ void main() {
         expect(await disk.read('alice:p'), isNull);
       },
     );
+
+    test(
+      'prefetch warms cache in background without throwing on failure',
+      () async {
+        loader.prefetch(threadId: 'alice_bob', storagePath: 'p');
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+        expect(loader.cached('p'), [1, 2]);
+      },
+    );
   });
 }

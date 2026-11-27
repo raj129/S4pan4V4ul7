@@ -26,6 +26,7 @@ import 'package:uuid/uuid.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:photo_vault/core/telemetry/error_reporter.dart';
 
 import '../../application/services/live_location_service.dart';
 import '../../application/services/arrival_alert_service.dart';
@@ -246,6 +247,9 @@ class _ThreadScreenState extends State<ThreadScreen>
   final _showJumpToLatest = ValueNotifier<bool>(false);
   Timer? _scrollbarHide;
   Timer? _readThrottle;
+  Timer? _prefetchThrottle;
+  String? _pendingAnchorId;
+  double _pendingAnchorLeadingEdge = 0;
 
   /// For each row in [_items], how many message rows precede it. Lets the
   /// scrollbar map a visible row to a history rank without any I/O.
@@ -366,6 +370,11 @@ class _ThreadScreenState extends State<ThreadScreen>
     _liveLocationErrorSubscription = widget.liveLocationService?.errors.listen((
       error,
     ) {
+      reportNonFatalError(
+        error,
+        StackTrace.current,
+        reason: 'Live location update failed',
+      );
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Live location update failed: $error')),
@@ -375,6 +384,11 @@ class _ThreadScreenState extends State<ThreadScreen>
     if (arrivals != null) {
       unawaited(arrivals.restore());
       _arrivalErrorSubscription = arrivals.errors.listen((error) {
+        reportNonFatalError(
+          error,
+          StackTrace.current,
+          reason: 'Arrival message failed',
+        );
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Arrival message failed: $error')),
@@ -785,6 +799,11 @@ class _ThreadScreenState extends State<ThreadScreen>
     _draftWriteQueue = operation.then<void>(
       (_) {},
       onError: (Object error, StackTrace stackTrace) {
+        reportNonFatalError(
+          error,
+          stackTrace,
+          reason: 'Could not save chat draft',
+        );
         _showDraftError('Could not save this chat draft: $error');
       },
     );
@@ -809,13 +828,18 @@ class _ThreadScreenState extends State<ThreadScreen>
     final furthest = indexes.reduce((a, b) => a > b ? a : b);
     final nearest = indexes.reduce((a, b) => a < b ? a : b);
     // The list is reversed, so the highest index is the oldest row on screen.
-    if (furthest >= _items.length - 3) {
+    // Prefetch well ahead of the edge so fast scrolling rarely hits a spinner.
+    if (furthest >= _items.length - 20) {
       cubit.loadOlderMessages();
     }
     final state = cubit.state;
     final detached = state is ActiveThreadLoaded && state.isDetached;
     // A detached window pages newer history in as the bottom is approached.
-    if (detached && nearest <= 3) cubit.loadNewerMessages();
+    // Defer while the user is actively dragging/flinging so prepending at index 0
+    // does not interrupt the gesture.
+    if (detached && nearest <= 10 && !_userScrolling) {
+      cubit.loadNewerMessages();
+    }
     final shouldShowJump = detached || nearest > 4;
     if (shouldShowJump || _userScrolling) {
       _setJumpToLatestVisible(shouldShowJump);
@@ -828,11 +852,34 @@ class _ThreadScreenState extends State<ThreadScreen>
       if (mounted) _scrollbarVisible.value = false;
     });
     _updateThumb(nearest, furthest);
+    if (!(_prefetchThrottle?.isActive ?? false)) {
+      _prefetchThrottle = Timer(const Duration(milliseconds: 120), () {
+        if (mounted) _prefetchNearbyAttachments(nearest, furthest);
+      });
+    }
     // Throttle read-receipt marking during rapid scrolling to prevent frame drops.
     if (!(_readThrottle?.isActive ?? false)) {
       _readThrottle = Timer(const Duration(milliseconds: 300), () {
         if (mounted) cubit.markVisibleAsRead();
       });
+    }
+  }
+
+  void _prefetchNearbyAttachments(int nearest, int furthest) {
+    if (_items.isEmpty) return;
+    final start = math.max(0, nearest - 6);
+    final end = math.min(_items.length - 1, furthest + 12);
+    for (var i = start; i <= end; i++) {
+      if (i >= nearest && i <= furthest) continue;
+      final msg = _items[i].message;
+      if (msg == null) continue;
+      final ref = msg.previewRef;
+      if (ref == null || !isVisualChatAttachment(msg.mediaType)) continue;
+      widget.mediaLoader.prefetch(
+        threadId: msg.threadId,
+        storagePath: ref,
+        senderId: msg.senderId,
+      );
     }
   }
 
@@ -908,7 +955,27 @@ class _ThreadScreenState extends State<ThreadScreen>
       _userScrolling = n.direction != ScrollDirection.idle;
     } else if (n is ScrollEndNotification) {
       _userScrolling = false;
-      _updateJumpToLatestFromCurrentPosition();
+      // ScrollEndNotification can be dispatched synchronously during
+      // performLayout (e.g. BallisticScrollActivity.applyNewDimensions), so
+      // defer jumpTo and loadNewerMessages until after layout completes.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        _applyPendingAnchor();
+        final positions = _itemPositions.itemPositions.value;
+        if (positions.isNotEmpty) {
+          final nearest = positions
+              .map((p) => p.index)
+              .reduce((a, b) => a < b ? a : b);
+          final cubit = context.read<ActiveThreadCubit>();
+          final state = cubit.state;
+          if (state is ActiveThreadLoaded &&
+              state.isDetached &&
+              nearest <= 10) {
+            cubit.loadNewerMessages();
+          }
+        }
+        _updateJumpToLatestFromCurrentPosition();
+      });
     }
     return false;
   }
@@ -972,6 +1039,7 @@ class _ThreadScreenState extends State<ThreadScreen>
     _itemPositions.itemPositions.removeListener(_onScroll);
     _scrollbarHide?.cancel();
     _readThrottle?.cancel();
+    _prefetchThrottle?.cancel();
     unawaited(_liveLocationErrorSubscription?.cancel());
     unawaited(_arrivalErrorSubscription?.cancel());
     _historyPosition.dispose();
@@ -1071,6 +1139,7 @@ class _ThreadScreenState extends State<ThreadScreen>
                       .reduce((a, b) => a < b ? a : b);
             final wasPinnedToLatest =
                 !nextLoaded.isDetached &&
+                !_userScrolling &&
                 (nearest == null
                     ? !_showJumpToLatest.value
                     : nearest <= _latestPinThreshold);
@@ -1507,6 +1576,7 @@ class _ThreadScreenState extends State<ThreadScreen>
             prev.searchQuery != next.searchQuery ||
             !identical(prev.searchMatchIds, next.searchMatchIds) ||
             prev.hasMore != next.hasMore ||
+            prev.loadingOlder != next.loadingOlder ||
             prev.isDetached != next.isDetached;
       },
       builder: (context, state) {
@@ -1544,7 +1614,7 @@ class _ThreadScreenState extends State<ThreadScreen>
         final cubit = context.read<ActiveThreadCubit>();
         final myUid = cubit.myUid;
 
-        final showPagingSpinner = state.hasMore;
+        final showPagingSpinner = state.loadingOlder;
         final List<ThreadItem> items;
         if (identical(msgs, _cachedVisibleMessages) && _items.isNotEmpty) {
           items = _items;
@@ -1826,8 +1896,6 @@ class _ThreadScreenState extends State<ThreadScreen>
   /// dropped below it (newer paging, trimming, arrivals while scrolled up).
   void _keepAnchor() {
     if (!_itemScrollCtrl.isAttached) return;
-    // A jumpTo mid-fling stops the fling dead, which reads as lag.
-    if (_userScrolling) return;
     final positions = _itemPositions.itemPositions.value.toList()
       ..sort((a, b) => a.index.compareTo(b.index));
     if (positions.isEmpty) return;
@@ -1836,23 +1904,53 @@ class _ThreadScreenState extends State<ThreadScreen>
     ItemPosition? anchor;
     String? anchorId;
     for (final p in positions) {
-      if (p.index < _items.length && _items[p.index].message != null) {
+      if (p.itemLeadingEdge >= 0 &&
+          p.index < _items.length &&
+          _items[p.index].message != null) {
         anchor = p;
         anchorId = _items[p.index].message!.messageId;
         break;
       }
     }
+    if (anchor == null) {
+      for (final p in positions) {
+        if (p.index < _items.length && _items[p.index].message != null) {
+          anchor = p;
+          anchorId = _items[p.index].message!.messageId;
+          break;
+        }
+      }
+    }
     if (anchor == null || anchorId == null) return;
     final oldIndex = anchor.index;
-    final leadingEdge = anchor.itemLeadingEdge;
+    final leadingEdge = anchor.itemLeadingEdge.clamp(0.0, 1.0);
+    if (_userScrolling) {
+      _pendingAnchorId = anchorId;
+      _pendingAnchorLeadingEdge = leadingEdge;
+      return;
+    }
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || !_itemScrollCtrl.isAttached) return;
+      if (!mounted || !_itemScrollCtrl.isAttached || _userScrolling) return;
       final newIndex = _items.indexWhere(
         (i) => i.message?.messageId == anchorId,
       );
       if (newIndex < 0 || newIndex == oldIndex) return;
       _itemScrollCtrl.jumpTo(index: newIndex, alignment: leadingEdge);
     });
+  }
+
+  void _applyPendingAnchor() {
+    final anchorId = _pendingAnchorId;
+    if (anchorId == null || !_itemScrollCtrl.isAttached) return;
+    _pendingAnchorId = null;
+    final newIndex = _items.indexWhere(
+      (i) => i.message?.messageId == anchorId,
+    );
+    if (newIndex < 0) return;
+    _itemScrollCtrl.jumpTo(
+      index: newIndex,
+      alignment: _pendingAnchorLeadingEdge,
+    );
   }
 
   Future<void> _pickJumpDate() async {

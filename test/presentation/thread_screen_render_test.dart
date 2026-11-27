@@ -839,7 +839,7 @@ void main() {
 
     await cubit.close();
     await tester.pumpWidget(const SizedBox.shrink());
-    await tester.pump(const Duration(seconds: 15));
+    await tester.pump(const Duration(seconds: 31));
   });
 
   testWidgets(

@@ -87,7 +87,12 @@ class ThreadUploadCoordinator {
     )
     advanceUpload,
     required void Function() emitMessages,
-    required void Function(String message) reportActionError,
+    required void Function(
+      String message, {
+      Object? error,
+      StackTrace? stackTrace,
+    })
+    reportActionError,
     required Future<void> Function(String messageId) discardMessage,
     required Future<void> Function(OutboxItem item, {String? decryptedPreview})
     deliverOutboxItem,
@@ -157,7 +162,8 @@ class ThreadUploadCoordinator {
   final void Function(String messageId, MediaSendPhase phase, double progress)
   _advanceUpload;
   final void Function() _emitMessages;
-  final void Function(String message) _reportActionError;
+  final void Function(String message, {Object? error, StackTrace? stackTrace})
+  _reportActionError;
   final Future<void> Function(String messageId) _discardMessage;
   final Future<void> Function(OutboxItem item, {String? decryptedPreview})
   _deliverOutboxItem;
@@ -207,8 +213,11 @@ class ThreadUploadCoordinator {
   void initialize() {
     _androidUploadSub = _androidUploads?.changes.listen(
       syncAndroidUploads,
-      onError: (Object error) =>
-          _reportActionError('Could not read upload status.'),
+      onError: (Object error, StackTrace stack) => _reportActionError(
+        'Could not read upload status.',
+        error: error,
+        stackTrace: stack,
+      ),
     );
   }
 
@@ -282,10 +291,12 @@ class ThreadUploadCoordinator {
               await _messageCache.save([bufferMsg]);
             }
             await _androidUploads!.acknowledge(message.messageId);
-          } catch (_) {
+          } catch (error, stackTrace) {
             _acknowledgedUploads.remove(message.messageId);
             _reportActionError(
               'Upload sent; local recovery checkpoint could not be saved.',
+              error: error,
+              stackTrace: stackTrace,
             );
           }
           if (_isClosed() || _currentThreadId() != threadId) return;
@@ -316,16 +327,24 @@ class ThreadUploadCoordinator {
   Future<void> pauseUpload(String messageId) async {
     try {
       await _androidUploads?.pause(messageId);
-    } catch (_) {
-      _reportActionError('Could not pause the upload. Retry from the chat.');
+    } catch (error, stackTrace) {
+      _reportActionError(
+        'Could not pause the upload. Retry from the chat.',
+        error: error,
+        stackTrace: stackTrace,
+      );
     }
   }
 
   Future<void> resumeUpload(String messageId) async {
     try {
       await _androidUploads?.resume(messageId);
-    } catch (_) {
-      _reportActionError('Could not resume the upload. Retry from the chat.');
+    } catch (error, stackTrace) {
+      _reportActionError(
+        'Could not resume the upload. Retry from the chat.',
+        error: error,
+        stackTrace: stackTrace,
+      );
     }
   }
 
@@ -430,6 +449,9 @@ class ThreadUploadCoordinator {
       if (token.isCancelled) throw const UploadCancelledException();
       var meta = buildMediaMeta(type, bytes);
       final mediaRef = 'chat_media/$threadId/$messageId/media.enc';
+      // Keep mediaRef null in the outbox until native handoff succeeds so a
+      // concurrent drainOutbox() cannot mistake this in-progress local send
+      // for a legacy finalized upload and trigger recoverUploaded().
       var outboxItem = OutboxItem(
         messageId: messageId,
         threadId: threadId,
@@ -438,7 +460,6 @@ class ThreadUploadCoordinator {
         recipientUid: recipient,
         preview: preview,
         mediaType: type,
-        mediaRef: mediaRef,
         mediaMeta: meta,
         queuedAt: DateTime.now().toUtc(),
       );
@@ -602,7 +623,7 @@ class ThreadUploadCoordinator {
         );
       }
       if (propagateFailure) rethrow;
-    } catch (error) {
+    } catch (error, stackTrace) {
       await _outbox.remove(messageId);
       var cleanupIncomplete = false;
       if (!handoffStarted && _localMedia != null) {
@@ -621,6 +642,8 @@ class ThreadUploadCoordinator {
       _reportActionError(
         'Could not queue encrypted attachment: $error'
         '${cleanupIncomplete ? ' Encrypted staging cleanup is incomplete; free storage and retry cleanup.' : ''}',
+        error: error,
+        stackTrace: stackTrace,
       );
       if (propagateFailure) rethrow;
     } finally {
@@ -837,10 +860,14 @@ class ThreadUploadCoordinator {
       await _discardMessage(messageId);
       await _deleteQuietly(thumbPath);
       await _deleteQuietly(storagePath);
-    } catch (e) {
+    } catch (e, stackTrace) {
       _setUploadStatus(messageId, null);
       await _outbox.markFailed(messageId, e.toString());
-      _reportActionError('Media send failed: $e');
+      _reportActionError(
+        'Media send failed: $e',
+        error: e,
+        stackTrace: stackTrace,
+      );
     } finally {
       _uploadTokens.remove(messageId);
     }

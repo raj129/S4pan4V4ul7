@@ -87,9 +87,16 @@ class ChatUploadPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
                                 val existing = store.get(id)
                                 if (existing != null) {
                                     require(existing.getString("senderId") == uid &&
-                                        existing.getString("threadId") == thread &&
-                                        existing.getString("digest") == digest) { "Duplicate identity mismatch" }
-                                    return@use publicJob(existing)
+                                        existing.getString("threadId") == thread) { "Duplicate identity mismatch" }
+                                    if (existing.getString("digest") == digest) {
+                                        return@use publicJob(existing)
+                                    }
+                                    val existingState = existing.getString("state")
+                                    require(existingState in listOf("cancelled", "failed") ||
+                                        existing.optBoolean("legacyFinalized")) { "Duplicate identity mismatch" }
+                                    ChatUploadRuntime.interrupt(id, true)
+                                    store.blob(id).delete()
+                                    store.blob(id, true).delete()
                                 }
                                 store.stage(id, bytes)
                                 val thumbnail = args["thumbnail"] as? ByteArray
