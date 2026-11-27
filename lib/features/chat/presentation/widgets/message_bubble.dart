@@ -26,6 +26,8 @@ import 'chat_media_preview.dart';
 import 'chat_media_sizes.dart';
 import 'chat_audio_player.dart';
 import 'attachment_download_progress.dart';
+import '../../application/services/link_preview_service.dart';
+import 'link_preview_card.dart';
 import 'live_location_bubble.dart';
 import 'geo_share_bubble.dart';
 import 'shared_note_bubble.dart';
@@ -1089,6 +1091,17 @@ class _BubbleContent extends StatelessWidget {
                   : null,
             ),
           ),
+        if (text != null &&
+            text.isNotEmpty &&
+            !message.isDocument &&
+            message.mediaType != MessageType.liveLocation)
+          if (LinkPreviewService.extractFirstUrl(text) case final previewUrl?) ...[
+            Padding(
+              padding: EdgeInsets.only(top: message.isMedia ? AppSpacing.sm : 0),
+              child: LinkPreviewCard(url: previewUrl),
+            ),
+            const SizedBox(height: AppSpacing.xs),
+          ],
         // A document's body is its file name, already shown in the tile.
         if (text != null &&
             text.isNotEmpty &&

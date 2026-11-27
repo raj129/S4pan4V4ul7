@@ -6,6 +6,7 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../../../core/location/maps/map_widgets.dart';
 import '../../application/services/maps_diagnostics.dart';
 import '../../domain/entities/geo_share.dart';
 
@@ -34,7 +35,12 @@ class _GeoShareMapScreenState extends State<GeoShareMapScreen> {
   bool _mapConfigured = true;
   bool _myLocationEnabled = false;
   MapType _mapType = MapType.normal;
+  bool _isDarkMap = false;
+  bool _themeInitialized = false;
+  bool _trafficEnabled = false;
   GoogleMapController? _map;
+  CameraPosition? _cameraPosition;
+  double _bearing = 0;
 
   @override
   void initState() {
@@ -43,6 +49,15 @@ class _GeoShareMapScreenState extends State<GeoShareMapScreen> {
     if (Platform.isAndroid) {
       unawaited(MapsDiagnostics.setMapActive(true));
       unawaited(_checkKey());
+    }
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (!_themeInitialized) {
+      _themeInitialized = true;
+      _isDarkMap = Theme.of(context).brightness == Brightness.dark;
     }
   }
 
@@ -109,28 +124,11 @@ class _GeoShareMapScreenState extends State<GeoShareMapScreen> {
     await _fit(controller);
   }
 
-  void _cycleMapType() {
-    setState(() {
-      _mapType = switch (_mapType) {
-        MapType.normal => MapType.satellite,
-        MapType.satellite => MapType.terrain,
-        _ => MapType.normal,
-      };
-    });
-  }
-
-  (IconData, String) _mapTypeMeta(MapType type) => switch (type) {
-    MapType.satellite => (Icons.satellite_alt_rounded, 'Map type: Satellite'),
-    MapType.terrain => (Icons.terrain_rounded, 'Map type: Terrain'),
-    _ => (Icons.layers_outlined, 'Map type: Normal'),
-  };
-
   @override
   Widget build(BuildContext context) {
     final share = widget.share;
     final cs = Theme.of(context).colorScheme;
     final textTheme = Theme.of(context).textTheme;
-    final (mapIcon, mapTooltip) = _mapTypeMeta(_mapType);
     return Scaffold(
       appBar: AppBar(
         title: Text(share.label.isEmpty ? share.preview : share.label),
@@ -155,9 +153,17 @@ class _GeoShareMapScreenState extends State<GeoShareMapScreen> {
                     zoom: 15,
                   ),
                   mapType: _mapType,
+                  style: _isDarkMap ? kDarkMapStyle : null,
+                  trafficEnabled: _trafficEnabled,
                   onMapCreated: (c) {
                     _map = c;
                     if (share.isRoute) unawaited(_fit(c));
+                  },
+                  onCameraMove: (pos) {
+                    _cameraPosition = pos;
+                    if ((pos.bearing - _bearing).abs() > 0.5) {
+                      setState(() => _bearing = pos.bearing);
+                    }
                   },
                   markers: {
                     Marker(
@@ -181,8 +187,12 @@ class _GeoShareMapScreenState extends State<GeoShareMapScreen> {
                     if (share.isRoute)
                       Polyline(
                         polylineId: const PolylineId('route'),
-                        color: cs.primary,
-                        width: 5,
+                        color: _isDarkMap
+                            ? const Color(0xFF81D4FA)
+                            : const Color(0xFF1565C0),
+                        width: 8,
+                        startCap: Cap.roundCap,
+                        endCap: Cap.roundCap,
                         points: [
                           for (final p
                               in share.path.isEmpty
@@ -194,6 +204,8 @@ class _GeoShareMapScreenState extends State<GeoShareMapScreen> {
                   },
                   myLocationEnabled: _myLocationEnabled,
                   myLocationButtonEnabled: false,
+                  compassEnabled: false,
+                  zoomControlsEnabled: false,
                   mapToolbarEnabled: false,
                 ),
                 Positioned(
@@ -201,27 +213,20 @@ class _GeoShareMapScreenState extends State<GeoShareMapScreen> {
                   right: 12,
                   child: SafeArea(
                     bottom: false,
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        FloatingActionButton.small(
-                          heroTag: 'geo-share-map-type',
-                          tooltip: mapTooltip,
-                          backgroundColor: cs.surfaceContainerHigh,
-                          foregroundColor: cs.onSurface,
-                          onPressed: _cycleMapType,
-                          child: Icon(mapIcon),
-                        ),
-                        const SizedBox(height: 8),
-                        FloatingActionButton.small(
-                          heroTag: 'geo-share-recenter',
-                          tooltip: 'Re-center',
-                          backgroundColor: cs.surfaceContainerHigh,
-                          foregroundColor: cs.onSurface,
-                          onPressed: _recenter,
-                          child: const Icon(Icons.center_focus_strong_rounded),
-                        ),
-                      ],
+                    child: MapOverlayControls(
+                      bearing: _bearing,
+                      onResetBearing: () =>
+                          unawaited(resetMapBearing(_map, _cameraPosition)),
+                      mapType: _mapType,
+                      onMapTypeChanged: (t) => setState(() => _mapType = t),
+                      isDarkMap: _isDarkMap,
+                      onDarkMapChanged: (v) => setState(() => _isDarkMap = v),
+                      trafficEnabled: _trafficEnabled,
+                      onTrafficChanged: (v) =>
+                          setState(() => _trafficEnabled = v),
+                      onLocateMe: _recenter,
+                      locateTooltip: 'Re-center',
+                      locateIcon: Icons.center_focus_strong_rounded,
                     ),
                   ),
                 ),
@@ -273,7 +278,9 @@ class _GeoShareMapScreenState extends State<GeoShareMapScreen> {
                                           _MetricChip(
                                             icon: Icons.schedule_rounded,
                                             label:
-                                                '${(share.durationSeconds! / 60).round()} min',
+                                                RouteSummaryChip.formatDuration(
+                                                  share.durationSeconds!,
+                                                ),
                                           ),
                                       ],
                                     ),

@@ -196,7 +196,11 @@ class _ChatListScreenState extends State<ChatListScreen> {
             builder: (context, _) {
               final inbox = ChatShareInbox.instance;
               if (!inbox.hasPending) return const SizedBox.shrink();
-              return _ShareBanner(count: inbox.count, onCancel: inbox.clear);
+              return _ShareBanner(
+                count: inbox.count,
+                isText: inbox.hasPendingText,
+                onCancel: inbox.clear,
+              );
             },
           ),
           Expanded(child: _buildThreadList(context)),
@@ -802,26 +806,34 @@ class _Avatar extends StatelessWidget {
   }
 }
 
-/// Prompt shown while files shared from another app wait for a recipient.
+/// Prompt shown while files or links shared from another app wait for a recipient.
 class _ShareBanner extends StatelessWidget {
-  const _ShareBanner({required this.count, required this.onCancel});
+  const _ShareBanner({
+    required this.count,
+    required this.isText,
+    required this.onCancel,
+  });
 
   final int count;
+  final bool isText;
   final VoidCallback onCancel;
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final label = isText
+        ? 'Choose a chat to share link'
+        : count == 1
+        ? 'Choose a chat to send 1 file'
+        : 'Choose a chat to send $count files';
     return Material(
       color: cs.primaryContainer,
       child: ListTile(
-        leading: Icon(Icons.send_rounded, color: cs.onPrimaryContainer),
-        title: Text(
-          count == 1
-              ? 'Choose a chat to send 1 file'
-              : 'Choose a chat to send $count files',
-          style: TextStyle(color: cs.onPrimaryContainer),
+        leading: Icon(
+          isText ? Icons.link_rounded : Icons.send_rounded,
+          color: cs.onPrimaryContainer,
         ),
+        title: Text(label, style: TextStyle(color: cs.onPrimaryContainer)),
         trailing: TextButton(onPressed: onCancel, child: const Text('Cancel')),
       ),
     );

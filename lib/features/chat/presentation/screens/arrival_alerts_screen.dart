@@ -158,6 +158,29 @@ class _ArrivalAlertsScreenState extends State<ArrivalAlertsScreen> {
       body: ListView(
         padding: const EdgeInsets.only(bottom: 96),
         children: [
+          if (widget.service.fenceError case final fenceError?)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(
+                AppSpacing.lg,
+                AppSpacing.md,
+                AppSpacing.lg,
+                0,
+              ),
+              child: InfoBanner(
+                tone: InfoBannerTone.warning,
+                title: 'Background alerts need attention',
+                message: fenceError,
+                action: FilledButton.tonal(
+                  onPressed: () async {
+                    if (!await ensureArrivalPermissions(context) || !mounted) {
+                      return;
+                    }
+                    await widget.service.restore();
+                  },
+                  child: const Text('Fix permissions'),
+                ),
+              ),
+            ),
           const SectionHeader('My places'),
           if (_places.isEmpty)
             Padding(

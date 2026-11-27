@@ -6,6 +6,7 @@ import androidx.work.Constraints
 import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.OutOfQuotaPolicy
 import androidx.work.WorkManager
 import androidx.work.workDataOf
 import dev.fluttercommunity.workmanager.BackgroundWorker
@@ -24,6 +25,7 @@ object ArrivalSendScheduler {
         val request = OneTimeWorkRequestBuilder<BackgroundWorker>()
             .setInputData(workDataOf(BackgroundWorker.DART_TASK_KEY to TASK, UNIQUE_NAME_KEY to TASK))
             .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+            .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
             .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
             .build()
         WorkManager.getInstance(context)

@@ -22,6 +22,7 @@ import '../../features/vault/presentation/state/onboarding_cubit.dart';
 import '../../features/vault/domain/repositories/settings_repository.dart';
 import '../presentation/theme/app_colors.dart';
 import '../presentation/theme/app_theme.dart';
+import '../../features/chat/application/media/chat_share_inbox.dart';
 import '../../features/chat/application/services/chat_notification_service.dart';
 
 /// App root: owns the dependency container, session state, and router.
@@ -75,6 +76,7 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _router.routeInformationProvider.addListener(_updateChatVisibility);
+    _notificationService.pendingThreadId.addListener(_onNotificationTap);
     _updateChatVisibility();
     HdrPreviewPreference.instance.configure(_deps.settingsRepository);
     unawaited(HdrPreviewCapability.instance.load());
@@ -98,6 +100,13 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
     // Run overdue or pending backups silently on open (covers desktop and
     // network catch-up without OS notifications).
     unawaited(_deps.backupManager.backupIfDue());
+  }
+
+  void _onNotificationTap() {
+    if (_notificationService.pendingThreadId.value == null) return;
+    if (!_session.isUnlocked && mounted) {
+      _router.go('/');
+    }
   }
 
   void _updateChatVisibility() {
@@ -182,6 +191,30 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
 
   Future<void> _handleSharedFiles(List<SharedMediaFile> files) async {
     if (files.isEmpty) return;
+    final textItems = files
+        .where(
+          (f) =>
+              (f.type == SharedMediaType.text ||
+                  f.type == SharedMediaType.url) &&
+              f.path.trim().isNotEmpty,
+        )
+        .map((f) => f.path.trim())
+        .toList(growable: false);
+
+    if (textItems.isNotEmpty) {
+      ChatShareInbox.instance.setText(textItems.join('\n'));
+      // On a cold start the router is still resolving its initial location;
+      // navigating before then is overwritten and leaves a blank screen.
+      for (var i = 0; i < 100; i++) {
+        if (_router.routerDelegate.currentConfiguration.isNotEmpty) break;
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+        if (!mounted) return;
+      }
+      _router.go(_session.isUnlocked ? '/chat' : '/');
+      unawaited(ReceiveSharingIntent.instance.reset());
+      return;
+    }
+
     final mapped = files
         .where((f) => f.path.isNotEmpty)
         .map((f) => XFile(f.path))
@@ -195,7 +228,7 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
       await Future<void>.delayed(const Duration(milliseconds: 50));
       if (!mounted) return;
     }
-    _router.go('/');
+    _router.go(_session.isUnlocked ? '/import/share-intent' : '/');
     unawaited(ReceiveSharingIntent.instance.reset());
   }
 
@@ -250,6 +283,7 @@ class _VaultAppState extends State<VaultApp> with WidgetsBindingObserver {
     _shareStreamSub?.cancel();
     _backgroundLockTimer?.cancel();
     _router.routeInformationProvider.removeListener(_updateChatVisibility);
+    _notificationService.pendingThreadId.removeListener(_onNotificationTap);
     unawaited(_deps.dispose());
     WidgetsBinding.instance.removeObserver(this);
     _session.dispose();

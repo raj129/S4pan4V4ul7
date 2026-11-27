@@ -62,6 +62,11 @@ class _DeveloperOptionsScreenState extends State<DeveloperOptionsScreen>
   bool _loaded = false;
   bool _searchReady = true;
   GoogleMapController? _map;
+  CameraPosition? _cameraPosition;
+  double _bearing = 0;
+  MapType _mapType = MapType.normal;
+  bool _isDarkMap = false;
+  bool _themeInitialized = false;
   SystemMockAvailability? _systemAvailability;
   Timer? _autoPreview;
   int _routeGeneration = 0;
@@ -84,6 +89,15 @@ class _DeveloperOptionsScreenState extends State<DeveloperOptionsScreen>
     WidgetsBinding.instance.addObserver(this);
     _mock.addListener(_onMockChanged);
     unawaited(_load());
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (!_themeInitialized) {
+      _themeInitialized = true;
+      _isDarkMap = Theme.of(context).brightness == Brightness.dark;
+    }
   }
 
   @override
@@ -504,23 +518,50 @@ class _DeveloperOptionsScreenState extends State<DeveloperOptionsScreen>
             borderRadius: BorderRadius.circular(16),
             child: SizedBox(
               height: 300,
-              child: GoogleMap(
-                initialCameraPosition: CameraPosition(
-                  target: LatLng(start.latitude, start.longitude),
-                  zoom: zoomed ? 14 : 2,
-                ),
-                onMapCreated: (c) => _map = c,
-                onTap: _onMapTap,
-                markers: _markers(),
-                polylines: _polylines(context),
-                mapToolbarEnabled: false,
-                myLocationButtonEnabled: false,
-                trafficEnabled: _editing == MockMode.route,
-                gestureRecognizers: {
-                  Factory<OneSequenceGestureRecognizer>(
-                    EagerGestureRecognizer.new,
+              child: Stack(
+                children: [
+                  GoogleMap(
+                    initialCameraPosition: CameraPosition(
+                      target: LatLng(start.latitude, start.longitude),
+                      zoom: zoomed ? 14 : 2,
+                    ),
+                    mapType: _mapType,
+                    style: _isDarkMap ? kDarkMapStyle : null,
+                    onMapCreated: (c) => _map = c,
+                    onCameraMove: (pos) {
+                      _cameraPosition = pos;
+                      if ((pos.bearing - _bearing).abs() > 0.5) {
+                        setState(() => _bearing = pos.bearing);
+                      }
+                    },
+                    onTap: _onMapTap,
+                    markers: _markers(),
+                    polylines: _polylines(context),
+                    compassEnabled: false,
+                    zoomControlsEnabled: false,
+                    mapToolbarEnabled: false,
+                    myLocationButtonEnabled: false,
+                    trafficEnabled: _editing == MockMode.route,
+                    gestureRecognizers: {
+                      Factory<OneSequenceGestureRecognizer>(
+                        EagerGestureRecognizer.new,
+                      ),
+                    },
                   ),
-                },
+                  Positioned(
+                    top: 10,
+                    right: 10,
+                    child: MapOverlayControls(
+                      bearing: _bearing,
+                      onResetBearing: () =>
+                          unawaited(resetMapBearing(_map, _cameraPosition)),
+                      mapType: _mapType,
+                      onMapTypeChanged: (t) => setState(() => _mapType = t),
+                      isDarkMap: _isDarkMap,
+                      onDarkMapChanged: (v) => setState(() => _isDarkMap = v),
+                    ),
+                  ),
+                ],
               ),
             ),
           ),
@@ -760,15 +801,18 @@ class _DeveloperOptionsScreenState extends State<DeveloperOptionsScreen>
           ),
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-            child: TransportModeSelector(
-              selected: _prefs.profile,
-              onChanged: (profile) {
+            child: Center(
+              child: TransportModeSelector(
+                selected: _prefs.profile,
+                compact: true,
+                onChanged: (profile) {
                 unawaited(
                   _updateSimConfig(
                     _prefs.copyWith(profile: profile, baseSpeedKmh: 0),
                   ).then((_) => _scheduleAutoPreview()),
                 );
               },
+            ),
             ),
           ),
         ],
@@ -913,7 +957,9 @@ class _DeveloperOptionsScreenState extends State<DeveloperOptionsScreen>
   double get _maxSpeed => switch (_prefs.profile) {
     TravelProfile.walk => 20,
     TravelProfile.cycle => 60,
+    TravelProfile.twoWheeler => 120,
     TravelProfile.drive => 160,
+    TravelProfile.transit => 120,
   };
 
   Widget _routeSummary(BuildContext context, SimRoute route) {

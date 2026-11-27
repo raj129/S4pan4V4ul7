@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart';
 
 import '../geo_fix.dart';
 import '../mock/sim_route.dart';
@@ -283,25 +285,65 @@ class _PlaceSearchFieldState extends State<PlaceSearchField> {
   }
 }
 
-/// Drive / Walk / Cycle picker.
+/// Drive / Walk / Cycle / 2-Wheeler / Transit picker.
 class TransportModeSelector extends StatelessWidget {
   const TransportModeSelector({
     super.key,
     required this.selected,
     required this.onChanged,
+    this.compact = false,
   });
 
   final TravelProfile selected;
   final ValueChanged<TravelProfile> onChanged;
+  final bool compact;
 
   static IconData iconFor(TravelProfile p) => switch (p) {
     TravelProfile.drive => Icons.directions_car_rounded,
+    TravelProfile.twoWheeler => Icons.two_wheeler_rounded,
     TravelProfile.walk => Icons.directions_walk_rounded,
     TravelProfile.cycle => Icons.directions_bike_rounded,
+    TravelProfile.transit => Icons.directions_transit_rounded,
   };
 
   @override
   Widget build(BuildContext context) {
+    if (compact) {
+      final cs = Theme.of(context).colorScheme;
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (final p in TravelProfile.values)
+            Tooltip(
+              message: p.label,
+              child: InkWell(
+                borderRadius: BorderRadius.circular(14),
+                onTap: () => onChanged(p),
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 150),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 6,
+                  ),
+                  decoration: BoxDecoration(
+                    color: p == selected
+                        ? cs.primaryContainer
+                        : Colors.transparent,
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  child: Icon(
+                    iconFor(p),
+                    size: 18,
+                    color: p == selected
+                        ? cs.onPrimaryContainer
+                        : cs.onSurfaceVariant,
+                  ),
+                ),
+              ),
+            ),
+        ],
+      );
+    }
     return SegmentedButton<TravelProfile>(
       showSelectedIcon: false,
       segments: [
@@ -381,3 +423,231 @@ class RouteSummaryChip extends StatelessWidget {
     );
   }
 }
+
+/// Resets a [GoogleMap] camera to north-up (`bearing: 0`, `tilt: 0`) while
+/// preserving its current target and zoom.
+Future<void> resetMapBearing(
+  GoogleMapController? controller,
+  CameraPosition? currentCamera,
+) async {
+  if (controller == null || currentCamera == null) return;
+  await controller.animateCamera(
+    CameraUpdate.newCameraPosition(
+      CameraPosition(
+        target: currentCamera.target,
+        zoom: currentCamera.zoom,
+        bearing: 0,
+        tilt: 0,
+      ),
+    ),
+  );
+}
+
+/// Official Google Maps Night/Dark style that keeps roads crisp and preserves
+/// native multi-colored metro/transit lines and station icons.
+const String kDarkMapStyle = '''
+[
+  {"elementType":"geometry","stylers":[{"color":"#242f3e"}]},
+  {"elementType":"labels.text.stroke","stylers":[{"color":"#242f3e"}]},
+  {"elementType":"labels.text.fill","stylers":[{"color":"#746855"}]},
+  {"featureType":"administrative.locality","elementType":"labels.text.fill","stylers":[{"color":"#d59563"}]},
+  {"featureType":"poi","elementType":"labels.text.fill","stylers":[{"color":"#d59563"}]},
+  {"featureType":"poi.park","elementType":"geometry","stylers":[{"color":"#263c3f"}]},
+  {"featureType":"poi.park","elementType":"labels.text.fill","stylers":[{"color":"#6b9a76"}]},
+  {"featureType":"road","elementType":"geometry","stylers":[{"color":"#38414e"}]},
+  {"featureType":"road","elementType":"geometry.stroke","stylers":[{"color":"#212a37"}]},
+  {"featureType":"road","elementType":"labels.text.fill","stylers":[{"color":"#9ca5b3"}]},
+  {"featureType":"road.highway","elementType":"geometry","stylers":[{"color":"#746855"}]},
+  {"featureType":"road.highway","elementType":"geometry.stroke","stylers":[{"color":"#1f2835"}]},
+  {"featureType":"road.highway","elementType":"labels.text.fill","stylers":[{"color":"#f3d19c"}]},
+  {"featureType":"transit","stylers":[{"visibility":"on"}]},
+  {"featureType":"transit.line","stylers":[{"visibility":"on"}]},
+  {"featureType":"transit.station","stylers":[{"visibility":"on"}]},
+  {"featureType":"transit.station","elementType":"labels.text.fill","stylers":[{"color":"#d59563"}]},
+  {"featureType":"transit.station","elementType":"labels.icon","stylers":[{"visibility":"on"}]},
+  {"featureType":"water","elementType":"geometry","stylers":[{"color":"#17263c"}]},
+  {"featureType":"water","elementType":"labels.text.fill","stylers":[{"color":"#515c6d"}]},
+  {"featureType":"water","elementType":"labels.text.stroke","stylers":[{"color":"#17263c"}]}
+]
+''';
+
+/// Compact vertical pill of map controls: orientation/compass reset,
+/// Street / Satellite / Terrain switcher, Dark/Light theme, Traffic, and
+/// optional re-center button.
+class MapOverlayControls extends StatelessWidget {
+  const MapOverlayControls({
+    super.key,
+    required this.bearing,
+    required this.onResetBearing,
+    required this.mapType,
+    required this.onMapTypeChanged,
+    this.isDarkMap = false,
+    this.onDarkMapChanged,
+    this.trafficEnabled = false,
+    this.onTrafficChanged,
+    this.onLocateMe,
+    this.locateTooltip = 'Re-center',
+    this.locateIcon = Icons.my_location_rounded,
+  });
+
+  final double bearing;
+  final VoidCallback onResetBearing;
+  final MapType mapType;
+  final ValueChanged<MapType> onMapTypeChanged;
+  final bool isDarkMap;
+  final ValueChanged<bool>? onDarkMapChanged;
+  final bool trafficEnabled;
+  final ValueChanged<bool>? onTrafficChanged;
+  final VoidCallback? onLocateMe;
+  final String locateTooltip;
+  final IconData locateIcon;
+
+  bool get _isSatellite =>
+      mapType == MapType.satellite || mapType == MapType.hybrid;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final rotated = bearing.abs() > 1.0 && (360 - bearing.abs()) > 1.0;
+
+    return Material(
+      color: cs.surfaceContainerHigh.withValues(alpha: 0.94),
+      elevation: 3,
+      shadowColor: Colors.black26,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(22),
+        side: BorderSide(color: cs.outlineVariant.withValues(alpha: 0.45)),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          IconButton(
+            tooltip: rotated ? 'Reset orientation to North' : 'Orientation: North',
+            onPressed: onResetBearing,
+            icon: Transform.rotate(
+              angle: -bearing * math.pi / 180,
+              child: Icon(
+                Icons.explore_rounded,
+                color: rotated ? cs.primary : cs.onSurface,
+              ),
+            ),
+          ),
+          Divider(
+            height: 1,
+            thickness: 1,
+            indent: 8,
+            endIndent: 8,
+            color: cs.outlineVariant.withValues(alpha: 0.4),
+          ),
+          PopupMenuButton<MapType>(
+            tooltip: _isSatellite ? 'Map view: Satellite' : 'Map view: Street',
+            initialValue: mapType,
+            onSelected: onMapTypeChanged,
+            icon: Icon(
+              _isSatellite
+                  ? Icons.satellite_alt_rounded
+                  : mapType == MapType.terrain
+                  ? Icons.terrain_rounded
+                  : Icons.map_outlined,
+              color: _isSatellite ? cs.primary : cs.onSurface,
+            ),
+            itemBuilder: (context) => [
+              PopupMenuItem(
+                value: MapType.normal,
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.map_outlined,
+                      size: 20,
+                      color: mapType == MapType.normal ? cs.primary : null,
+                    ),
+                    const SizedBox(width: 12),
+                    const Text('Street map'),
+                  ],
+                ),
+              ),
+              PopupMenuItem(
+                value: MapType.hybrid,
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.satellite_alt_rounded,
+                      size: 20,
+                      color: _isSatellite ? cs.primary : null,
+                    ),
+                    const SizedBox(width: 12),
+                    const Text('Satellite'),
+                  ],
+                ),
+              ),
+              PopupMenuItem(
+                value: MapType.terrain,
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.terrain_rounded,
+                      size: 20,
+                      color: mapType == MapType.terrain ? cs.primary : null,
+                    ),
+                    const SizedBox(width: 12),
+                    const Text('Terrain'),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          if (onDarkMapChanged != null) ...[
+            Divider(
+              height: 1,
+              thickness: 1,
+              indent: 8,
+              endIndent: 8,
+              color: cs.outlineVariant.withValues(alpha: 0.4),
+            ),
+            IconButton(
+              tooltip: isDarkMap ? 'Light map theme' : 'Dark map theme',
+              onPressed: () => onDarkMapChanged!(!isDarkMap),
+              icon: Icon(
+                isDarkMap ? Icons.light_mode_rounded : Icons.dark_mode_rounded,
+                color: isDarkMap ? cs.primary : cs.onSurface,
+              ),
+            ),
+          ],
+          if (onTrafficChanged != null) ...[
+            Divider(
+              height: 1,
+              thickness: 1,
+              indent: 8,
+              endIndent: 8,
+              color: cs.outlineVariant.withValues(alpha: 0.4),
+            ),
+            IconButton(
+              tooltip: trafficEnabled ? 'Hide live traffic' : 'Show live traffic',
+              onPressed: () => onTrafficChanged!(!trafficEnabled),
+              icon: Icon(
+                Icons.traffic_rounded,
+                color: trafficEnabled ? cs.primary : cs.onSurface,
+              ),
+            ),
+          ],
+          if (onLocateMe != null) ...[
+            Divider(
+              height: 1,
+              thickness: 1,
+              indent: 8,
+              endIndent: 8,
+              color: cs.outlineVariant.withValues(alpha: 0.4),
+            ),
+            IconButton(
+              tooltip: locateTooltip,
+              onPressed: onLocateMe,
+              icon: Icon(locateIcon, color: cs.onSurface),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+

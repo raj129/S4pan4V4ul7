@@ -1,8 +1,12 @@
 package com.system.calculator
 
+import android.Manifest
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.core.content.ContextCompat
 import com.google.android.gms.location.Geofence
 import com.google.android.gms.location.GeofencingClient
 import com.google.android.gms.location.GeofencingRequest
@@ -67,6 +71,28 @@ class ArrivalGeofencePlugin : FlutterPlugin {
         client.removeGeofences(intent).addOnCompleteListener {
             if (fences.isEmpty()) {
                 finishSync(result, null)
+                return@addOnCompleteListener
+            }
+            val fineGranted = ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.ACCESS_FINE_LOCATION,
+            ) == PackageManager.PERMISSION_GRANTED
+            val bgGranted = Build.VERSION.SDK_INT < Build.VERSION_CODES.Q ||
+                ContextCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.ACCESS_BACKGROUND_LOCATION,
+                ) == PackageManager.PERMISSION_GRANTED
+            if (!fineGranted || !bgGranted) {
+                finishSync(
+                    result,
+                    SecurityException(
+                        if (!fineGranted) {
+                            "Allow location access to arm arrival alerts."
+                        } else {
+                            "Set Location permission to \"Allow all the time\" so arrival alerts work in the background."
+                        },
+                    ),
+                )
                 return@addOnCompleteListener
             }
             val request = GeofencingRequest.Builder()

@@ -66,6 +66,8 @@ import 'chat_media_editor_screen.dart';
 import '../widgets/chat_scrollbar.dart';
 import '../widgets/chat_wallpaper.dart';
 
+import '../../application/services/link_preview_service.dart';
+import '../widgets/link_preview_card.dart';
 import '../widgets/contact_info_sheet.dart';
 import '../widgets/data_sms_number_dialog.dart';
 import '../widgets/message_bubble.dart';
@@ -235,6 +237,8 @@ class _ThreadScreenState extends State<ThreadScreen>
   /// every keystroke.
   final _hasText = ValueNotifier<bool>(false);
   final _editingMode = ValueNotifier<bool>(false);
+  final _composerPreviewUrl = ValueNotifier<String?>(null);
+  String? _dismissedPreviewUrl;
 
   /// Viewport position in the whole cached history (0 first .. 1 latest).
   final _historyPosition = ValueNotifier<double?>(null);
@@ -574,21 +578,59 @@ class _ThreadScreenState extends State<ThreadScreen>
     'm4v',
   };
 
-  /// Sends files shared into the app from another app, once the user has
-  /// picked this conversation as the destination.
+  /// Sends files or text/links shared into the app from another app, once the
+  /// user has picked this conversation as the destination.
   Future<void> _sendSharedFiles() async {
+    final sharedText = ChatShareInbox.instance.takeText();
+    if (sharedText != null && sharedText.isNotEmpty) {
+      final combined = _textCtrl.text.trim().isEmpty
+          ? sharedText
+          : '${_textCtrl.text.trim()}\n$sharedText';
+      _textCtrl.value = TextEditingValue(
+        text: combined,
+        selection: TextSelection.collapsed(offset: combined.length),
+      );
+      if (mounted) {
+        context.read<ActiveThreadCubit>().onTextChanged(combined);
+      }
+    }
     final shared = ChatShareInbox.instance.take();
     if (shared.isEmpty) return;
     final cubit = context.read<ActiveThreadCubit>();
     final messenger = ScaffoldMessenger.of(context);
-    bool isVideo(XFile f) {
+    String extOf(XFile f) {
       final dot = f.path.lastIndexOf('.');
-      return dot >= 0 &&
-          _videoExtensions.contains(f.path.substring(dot + 1).toLowerCase());
+      return dot >= 0 ? f.path.substring(dot + 1).toLowerCase() : '';
     }
 
-    final images = shared.where((f) => !isVideo(f)).toList();
+    const imageExts = {'jpg', 'jpeg', 'png', 'gif', 'webp', 'heic', 'heif', 'bmp'};
+    const audioExts = {'mp3', 'wav', 'm4a', 'aac', 'ogg', 'flac', 'opus'};
+    bool isVideo(XFile f) => _videoExtensions.contains(extOf(f));
+    bool isImage(XFile f) => imageExts.contains(extOf(f));
+    bool isAudio(XFile f) => audioExts.contains(extOf(f));
+
+    final images = shared.where(isImage).toList();
     final videos = shared.where(isVideo).toList();
+    final otherFiles = shared
+        .where((f) => !isImage(f) && !isVideo(f))
+        .toList();
+    for (final file in otherFiles) {
+      if (await file.length() > ActiveThreadCubit.maxAttachmentBytes) {
+        messenger.showSnackBar(
+          const SnackBar(
+            content: Text('Attachments must be smaller than 64 MB.'),
+          ),
+        );
+        continue;
+      }
+      await cubit.sendMedia(
+        messageId: _uuid.v4(),
+        rawBytes: await file.readAsBytes(),
+        type: isAudio(file) ? MessageType.audio : MessageType.file,
+        filename: p.basename(file.path),
+        sourceUri: _originalSourceUri(file),
+      );
+    }
     final editorItems = <MediaEditorItem>[];
     for (final image in images) {
       if (await image.length() > ActiveThreadCubit.maxAttachmentBytes) {
@@ -675,6 +717,13 @@ class _ThreadScreenState extends State<ThreadScreen>
 
   void _onTextControllerChanged() {
     _hasText.value = _textCtrl.text.trim().isNotEmpty;
+    final url = LinkPreviewService.extractFirstUrl(_textCtrl.text);
+    if (url != _dismissedPreviewUrl) {
+      if (url == null) _dismissedPreviewUrl = null;
+      _composerPreviewUrl.value = url;
+    } else {
+      _composerPreviewUrl.value = null;
+    }
     if (!_isEditing && !_restoringDraft && !_suppressDraftChanges) {
       _scheduleDraftSave();
     }
@@ -930,6 +979,7 @@ class _ThreadScreenState extends State<ThreadScreen>
     _showJumpToLatest.dispose();
     _hasText.dispose();
     _editingMode.dispose();
+    _composerPreviewUrl.dispose();
     _textCtrl.dispose();
     _searchCtrl.dispose();
     _inputFocus.dispose();
@@ -2984,6 +3034,26 @@ class _ThreadScreenState extends State<ThreadScreen>
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
+                    ValueListenableBuilder<String?>(
+                      valueListenable: _composerPreviewUrl,
+                      builder: (context, previewUrl, _) {
+                        if (previewUrl == null) return const SizedBox.shrink();
+                        return Padding(
+                          padding: const EdgeInsets.only(
+                            top: AppSpacing.xs,
+                            right: AppSpacing.xs,
+                          ),
+                          child: LinkPreviewCard(
+                            url: previewUrl,
+                            compact: true,
+                            onDismiss: () {
+                              _dismissedPreviewUrl = previewUrl;
+                              _composerPreviewUrl.value = null;
+                            },
+                          ),
+                        );
+                      },
+                    ),
                     Row(
                       crossAxisAlignment: CrossAxisAlignment.end,
                       children: [
@@ -4245,6 +4315,7 @@ class _ThreadScreenState extends State<ThreadScreen>
         accuracy: position.accuracy,
         heading: position.heading,
         speed: position.speed,
+        altitude: position.altitude,
         timestamp: position.timestamp.toUtc(),
       );
 

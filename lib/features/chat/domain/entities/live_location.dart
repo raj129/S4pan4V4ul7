@@ -9,6 +9,7 @@ class LiveLocationPoint extends Equatable {
     required this.timestamp,
     this.heading,
     this.speed,
+    this.altitude,
     this.batteryLevel,
     this.charging,
   });
@@ -18,6 +19,7 @@ class LiveLocationPoint extends Equatable {
   final double accuracy;
   final double? heading;
   final double? speed;
+  final double? altitude;
   final DateTime timestamp;
 
   /// Sharer's battery percentage (0-100), when known.
@@ -32,6 +34,7 @@ class LiveLocationPoint extends Equatable {
         timestamp: timestamp,
         heading: heading,
         speed: speed,
+        altitude: altitude,
         batteryLevel: level,
         charging: charging,
       );
@@ -42,6 +45,7 @@ class LiveLocationPoint extends Equatable {
     'acc': accuracy,
     if (heading != null) 'hdg': heading,
     if (speed != null) 'spd': speed,
+    if (altitude != null) 'alt': altitude,
     if (batteryLevel != null) 'bat': batteryLevel,
     if (charging != null) 'chg': charging,
     'ts': timestamp.millisecondsSinceEpoch,
@@ -54,6 +58,7 @@ class LiveLocationPoint extends Equatable {
       accuracy: (json['acc'] as num).toDouble(),
       heading: (json['hdg'] as num?)?.toDouble(),
       speed: (json['spd'] as num?)?.toDouble(),
+      altitude: (json['alt'] as num?)?.toDouble(),
       batteryLevel: (json['bat'] as num?)?.toInt(),
       charging: json['chg'] as bool?,
       timestamp: DateTime.fromMillisecondsSinceEpoch(
@@ -70,6 +75,7 @@ class LiveLocationPoint extends Equatable {
     accuracy,
     heading,
     speed,
+    altitude,
     timestamp,
     batteryLevel,
     charging,

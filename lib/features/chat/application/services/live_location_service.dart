@@ -956,6 +956,7 @@ class LiveLocationService with WidgetsBindingObserver {
             accuracy: fix.accuracy,
             heading: fix.heading,
             speed: fix.speed,
+            altitude: fix.altitude,
             timestamp: fix.timestamp.toUtc(),
           ),
         );

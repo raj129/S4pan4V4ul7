@@ -195,8 +195,7 @@ Future<String?> _redirect(
 
   if (!session.isUnlocked) {
     if (isCalculatorRoot || isLockRoute) return null;
-    final encoded = Uri.encodeComponent(loc == '/' ? '/chat' : loc);
-    return '/lock?returnTo=$encoded';
+    return '/';
   }
 
   if (isLockRoute) {

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -9,6 +10,7 @@ import 'package:intl/intl.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import '../../../../core/location/app_location.dart';
+import '../../../../core/location/maps/map_widgets.dart';
 import '../../application/services/maps_diagnostics.dart';
 import '../../domain/entities/live_location.dart';
 
@@ -77,6 +79,7 @@ class _LiveLocationMapScreenState extends State<LiveLocationMapScreen> {
               latitude: last.latitude,
               longitude: last.longitude,
               accuracy: last.accuracy,
+              altitude: last.altitude,
               timestamp: last.timestamp,
             );
           });
@@ -90,6 +93,7 @@ class _LiveLocationMapScreenState extends State<LiveLocationMapScreen> {
               latitude: current.latitude,
               longitude: current.longitude,
               accuracy: current.accuracy,
+              altitude: current.altitude,
               timestamp: current.timestamp,
             );
           });
@@ -393,11 +397,75 @@ class _LiveGoogleMap extends StatefulWidget {
 class _LiveGoogleMapState extends State<_LiveGoogleMap> {
   static const _defaultCenter = LatLng(20.5937, 78.9629);
   GoogleMapController? _controller;
+  CameraPosition? _cameraPosition;
+  double _bearing = 0;
   MapType _mapType = MapType.normal;
+  bool _isDarkMap = false;
+  bool _themeInitialized = false;
+  bool _trafficEnabled = false;
+  BitmapDescriptor? _headingIcon;
+  bool? _headingIconActive;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_buildHeadingIcon());
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (!_themeInitialized) {
+      _themeInitialized = true;
+      _isDarkMap = Theme.of(context).brightness == Brightness.dark;
+    }
+  }
+
+  Future<void> _buildHeadingIcon() async {
+    final active = widget.isActive;
+    if (_headingIcon != null && _headingIconActive == active) return;
+    _headingIconActive = active;
+    const size = 96.0;
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder);
+    const center = Offset(size / 2, size / 2);
+    final fill = Paint()
+      ..color = active ? const Color(0xFF1A73E8) : const Color(0xFFEF6C00)
+      ..style = PaintingStyle.fill;
+    final border = Paint()
+      ..color = Colors.white
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 6;
+    final path = Path()
+      ..moveTo(center.dx, 10)
+      ..lineTo(center.dx + 26, size - 16)
+      ..lineTo(center.dx, size - 30)
+      ..lineTo(center.dx - 26, size - 16)
+      ..close();
+    canvas.drawShadow(path, Colors.black54, 4, true);
+    canvas.drawPath(path, border);
+    canvas.drawPath(path, fill);
+    final image = await recorder.endRecording().toImage(
+      size.toInt(),
+      size.toInt(),
+    );
+    final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+    if (bytes == null || !mounted) return;
+    setState(() {
+      _headingIcon = BitmapDescriptor.bytes(
+        bytes.buffer.asUint8List(),
+        width: 36,
+        height: 36,
+      );
+    });
+  }
 
   @override
   void didUpdateWidget(covariant _LiveGoogleMap oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.isActive != widget.isActive) {
+      unawaited(_buildHeadingIcon());
+    }
     final next = widget.point;
     final prev = oldWidget.point;
     if (next != null &&
@@ -424,25 +492,8 @@ class _LiveGoogleMapState extends State<_LiveGoogleMap> {
     );
   }
 
-  void _cycleMapType() {
-    setState(() {
-      _mapType = switch (_mapType) {
-        MapType.normal => MapType.satellite,
-        MapType.satellite => MapType.terrain,
-        _ => MapType.normal,
-      };
-    });
-  }
-
-  (IconData, String) _mapTypeMeta(MapType type) => switch (type) {
-    MapType.satellite => (Icons.satellite_alt_rounded, 'Map type: Satellite'),
-    MapType.terrain => (Icons.terrain_rounded, 'Map type: Terrain'),
-    _ => (Icons.layers_outlined, 'Map type: Normal'),
-  };
-
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
     final point = widget.point;
     final center = point != null
         ? LatLng(point.latitude, point.longitude)
@@ -458,10 +509,7 @@ class _LiveGoogleMapState extends State<_LiveGoogleMap> {
             if (!widget.isActive)
               'Last seen ${DateFormat.jm().format(updatedAt.toLocal())}',
             'Accuracy ±${point.accuracy.toStringAsFixed(0)} m',
-            if (point.heading != null)
-              'Heading ${point.heading!.toStringAsFixed(0)}°',
           ].join(' · ');
-    final (mapIcon, mapTooltip) = _mapTypeMeta(_mapType);
 
     return Stack(
       children: [
@@ -471,18 +519,31 @@ class _LiveGoogleMapState extends State<_LiveGoogleMap> {
             zoom: point != null ? 16 : 5,
           ),
           mapType: _mapType,
+          style: _isDarkMap ? kDarkMapStyle : null,
+          trafficEnabled: _trafficEnabled,
           onMapCreated: (controller) => _controller = controller,
+          onCameraMove: (pos) {
+            _cameraPosition = pos;
+            if ((pos.bearing - _bearing).abs() > 0.5) {
+              setState(() => _bearing = pos.bearing);
+            }
+          },
           markers: point == null
               ? const <Marker>{}
               : {
                   Marker(
                     markerId: const MarkerId('shared-location'),
                     position: center,
-                    icon: BitmapDescriptor.defaultMarkerWithHue(
-                      widget.isActive
-                          ? BitmapDescriptor.hueAzure
-                          : BitmapDescriptor.hueOrange,
-                    ),
+                    flat: true,
+                    anchor: const Offset(0.5, 0.5),
+                    rotation: point.heading ?? 0,
+                    icon:
+                        _headingIcon ??
+                        BitmapDescriptor.defaultMarkerWithHue(
+                          widget.isActive
+                              ? BitmapDescriptor.hueAzure
+                              : BitmapDescriptor.hueOrange,
+                        ),
                     infoWindow: InfoWindow(
                       title: markerTitle,
                       snippet: markerSnippet,
@@ -503,9 +564,10 @@ class _LiveGoogleMapState extends State<_LiveGoogleMap> {
                     strokeWidth: 1,
                   ),
                 },
-          myLocationEnabled: widget.myLocationEnabled,
+          myLocationEnabled: widget.myLocationEnabled && !widget.isMine,
           myLocationButtonEnabled: false,
-          zoomControlsEnabled: true,
+          compassEnabled: false,
+          zoomControlsEnabled: false,
           mapToolbarEnabled: false,
         ),
         Positioned(
@@ -513,29 +575,18 @@ class _LiveGoogleMapState extends State<_LiveGoogleMap> {
           right: 12,
           child: SafeArea(
             bottom: false,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                FloatingActionButton.small(
-                  heroTag: 'live-map-type',
-                  tooltip: mapTooltip,
-                  backgroundColor: cs.surfaceContainerHigh,
-                  foregroundColor: cs.onSurface,
-                  onPressed: _cycleMapType,
-                  child: Icon(mapIcon),
-                ),
-                if (point != null) ...[
-                  const SizedBox(height: 8),
-                  FloatingActionButton.small(
-                    heroTag: 'live-recenter',
-                    tooltip: 'Re-center on location',
-                    backgroundColor: cs.surfaceContainerHigh,
-                    foregroundColor: cs.onSurface,
-                    onPressed: _recenter,
-                    child: const Icon(Icons.my_location_rounded),
-                  ),
-                ],
-              ],
+            child: MapOverlayControls(
+              bearing: _bearing,
+              onResetBearing: () =>
+                  unawaited(resetMapBearing(_controller, _cameraPosition)),
+              mapType: _mapType,
+              onMapTypeChanged: (t) => setState(() => _mapType = t),
+              isDarkMap: _isDarkMap,
+              onDarkMapChanged: (v) => setState(() => _isDarkMap = v),
+              trafficEnabled: _trafficEnabled,
+              onTrafficChanged: (v) => setState(() => _trafficEnabled = v),
+              onLocateMe: point != null ? _recenter : null,
+              locateTooltip: 'Re-center on location',
             ),
           ),
         ),
@@ -611,13 +662,13 @@ class _LocationDetailsCard extends StatelessWidget {
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    isStale
-                        ? 'Signal paused'
-                        : isLive
-                        ? 'Live tracking active'
+                    !session.isActive
+                        ? 'Sharing stopped'
                         : session.isExpired
                         ? 'Live location expired'
-                        : 'Sharing stopped',
+                        : isStale
+                        ? 'Signal paused'
+                        : 'Live tracking active',
                     style: theme.textTheme.titleSmall?.copyWith(
                       fontWeight: FontWeight.bold,
                     ),
@@ -676,10 +727,16 @@ class _LocationDetailsCard extends StatelessWidget {
                       value:
                           '${(currentPoint.speed! * 3.6).toStringAsFixed(1)} km/h',
                     ),
-                  if (currentPoint.heading != null)
+                  if (currentPoint.altitude != null)
                     _Metric(
-                      label: 'Heading',
-                      value: '${currentPoint.heading!.toStringAsFixed(0)}°',
+                      label: 'Altitude',
+                      value: '${currentPoint.altitude!.round()} m',
+                    ),
+                  if (currentPoint.batteryLevel != null)
+                    _Metric(
+                      label: 'Battery',
+                      value:
+                          '${currentPoint.batteryLevel}%${currentPoint.charging == true ? ' ⚡' : ''}',
                     ),
                 ],
               ),

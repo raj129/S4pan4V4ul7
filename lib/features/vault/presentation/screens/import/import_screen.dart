@@ -82,23 +82,78 @@ class _ImportTile extends StatelessWidget {
 
   final XFile file;
 
+  static const _imageExts = {
+    'jpg',
+    'jpeg',
+    'png',
+    'gif',
+    'webp',
+    'heic',
+    'heif',
+    'bmp',
+  };
+  static const _audioExts = {'mp3', 'wav', 'm4a', 'aac', 'ogg', 'flac', 'opus'};
+  static const _videoExts = {'mp4', 'mov', 'mkv', 'webm', 'avi', '3gp', 'm4v'};
+
+  String get _ext {
+    final dot = file.path.lastIndexOf('.');
+    return dot >= 0 ? file.path.substring(dot + 1).toLowerCase() : '';
+  }
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final ext = _ext;
+    final isImage = _imageExts.contains(ext);
+    final name = file.path.split(RegExp(r'[/\\]')).last;
+
+    Widget content;
+    if (isImage) {
+      content = Image.file(
+        File(file.path),
+        fit: BoxFit.cover,
+        errorBuilder: (_, _, _) => ColoredBox(
+          color: scheme.surfaceContainerHighest,
+          child: const Icon(Icons.image_outlined),
+        ),
+      );
+    } else {
+      final icon = _audioExts.contains(ext)
+          ? Icons.audiotrack_rounded
+          : _videoExts.contains(ext)
+          ? Icons.videocam_rounded
+          : ext == 'pdf'
+          ? Icons.picture_as_pdf_rounded
+          : Icons.insert_drive_file_rounded;
+      content = ColoredBox(
+        color: scheme.surfaceContainerHighest,
+        child: Padding(
+          padding: const EdgeInsets.all(8),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(icon, color: scheme.primary, size: 28),
+              const SizedBox(height: 4),
+              Text(
+                name,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.center,
+                style: Theme.of(context).textTheme.labelSmall,
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
     return ClipRRect(
       borderRadius: AppRadius.all(AppRadius.md),
       clipBehavior: Clip.antiAlias,
       child: Stack(
         fit: StackFit.expand,
         children: [
-          Image.file(
-            File(file.path),
-            fit: BoxFit.cover,
-            errorBuilder: (_, _, _) => ColoredBox(
-              color: scheme.surfaceContainerHighest,
-              child: const Icon(Icons.image_outlined),
-            ),
-          ),
+          content,
           DecoratedBox(
             decoration: BoxDecoration(
               borderRadius: AppRadius.all(AppRadius.md),
@@ -378,7 +433,7 @@ class _ImportScreenState extends State<ImportScreen> {
                   margin: EdgeInsets.zero,
                   children: [
                     ListTile(
-                      title: Text('${_selectedFiles.length} photo(s) selected'),
+                      title: Text('${_selectedFiles.length} file(s) selected'),
                       subtitle: Text('Source: $_selectedSource'),
                       trailing: TextButton(
                         onPressed: () {
@@ -438,11 +493,14 @@ class _ImportScreenState extends State<ImportScreen> {
                             Row(
                               children: [
                                 Expanded(
-                                  child: OutlinedButton.icon(
-                                    style: OutlinedButton.styleFrom(
+                                  child: FilledButton.tonalIcon(
+                                    style: FilledButton.styleFrom(
+                                      minimumSize: const Size(0, 48),
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(16),
+                                      ),
                                       padding: const EdgeInsets.symmetric(
-                                        vertical: AppSpacing.sm,
-                                        horizontal: AppSpacing.xs,
+                                        horizontal: AppSpacing.sm,
                                       ),
                                     ),
                                     icon: const Icon(
@@ -460,9 +518,12 @@ class _ImportScreenState extends State<ImportScreen> {
                                 Expanded(
                                   child: FilledButton.icon(
                                     style: FilledButton.styleFrom(
+                                      minimumSize: const Size(0, 48),
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(16),
+                                      ),
                                       padding: const EdgeInsets.symmetric(
-                                        vertical: AppSpacing.sm,
-                                        horizontal: AppSpacing.xs,
+                                        horizontal: AppSpacing.sm,
                                       ),
                                     ),
                                     icon: const Icon(
@@ -480,9 +541,15 @@ class _ImportScreenState extends State<ImportScreen> {
                                 ),
                               ],
                             ),
-                            const SizedBox(height: AppSpacing.xxs),
+                            const SizedBox(height: AppSpacing.xs),
                             Center(
                               child: TextButton(
+                                style: TextButton.styleFrom(
+                                  minimumSize: const Size(96, 40),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(14),
+                                  ),
+                                ),
                                 onPressed: _isQueueing
                                     ? null
                                     : () {

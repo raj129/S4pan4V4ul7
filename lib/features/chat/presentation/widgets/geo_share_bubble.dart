@@ -6,6 +6,7 @@ import 'package:photo_vault/core/presentation/theme/app_spacing.dart';
 import '../../domain/entities/chat_message.dart';
 import '../../domain/entities/geo_share.dart';
 import '../screens/geo_share_map_screen.dart';
+import 'static_map_preview.dart';
 
 final DateFormat _arrivalSentTimeFormat = DateFormat.jm();
 
@@ -79,102 +80,116 @@ class GeoShareBubble extends StatelessWidget {
         ),
         child: ConstrainedBox(
           constraints: const BoxConstraints(minWidth: 230),
-          child: Padding(
-            padding: const EdgeInsets.all(AppSpacing.md),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Row(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              StaticMapPreview(share: share, height: 120),
+              Padding(
+                padding: const EdgeInsets.all(AppSpacing.md),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    Container(
-                      width: 44,
-                      height: 44,
-                      decoration: BoxDecoration(
-                        color: containerBg,
-                        borderRadius: BorderRadius.circular(14),
-                      ),
-                      alignment: Alignment.center,
-                      child: Icon(icon, color: containerFg, size: 22),
-                    ),
-                    const SizedBox(width: AppSpacing.md),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            kindLabel.toUpperCase(),
-                            style: Theme.of(context).textTheme.labelSmall
-                                ?.copyWith(
-                                  color: cs.primary,
-                                  fontWeight: FontWeight.w700,
-                                  letterSpacing: 0.6,
+                    Row(
+                      children: [
+                        Container(
+                          width: 44,
+                          height: 44,
+                          decoration: BoxDecoration(
+                            color: containerBg,
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                          alignment: Alignment.center,
+                          child: Icon(icon, color: containerFg, size: 22),
+                        ),
+                        const SizedBox(width: AppSpacing.md),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                kindLabel.toUpperCase(),
+                                style: Theme.of(context).textTheme.labelSmall
+                                    ?.copyWith(
+                                      color: cs.primary,
+                                      fontWeight: FontWeight.w700,
+                                      letterSpacing: 0.6,
+                                    ),
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                title,
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: Theme.of(context).textTheme.titleSmall
+                                    ?.copyWith(fontWeight: FontWeight.w700),
+                              ),
+                              if (details.isNotEmpty) ...[
+                                const SizedBox(height: 2),
+                                Text(
+                                  details,
+                                  style: Theme.of(context).textTheme.bodySmall
+                                      ?.copyWith(color: cs.onSurfaceVariant),
                                 ),
+                              ],
+                              if (share.kind == GeoShareKind.arrival)
+                                Text(
+                                  'Sent ${_arrivalSentTimeFormat.format(message.sentAt.toLocal())}',
+                                  style: Theme.of(context).textTheme.labelSmall
+                                      ?.copyWith(color: cs.onSurfaceVariant),
+                                ),
+                            ],
                           ),
-                          const SizedBox(height: 2),
-                          Text(
-                            title,
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            style: Theme.of(context).textTheme.titleSmall
-                                ?.copyWith(fontWeight: FontWeight.w700),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: AppSpacing.sm),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: FilledButton.tonalIcon(
+                            style: FilledButton.styleFrom(
+                              minimumSize: const Size(0, 38),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                              ),
+                            ),
+                            onPressed: () => Navigator.of(context).push(
+                              MaterialPageRoute<void>(
+                                builder: (_) => GeoShareMapScreen(share: share),
+                              ),
+                            ),
+                            icon: const Icon(Icons.map_outlined, size: 17),
+                            label: const Text('Map'),
                           ),
-                          if (details.isNotEmpty) ...[
-                            const SizedBox(height: 2),
-                            Text(
-                              details,
-                              style: Theme.of(context).textTheme.bodySmall
-                                  ?.copyWith(color: cs.onSurfaceVariant),
+                        ),
+                        const SizedBox(width: AppSpacing.xs),
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            style: OutlinedButton.styleFrom(
+                              minimumSize: const Size(0, 38),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                              ),
                             ),
-                          ],
-                          if (share.kind == GeoShareKind.arrival)
-                            Text(
-                              'Sent ${_arrivalSentTimeFormat.format(message.sentAt.toLocal())}',
-                              style: Theme.of(context).textTheme.labelSmall
-                                  ?.copyWith(color: cs.onSurfaceVariant),
+                            onPressed: () => launchUrl(
+                              GeoShareMapScreen.directionsUri(share),
+                              mode: LaunchMode.externalApplication,
                             ),
-                        ],
-                      ),
+                            icon: const Icon(
+                              Icons.directions_rounded,
+                              size: 17,
+                            ),
+                            label: const Text('Directions'),
+                          ),
+                        ),
+                      ],
                     ),
                   ],
                 ),
-                const SizedBox(height: AppSpacing.sm),
-                Row(
-                  children: [
-                    Expanded(
-                      child: FilledButton.tonalIcon(
-                        style: FilledButton.styleFrom(
-                          minimumSize: const Size(0, 38),
-                          padding: const EdgeInsets.symmetric(horizontal: 12),
-                        ),
-                        onPressed: () => Navigator.of(context).push(
-                          MaterialPageRoute<void>(
-                            builder: (_) => GeoShareMapScreen(share: share),
-                          ),
-                        ),
-                        icon: const Icon(Icons.map_outlined, size: 17),
-                        label: const Text('Map'),
-                      ),
-                    ),
-                    const SizedBox(width: AppSpacing.xs),
-                    Expanded(
-                      child: OutlinedButton.icon(
-                        style: OutlinedButton.styleFrom(
-                          minimumSize: const Size(0, 38),
-                          padding: const EdgeInsets.symmetric(horizontal: 12),
-                        ),
-                        onPressed: () => launchUrl(
-                          GeoShareMapScreen.directionsUri(share),
-                          mode: LaunchMode.externalApplication,
-                        ),
-                        icon: const Icon(Icons.directions_rounded, size: 17),
-                        label: const Text('Directions'),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
+              ),
+            ],
           ),
         ),
       ),

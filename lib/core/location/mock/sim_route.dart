@@ -28,7 +28,9 @@ enum TrafficBand {
 enum TravelProfile {
   walk('Walk', 'WALK', 'walking', 5),
   cycle('Cycle', 'BICYCLE', 'bicycling', 15),
-  drive('Drive', 'DRIVE', 'driving', 50);
+  twoWheeler('2-Wheeler', 'TWO_WHEELER', 'driving', 35),
+  drive('Drive', 'DRIVE', 'driving', 50),
+  transit('Transit', 'TRANSIT', 'transit', 30);
 
   const TravelProfile(
     this.label,
@@ -42,8 +44,9 @@ enum TravelProfile {
   final String directionsMode;
   final double defaultSpeedKmh;
 
-  /// Only driving routes carry traffic speed readings.
-  bool get supportsTraffic => this == TravelProfile.drive;
+  /// Driving and two-wheeler routes carry live traffic speed readings.
+  bool get supportsTraffic =>
+      this == TravelProfile.drive || this == TravelProfile.twoWheeler;
 
   static TravelProfile fromName(String? name) => TravelProfile.values
       .firstWhere((p) => p.name == name, orElse: () => TravelProfile.drive);
